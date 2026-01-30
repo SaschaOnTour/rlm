@@ -14,17 +14,17 @@
 
 use clap::Parser;
 
-use rlm_cli::cli::commands::{Cli, Command};
-use rlm_cli::cli::output;
-use rlm_cli::config::Config;
-use rlm_cli::db::Database;
-use rlm_cli::edit::syntax_guard::SyntaxGuard;
-use rlm_cli::edit::{inserter, replacer};
-use rlm_cli::indexer;
-use rlm_cli::ingest::code::quality_log;
-use rlm_cli::operations::{self, parse_position};
-use rlm_cli::rlm::{batch, grep, partition, peek, summarize};
-use rlm_cli::search::tree;
+use rlm::cli::commands::{Cli, Command};
+use rlm::cli::output;
+use rlm::config::Config;
+use rlm::db::Database;
+use rlm::edit::syntax_guard::SyntaxGuard;
+use rlm::edit::{inserter, replacer};
+use rlm::indexer;
+use rlm::ingest::code::quality_log;
+use rlm::operations::{self, parse_position};
+use rlm::rlm::{batch, grep, partition, peek, summarize};
+use rlm::search::tree;
 
 fn main() {
     let cli = Cli::parse();
@@ -418,7 +418,7 @@ fn cmd_patterns(query: &str) -> CmdResult {
 fn cmd_mcp() -> CmdResult {
     let rt = tokio::runtime::Runtime::new().map_err(map_err)?;
     rt.block_on(async {
-        rlm_cli::mcp::server::start_mcp_server()
+        rlm::mcp::server::start_mcp_server()
             .await
             .map_err(map_err)
     })
@@ -488,7 +488,7 @@ fn cmd_verify(fix: bool) -> CmdResult {
         return Err(map_err("Index not found. Run 'rlm index' first."));
     }
 
-    let db = rlm_cli::db::Database::open(&config.db_path).map_err(map_err)?;
+    let db = rlm::db::Database::open(&config.db_path).map_err(map_err)?;
     let report = operations::verify_index(&db, &config.project_root).map_err(map_err)?;
 
     if fix && !report.is_ok() {

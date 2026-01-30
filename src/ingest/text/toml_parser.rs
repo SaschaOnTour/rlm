@@ -1,4 +1,4 @@
-//! TOML semantic parser for rlm-cli.
+//! TOML semantic parser for rlm.
 //!
 //! Extracts semantic structure from TOML files including:
 //! - Top-level tables as sections

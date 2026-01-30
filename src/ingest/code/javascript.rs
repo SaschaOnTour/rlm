@@ -1,4 +1,4 @@
-//! JavaScript/JSX parser for rlm-cli.
+//! JavaScript/JSX parser for rlm.
 //!
 //! Supports ES6+ features including:
 //! - Functions (regular, arrow, async, generator)

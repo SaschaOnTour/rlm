@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial release of rlm-cli (The Context Broker)
+- Initial release of rlm (The Context Broker)
 - Progressive disclosure workflow: `peek` → `grep` → `partition` → `read`
 - 27 CLI commands for semantic code exploration
 - MCP server integration via `rlm mcp`

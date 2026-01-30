@@ -1,6 +1,6 @@
 //! MCP server implementation using rmcp.
 //!
-//! Exposes all rlm-cli functionality as MCP tools over stdio transport.
+//! Exposes all rlm functionality as MCP tools over stdio transport.
 //! Each tool calls the same core logic as the CLI commands.
 
 use std::path::PathBuf;
@@ -645,7 +645,7 @@ impl ServerHandler for RlmServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "rlm-cli: The Context Broker for semantic code exploration. \
+                "rlm: The Context Broker for semantic code exploration. \
                  Use progressive disclosure: peek → grep → map → tree → search → read. \
                  For code intelligence: refs, signature, callgraph, impact, context, deps, scope, type, patterns. \
                  For editing: replace (swap AST node), insert (add code). Syntax Guard validates all writes. \
@@ -680,7 +680,7 @@ pub async fn start_mcp_server() -> crate::error::Result<()> {
         .with_ansi(false)
         .init();
 
-    tracing::info!("Starting rlm-cli MCP server");
+    tracing::info!("Starting rlm MCP server");
 
     // Determine project root from current working directory
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));

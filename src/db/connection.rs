@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use crate::db::schema::CREATE_SCHEMA;
 use crate::error::Result;
 
-/// Database wrapper for the rlm-cli index.
+/// Database wrapper for the rlm index.
 pub struct Database {
     conn: Connection,
 }

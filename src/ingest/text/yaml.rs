@@ -1,4 +1,4 @@
-//! YAML semantic parser for rlm-cli.
+//! YAML semantic parser for rlm.
 //!
 //! Extracts semantic structure from YAML files including:
 //! - Top-level keys as sections

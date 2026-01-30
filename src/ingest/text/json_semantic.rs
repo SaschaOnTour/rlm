@@ -1,4 +1,4 @@
-//! JSON semantic parser for rlm-cli.
+//! JSON semantic parser for rlm.
 //!
 //! Extracts semantic structure from JSON files including:
 //! - Top-level keys as sections

@@ -1,4 +1,4 @@
-//! CSS parser for rlm-cli.
+//! CSS parser for rlm.
 //!
 //! Extracts semantic structure from CSS files including:
 //! - Rule sets (selectors and their declarations)

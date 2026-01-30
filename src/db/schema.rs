@@ -1,4 +1,4 @@
-/// SQL statements for creating the rlm-cli schema.
+/// SQL statements for creating the rlm schema.
 pub const CREATE_SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY,

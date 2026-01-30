@@ -1,4 +1,4 @@
-//! HTML parser for rlm-cli.
+//! HTML parser for rlm.
 //!
 //! Extracts semantic structure from HTML documents including:
 //! - Elements with IDs

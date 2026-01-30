@@ -1,4 +1,4 @@
-//! TypeScript/TSX parser for rlm-cli.
+//! TypeScript/TSX parser for rlm.
 //!
 //! Supports TypeScript-specific features including:
 //! - Interfaces and Type Aliases

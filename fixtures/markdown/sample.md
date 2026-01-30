@@ -7,7 +7,7 @@ This is a sample markdown file for testing the heading-based parser.
 To install the project:
 
 ```bash
-cargo install rlm-cli
+cargo install rlm
 ```
 
 ## Usage
