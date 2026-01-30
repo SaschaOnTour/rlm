@@ -80,7 +80,7 @@ graph LR
     C --> D[read symbol]
     D --> E[read file: Last Resort]
     
-    style E fill:#f96,stroke:#333
+    style E stroke:#f96,stroke-width:2px
 ```
 
 Most tasks can be completed without ever reading a full file.
@@ -132,8 +132,9 @@ graph TD
     E -- Valid --> F[Write to Disk]
     E -- Syntax Error --> G[Abort & Report]
     
-    style E fill:#f96,stroke:#333
-    style G fill:#ff9999,stroke:#333
+    style E stroke:#f96,stroke-width:2px
+    style F stroke:#28a745,stroke-width:2px
+    style G stroke:#d73a49,stroke-width:2px,stroke-dasharray: 5 5
 ```
 
 ---
