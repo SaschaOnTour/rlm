@@ -6,7 +6,7 @@
 //! - Arrays of tables
 //! - Special handling for Cargo.toml, pyproject.toml patterns
 
-use toml::Value;
+use toml::{Table, Value};
 
 use crate::error::Result;
 use crate::ingest::text::TextParser;
@@ -35,14 +35,17 @@ impl TextParser for TomlParser {
     fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
         let mut chunks = Vec::new();
 
-        // Parse the TOML
-        let value: Value = match source.parse() {
-            Ok(v) => v,
+        // Parse the TOML document into a Table (toml 0.9 changed Value::from_str to parse single values only)
+        let table: Table = match toml::from_str(source) {
+            Ok(t) => t,
             Err(_) => {
                 // If parsing fails, create a single chunk for the whole file
                 return Ok(vec![create_fallback_chunk(source, file_id)]);
             }
         };
+
+        // Convert Table to Value::Table for extraction
+        let value = Value::Table(table);
 
         // Extract chunks from the parsed TOML
         extract_toml_chunks(&value, "", source, file_id, &mut chunks, 0);

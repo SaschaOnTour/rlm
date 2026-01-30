@@ -3,6 +3,7 @@
 //! Each struct corresponds to the input parameters for one MCP tool.
 //! All parameter structs derive `Deserialize` and `JsonSchema` as required by rmcp.
 
+use rmcp::schemars;
 use serde::Deserialize;
 
 // ── Index ───────────────────────────────────────────────────────
