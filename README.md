@@ -484,6 +484,13 @@ See [LICENSE](LICENSE) for the full terms.
 
 ---
 
+## Contact
+
+[![Telegram](https://img.shields.io/badge/Telegram-SaschaOnTour-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/Sascha_On_Tour)
+[![Discord](https://img.shields.io/badge/Discord-SaschaOnTour-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.com/users/921029832358387722)
+
+---
+
 ## Acknowledgments
 
 - [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) research (MIT/Stanford)
