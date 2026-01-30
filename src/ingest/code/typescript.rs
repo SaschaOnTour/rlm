@@ -916,7 +916,8 @@ class UserService {
         let chunks = parser().parse_chunks(source, 1).unwrap();
         let service = chunks.iter().find(|c| c.ident == "UserService").unwrap();
         // Decorators should be captured in attributes
-        assert!(service.attributes.is_some() || true); // May vary by tree-sitter version
+        // Decorators may or may not be captured depending on tree-sitter version
+        let _ = service.attributes;
     }
 
     #[test]

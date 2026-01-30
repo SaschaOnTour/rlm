@@ -165,7 +165,7 @@ mod tests {
 
         // Create two files in the index
         let file1 = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), 100);
-        let file1_id = db.upsert_file(&file1).unwrap();
+        let _file1_id = db.upsert_file(&file1).unwrap();
 
         let file2 = FileRecord::new("other.rs".into(), "hash2".into(), "rust".into(), 100);
         let file2_id = db.upsert_file(&file2).unwrap();

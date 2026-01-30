@@ -312,7 +312,7 @@ mod tests {
         fs::write(src_dir.join("main.rs"), "fn main() {}").unwrap();
 
         // Create a binary file (non-UTF8)
-        fs::write(src_dir.join("binary.rs"), &[0xFF, 0xFE, 0x00, 0x01]).unwrap();
+        fs::write(src_dir.join("binary.rs"), [0xFF, 0xFE, 0x00, 0x01]).unwrap();
 
         let config = Config::new(tmp.path());
         let result = run_index(&config).unwrap();

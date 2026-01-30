@@ -7,6 +7,9 @@
 //! 4. Runs the specific command
 //! 5. Asserts exit code 0 + expected output
 
+// Allow deprecated cargo_bin usage until assert_cmd updates API
+#![allow(deprecated)]
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
@@ -18,7 +21,6 @@ fn manifest_dir() -> &'static str {
 }
 
 /// Copy the Rust fixture into a temp directory and index it.
-#[allow(deprecated)]
 fn setup_rust_project() -> TempDir {
     let dir = tempfile::tempdir().expect("create tempdir");
     let fixture = format!("{}/fixtures/code_samples/rust/sample.rs", manifest_dir());
@@ -36,7 +38,6 @@ fn setup_rust_project() -> TempDir {
 }
 
 /// Copy the markdown fixture into a temp directory and index it.
-#[allow(deprecated)]
 fn setup_markdown_project() -> TempDir {
     let dir = tempfile::tempdir().expect("create tempdir");
     let fixture = format!("{}/fixtures/markdown/sample.md", manifest_dir());
@@ -54,7 +55,6 @@ fn setup_markdown_project() -> TempDir {
 }
 
 /// Build a command pointing at the tempdir.
-#[allow(deprecated)]
 fn rlm(dir: &TempDir) -> Command {
     let mut cmd = Command::cargo_bin("rlm").unwrap();
     cmd.current_dir(dir.path());
