@@ -118,8 +118,18 @@ rlm replace src/lib.rs --symbol helper --code "fn helper(x: i32) -> i32 { x * 3 
 
 ### Installation
 
+**Download pre-built binaries:**
+
+| Platform | Download |
+|----------|----------|
+| Linux | [rlm-linux](https://github.com/SaschaOnTour/rlm/releases/latest) |
+| macOS | [rlm-macos](https://github.com/SaschaOnTour/rlm/releases/latest) |
+| Windows | [rlm-windows.exe](https://github.com/SaschaOnTour/rlm/releases/latest) |
+
+**Or build from source:**
+
 ```bash
-# Build from source (requires Rust 1.75+)
+# Requires Rust 1.75+
 cargo build --release
 
 # Add to PATH
