@@ -9,9 +9,22 @@
 
 ---
 
+## Table of Contents
+- [About This Project](#about-this-project)
+- [The Problem](#the-problem)
+- [The Solution](#the-solution)
+- [How It Works](#how-it-works)
+- [Quick Start](#quick-start)
+- [Setup for AI Agents](#setup-for-ai-agents)
+- [Commands](#commands)
+- [Contributing](#contributing)
+- [License](#license)
+- [Contact](#contact)
+- [Acknowledgments](#acknowledgments)
+
 ## About This Project
 
-This is a proof of concept / MVP to validate and make practical use of the ideas presented in the [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) research (MIT/Stanford, 2025). The paper makes compelling claims about progressive disclosure and query-based retrieval for code understanding — this tool is my attempt to see if those ideas hold up in real-world usage.
+This is a proof of concept / MVP to validate and make practical use of the ideas presented in the [Recursive Language Models](https://alexzhang13.github.io/blog/2025/rlm/) research (MIT/Stanford, 2025). The paper makes compelling claims about progressive disclosure and query-based retrieval for code understanding — this tool is my attempt to see if those ideas hold up in real-world usage. Built with Rust for memory safety and blazing fast indexing, it ensures that querying your codebase feels instantaneous and lightweight.
 
 It's also my first public project. I'm making the source code available so you can see for yourself what's going on under the hood — no data collection, no shady business, just the code doing what it says.
 
@@ -60,16 +73,14 @@ Agent: "I need to understand this codebase"
 
 Instead of reading entire files, rlm lets you zoom in progressively:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  CHEAPEST                                           MOST DETAIL │
-│                                                                 │
-│  peek ──→ map ──→ grep ──→ search ──→ read symbol ──→ read file │
-│  ~50 tok  ~200    ~100     variable    ~100-500       full file │
-│                                                                 │
-│  Structure  Overview  Pattern  Full-text  One function  Last    │
-│  only       + purpose matches  search     or struct     resort  │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+graph LR
+    A[peek: ~50 tok] --> B[map: ~200 tok]
+    B --> C[grep / search]
+    C --> D[read symbol]
+    D --> E[read file: Last Resort]
+    
+    style E fill:#f96,stroke:#333
 ```
 
 Most tasks can be completed without ever reading a full file.
@@ -111,6 +122,19 @@ rlm replace src/lib.rs --symbol helper --code "fn helper(x: i32) -> i32 { x * 3 
 - AST-based: finds the exact node to replace
 - Syntax Guard: validates the change compiles before writing
 - Minimal: only the changed code goes through the LLM
+
+```mermaid
+graph TD
+    A[LLM Suggestion] --> B{rlm replace}
+    B --> C[Locate exact AST Node]
+    C --> D[Inject New Code]
+    D --> E{Syntax Guard}
+    E -- Valid --> F[Write to Disk]
+    E -- Syntax Error --> G[Abort & Report]
+    
+    style E fill:#f96,stroke:#333
+    style G fill:#ff9999,stroke:#333
+```
 
 ---
 
@@ -471,6 +495,17 @@ rlm is part of a larger vision: making powerful tools accessible to everyone, no
 The same principle applies to AI coding assistants: they shouldn't require you to understand tokenization, context windows, or prompt engineering. They should just work efficiently.
 
 > *"The best interface is no interface."* — Golden Krishna
+
+---
+
+## Contributing
+
+This project is currently a solo-run exploration. While I am grateful for the interest, **I am not accepting Pull Requests at this time.**
+
+- **Have a bug or idea?** Please [open an Issue](https://github.com/SaschaOnTour/rlm/issues). I value your feedback!
+- **Want to contribute code?** Not yet, but feel free to "Star" the project to show your support.
+
+This approach helps me maintain the architectural integrity while the project is in its early MVP stage.
 
 ---
 
