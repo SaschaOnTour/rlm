@@ -417,11 +417,7 @@ fn cmd_patterns(query: &str) -> CmdResult {
 
 fn cmd_mcp() -> CmdResult {
     let rt = tokio::runtime::Runtime::new().map_err(map_err)?;
-    rt.block_on(async {
-        rlm::mcp::server::start_mcp_server()
-            .await
-            .map_err(map_err)
-    })
+    rt.block_on(async { rlm::mcp::server::start_mcp_server().await.map_err(map_err) })
 }
 
 fn cmd_quality(unknown_only: bool, all: bool, clear: bool, summary: bool) -> CmdResult {
