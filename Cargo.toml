@@ -1,6 +1,6 @@
 [package]
 name = "rlm"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "The Context Broker - semantic code exploration for AI agents"
 license = "MIT"
