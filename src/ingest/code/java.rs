@@ -172,26 +172,21 @@ fn collect_java_doc_comment(node: tree_sitter::Node, source: &[u8]) -> Option<St
 
 fn collect_java_annotations(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     // In Java, annotations are within the modifiers child of the declaration
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i as u32) {
-            if child.kind() == "modifiers" {
-                let mut annots = Vec::new();
-                for j in 0..child.child_count() {
-                    if let Some(mod_child) = child.child(j as u32) {
-                        if mod_child.kind() == "marker_annotation"
-                            || mod_child.kind() == "annotation"
-                        {
-                            annots.push(mod_child.utf8_text(source).unwrap_or("").to_string());
-                        }
-                    }
-                }
-                if !annots.is_empty() {
-                    return Some(annots.join("\n"));
-                }
-            }
-        }
+    let modifiers = (0..node.child_count())
+        .filter_map(|i| node.child(i as u32))
+        .find(|child| child.kind() == "modifiers")?;
+
+    let annots: Vec<String> = (0..modifiers.child_count())
+        .filter_map(|j| modifiers.child(j as u32))
+        .filter(|c| c.kind() == "marker_annotation" || c.kind() == "annotation")
+        .map(|c| c.utf8_text(source).unwrap_or("").to_string())
+        .collect();
+
+    if annots.is_empty() {
+        None
+    } else {
+        Some(annots.join("\n"))
     }
-    None
 }
 
 #[cfg(test)]

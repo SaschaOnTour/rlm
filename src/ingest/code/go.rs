@@ -2,7 +2,7 @@ use tree_sitter::{Language, Query};
 
 use crate::ingest::code::base::{
     build_language_config, collect_prev_siblings, extract_type_signature_to_brace, BaseParser,
-    ChunkCaptureResult, LanguageConfig,
+    ChunkCaptureResult, LanguageConfig, SiblingCollectConfig,
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
@@ -106,7 +106,16 @@ impl LanguageConfig for GoConfig {
     }
 
     fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_prev_siblings(node, source, &["comment"], &[], &[], true)
+        collect_prev_siblings(
+            node,
+            source,
+            &SiblingCollectConfig {
+                kinds: &["comment"],
+                skip_kinds: &[],
+                prefixes: &[],
+                multi: true,
+            },
+        )
     }
 
     fn collect_attributes(&self, _node: tree_sitter::Node, _source: &[u8]) -> Option<String> {

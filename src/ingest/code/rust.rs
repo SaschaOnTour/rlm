@@ -3,8 +3,12 @@ use tree_sitter::{Language, Query, Tree};
 use crate::ingest::code::base::{
     build_language_config, collect_prev_siblings, collect_prev_siblings_filtered_skip,
     extract_type_signature, find_parent_by_kind, BaseParser, ChunkCaptureResult, LanguageConfig,
+    SiblingCollectConfig,
 };
 use crate::models::chunk::{Chunk, ChunkKind, RefKind};
+
+// Impl-block method extraction helpers live in `rust_impl_methods`.
+use super::rust_impl_methods::{extract_impl_methods, find_node_at_byte_range};
 
 const CHUNK_QUERY_SRC: &str = r"
     (function_item name: (identifier) @fn_name) @fn_def
@@ -135,10 +139,12 @@ impl LanguageConfig for RustConfig {
         collect_prev_siblings(
             node,
             source,
-            &["line_comment"],
-            &["attribute_item"],
-            &["///", "//!"],
-            true,
+            &SiblingCollectConfig {
+                kinds: &["line_comment"],
+                skip_kinds: &["attribute_item"],
+                prefixes: &["///", "//!"],
+                multi: true,
+            },
         )
     }
 
@@ -146,10 +152,12 @@ impl LanguageConfig for RustConfig {
         collect_prev_siblings_filtered_skip(
             node,
             source,
-            &["attribute_item"],
-            &["line_comment"],
-            &["///", "//!"],
-            true,
+            &SiblingCollectConfig {
+                kinds: &["attribute_item"],
+                skip_kinds: &["line_comment"],
+                prefixes: &["///", "//!"],
+                multi: true,
+            },
         )
     }
 
@@ -206,7 +214,7 @@ impl RustParser {
 // Language-specific helpers
 // =============================================================================
 
-fn extract_rust_visibility(content: &str) -> Option<String> {
+pub(crate) fn extract_rust_visibility(content: &str) -> Option<String> {
     let trimmed = content.trim_start();
     if trimmed.starts_with("pub(crate)") {
         Some("pub(crate)".into())
@@ -219,7 +227,7 @@ fn extract_rust_visibility(content: &str) -> Option<String> {
     }
 }
 
-fn extract_fn_signature(content: &str) -> Option<String> {
+pub(crate) fn extract_fn_signature(content: &str) -> Option<String> {
     if let Some(brace_pos) = content.find('{') {
         let sig = content[..brace_pos].trim();
         Some(sig.to_string())
@@ -228,110 +236,6 @@ fn extract_fn_signature(content: &str) -> Option<String> {
             .find(';')
             .map(|semi_pos| content[..semi_pos].trim().to_string())
     }
-}
-
-/// Find a tree-sitter node at the given byte range.
-fn find_node_at_byte_range(
-    root: tree_sitter::Node,
-    start_byte: usize,
-    end_byte: usize,
-) -> Option<tree_sitter::Node> {
-    let mut cursor = root.walk();
-    loop {
-        let node = cursor.node();
-        if node.start_byte() == start_byte && node.end_byte() == end_byte {
-            return Some(node);
-        }
-        if !cursor.goto_first_child() {
-            while !cursor.goto_next_sibling() {
-                if !cursor.goto_parent() {
-                    return None;
-                }
-            }
-        }
-    }
-}
-
-fn extract_impl_methods(
-    impl_node: tree_sitter::Node,
-    source: &[u8],
-    file_id: i64,
-    impl_name: &str,
-) -> Vec<Chunk> {
-    let mut methods = Vec::new();
-
-    for i in 0..impl_node.child_count() {
-        let child = match impl_node.child(i as u32) {
-            Some(c) => c,
-            None => continue,
-        };
-
-        if child.kind() == "declaration_list" {
-            for j in 0..child.child_count() {
-                let item = match child.child(j as u32) {
-                    Some(c) => c,
-                    None => continue,
-                };
-
-                if item.kind() == "function_item" {
-                    let mut fn_name = String::new();
-                    for k in 0..item.child_count() {
-                        if let Some(name_node) = item.child(k as u32) {
-                            if name_node.kind() == "identifier" {
-                                fn_name = name_node.utf8_text(source).unwrap_or("").to_string();
-                                break;
-                            }
-                        }
-                    }
-
-                    if fn_name.is_empty() {
-                        continue;
-                    }
-
-                    let content = item.utf8_text(source).unwrap_or("").to_string();
-                    let start = item.start_position();
-                    let end = item.end_position();
-
-                    let doc_comment = collect_prev_siblings(
-                        item,
-                        source,
-                        &["line_comment"],
-                        &["attribute_item"],
-                        &["///", "//!"],
-                        true,
-                    );
-                    let attributes = collect_prev_siblings_filtered_skip(
-                        item,
-                        source,
-                        &["attribute_item"],
-                        &["line_comment"],
-                        &["///", "//!"],
-                        true,
-                    );
-
-                    methods.push(Chunk {
-                        id: 0,
-                        file_id,
-                        start_line: start.row as u32 + 1,
-                        end_line: end.row as u32 + 1,
-                        start_byte: item.start_byte() as u32,
-                        end_byte: item.end_byte() as u32,
-                        kind: ChunkKind::Method,
-                        ident: fn_name,
-                        parent: Some(impl_name.to_string()),
-                        signature: extract_fn_signature(&content),
-                        visibility: extract_rust_visibility(&content),
-                        ui_ctx: None,
-                        doc_comment,
-                        attributes,
-                        content,
-                    });
-                }
-            }
-        }
-    }
-
-    methods
 }
 
 #[cfg(test)]

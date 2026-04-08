@@ -126,27 +126,40 @@ fn partition_semantic(db: &Database, file_path: &str, source: &str) -> Result<Ve
     Ok(partition_uniform(source, SEMANTIC_FALLBACK_CHUNK_SIZE))
 }
 
-/// Keyword partitioning: filter lines by regex, then partition remaining.
-fn partition_keyword(source: &str, pattern: &str) -> Result<Vec<Partition>> {
-    let re =
-        regex::Regex::new(pattern).map_err(|e| RlmError::Other(format!("invalid regex: {e}")))?;
+/// Raw partition data before token estimation.
+struct RawPartition {
+    start_line: u32,
+    end_line: u32,
+    content: String,
+}
 
-    let lines: Vec<&str> = source.lines().collect();
-    let mut partitions = Vec::new();
-    let mut current_lines = Vec::new();
+/// Split source lines by regex matches into raw partitions (operation: logic only).
+///
+/// Matching lines become their own partitions; non-matching lines are grouped
+/// between matches.  No own-crate function calls.
+fn split_by_keyword(lines: &[&str], re: &regex::Regex) -> Vec<RawPartition> {
+    let mut raw = Vec::new();
+    let mut current_lines: Vec<String> = Vec::new();
     let mut start_line = 0u32;
 
     for (i, line) in lines.iter().enumerate() {
         if re.is_match(line) {
-            // Save accumulated non-matching lines as a partition
+            // Save accumulated non-matching lines
             if !current_lines.is_empty() {
                 let content = current_lines.join("\n");
-                partitions.push(Partition::new(partitions.len(), start_line + 1, i as u32, content));
+                raw.push(RawPartition {
+                    start_line: start_line + 1,
+                    end_line: i as u32,
+                    content,
+                });
                 current_lines.clear();
             }
-            // Add matching line as its own partition
-            let content = line.to_string();
-            partitions.push(Partition::new(partitions.len(), i as u32 + 1, i as u32 + 1, content));
+            // Matching line as its own partition
+            raw.push(RawPartition {
+                start_line: i as u32 + 1,
+                end_line: i as u32 + 1,
+                content: line.to_string(),
+            });
             start_line = i as u32 + 1;
         } else {
             if current_lines.is_empty() {
@@ -160,8 +173,29 @@ fn partition_keyword(source: &str, pattern: &str) -> Result<Vec<Partition>> {
     if !current_lines.is_empty() {
         let content = current_lines.join("\n");
         let end = start_line + current_lines.len() as u32;
-        partitions.push(Partition::new(partitions.len(), start_line + 1, end, content));
+        raw.push(RawPartition {
+            start_line: start_line + 1,
+            end_line: end,
+            content,
+        });
     }
+
+    raw
+}
+
+/// Keyword partitioning: filter lines by regex, then partition remaining (integration).
+fn partition_keyword(source: &str, pattern: &str) -> Result<Vec<Partition>> {
+    let re =
+        regex::Regex::new(pattern).map_err(|e| RlmError::Other(format!("invalid regex: {e}")))?;
+
+    let lines: Vec<&str> = source.lines().collect();
+    let raw = split_by_keyword(&lines, &re);
+
+    let partitions = raw
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| Partition::new(i, r.start_line, r.end_line, r.content))
+        .collect();
 
     Ok(partitions)
 }

@@ -45,6 +45,216 @@ impl IndexResult {
     }
 }
 
+/// Outcome of processing a single scanned file.
+enum FileOutcome {
+    /// File was skipped for the given reason.
+    Skipped(SkipReason),
+    /// File was indexed, producing this many chunks and refs.
+    Indexed { chunks_created: usize, refs_created: usize },
+}
+
+/// Read file bytes from disk, returning `None` (with skip reason) on failure.
+fn read_file_source(path: &std::path::Path) -> std::result::Result<String, SkipReason> {
+    let bytes = std::fs::read(path).map_err(|_| SkipReason::IoError)?;
+    String::from_utf8(bytes).map_err(|_| SkipReason::NonUtf8)
+}
+
+/// Parse chunks and refs for a single file via the dispatcher.
+fn parse_file_chunks(
+    dispatcher: &Dispatcher,
+    db: &Database,
+    lang: &str,
+    source: &str,
+    file_id: i64,
+) -> std::result::Result<(Vec<crate::models::chunk::Chunk>, Vec<crate::models::chunk::Reference>), SkipReason> {
+    if dispatcher.is_code_language(lang) {
+        let parse_result = dispatcher
+            .parse_with_quality(lang, source, file_id)
+            .map_err(|_| SkipReason::IoError)?;
+        if parse_result.quality.fallback_recommended() {
+            let quality_str = quality_label(&parse_result.quality);
+            let _ = db.set_file_parse_quality(file_id, quality_str);
+        }
+        Ok((parse_result.chunks, parse_result.refs))
+    } else {
+        let chunks = dispatcher
+            .parse(lang, source, file_id)
+            .map_err(|_| SkipReason::IoError)?;
+        Ok((chunks, vec![]))
+    }
+}
+
+/// Map a `ParseQuality` to its database label.
+fn quality_label(quality: &crate::ingest::code::ParseQuality) -> &'static str {
+    match quality {
+        crate::ingest::code::ParseQuality::Partial { .. } => "partial",
+        crate::ingest::code::ParseQuality::Failed { .. } => "failed",
+        _ => "complete",
+    }
+}
+
+/// Tag every chunk with the UI context string, if present.
+fn apply_ui_context(chunks: &mut [crate::models::chunk::Chunk], ui_ctx: &str) {
+    for chunk in chunks.iter_mut() {
+        chunk.ui_ctx = Some(ui_ctx.to_string());
+    }
+}
+
+/// Insert chunks into the DB and return them sorted by `start_line` for fast ref lookup.
+fn insert_chunks(
+    db: &Database,
+    chunks: Vec<crate::models::chunk::Chunk>,
+) -> Result<Vec<crate::models::chunk::Chunk>> {
+    let mut inserted = Vec::with_capacity(chunks.len());
+    for mut chunk in chunks {
+        let cid = db.insert_chunk(&chunk)?;
+        chunk.id = cid;
+        inserted.push(chunk);
+    }
+    inserted.sort_by_key(|c| c.start_line);
+    Ok(inserted)
+}
+
+/// Resolve the chunk ID for a reference using binary search over sorted chunks.
+fn resolve_ref_chunk_id(
+    inserted_chunks: &[crate::models::chunk::Chunk],
+    line: u32,
+) -> i64 {
+    let idx = inserted_chunks.partition_point(|c| c.start_line <= line);
+    if idx > 0 {
+        inserted_chunks[..idx]
+            .iter()
+            .rev()
+            .find(|c| line <= c.end_line)
+            .map_or(0, |c| c.id)
+    } else {
+        0
+    }
+}
+
+/// Insert references into the DB, resolving chunk IDs via binary search.
+fn insert_refs(
+    db: &Database,
+    refs: Vec<crate::models::chunk::Reference>,
+    inserted_chunks: &[crate::models::chunk::Chunk],
+) -> Result<usize> {
+    let mut count = 0;
+    for mut reference in refs {
+        if reference.chunk_id == 0 {
+            reference.chunk_id = resolve_ref_chunk_id(inserted_chunks, reference.line);
+        }
+        if reference.chunk_id > 0 {
+            db.insert_ref(&reference)?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// Check whether a file should be skipped before reading (integration: calls only).
+///
+/// Returns `Some(SkipReason)` if the file should be skipped, `None` if it should be processed.
+/// Also cleans up stale chunks when the file hash has changed.
+fn check_file_freshness(
+    db: &Database,
+    dispatcher: &Dispatcher,
+    file: &crate::ingest::scanner::ScannedFile,
+    lang: &str,
+) -> Result<Option<SkipReason>> {
+    if !dispatcher.supports(lang) {
+        return Ok(Some(SkipReason::UnsupportedLanguage));
+    }
+
+    if let Some(existing) = db.get_file_by_path(&file.relative_path)? {
+        if existing.hash == file.hash {
+            return Ok(Some(SkipReason::Unchanged));
+        }
+        db.delete_chunks_for_file(existing.id)?;
+    }
+
+    Ok(None)
+}
+
+/// Ingest a single file: read, parse, insert chunks/refs (integration: calls only).
+fn ingest_file(
+    db: &Database,
+    dispatcher: &Dispatcher,
+    file: &crate::ingest::scanner::ScannedFile,
+    lang: &str,
+    source: String,
+) -> Result<FileOutcome> {
+    let file_record = FileRecord::new(
+        file.relative_path.clone(),
+        file.hash.clone(),
+        lang.to_string(),
+        file.size,
+    );
+    let file_id = db.upsert_file(&file_record)?;
+
+    let (mut chunks, refs) = match parse_file_chunks(dispatcher, db, lang, &source, file_id) {
+        Ok(pair) => pair,
+        Err(reason) => return Ok(FileOutcome::Skipped(reason)),
+    };
+
+    if let Some(ctx) = crate::ingest::scanner::detect_ui_context(&file.relative_path) {
+        apply_ui_context(&mut chunks, &ctx);
+    }
+
+    let inserted_chunks = insert_chunks(db, chunks)?;
+    let chunks_created = inserted_chunks.len();
+    let refs_created = insert_refs(db, refs, &inserted_chunks)?;
+
+    Ok(FileOutcome::Indexed { chunks_created, refs_created })
+}
+
+/// Process a single scanned file: check freshness, read, parse, insert chunks/refs (integration).
+fn process_single_file(
+    db: &Database,
+    dispatcher: &Dispatcher,
+    file: &crate::ingest::scanner::ScannedFile,
+) -> Result<FileOutcome> {
+    let lang = ext_to_lang(&file.extension);
+
+    if let Some(reason) = check_file_freshness(db, dispatcher, file, lang)? {
+        return Ok(FileOutcome::Skipped(reason));
+    }
+
+    let source = match read_file_source(&file.path) {
+        Ok(s) => s,
+        Err(reason) => return Ok(FileOutcome::Skipped(reason)),
+    };
+
+    ingest_file(db, dispatcher, file, lang, source)
+}
+
+/// Remove indexed files that no longer exist on disk.
+fn purge_deleted_files(
+    db: &Database,
+    scanned_paths: &HashSet<String>,
+) -> Result<usize> {
+    let indexed_files = db.get_all_files()?;
+    let mut deleted = 0;
+    for indexed_file in &indexed_files {
+        if !scanned_paths.contains(&indexed_file.path) {
+            db.delete_file(indexed_file.id)?;
+            deleted += 1;
+        }
+    }
+    Ok(deleted)
+}
+
+/// Accumulate a `FileOutcome` into the running `IndexResult`.
+fn accumulate_outcome(result: &mut IndexResult, outcome: FileOutcome) {
+    match outcome {
+        FileOutcome::Skipped(reason) => result.skip(reason),
+        FileOutcome::Indexed { chunks_created, refs_created } => {
+            result.files_indexed += 1;
+            result.chunks_created += chunks_created;
+            result.refs_created += refs_created;
+        }
+    }
+}
+
 /// Run the indexer: scan files, parse chunks, store in DB.
 pub fn run_index(config: &Config) -> Result<IndexResult> {
     config.ensure_rlm_dir()?;
@@ -62,134 +272,15 @@ pub fn run_index(config: &Config) -> Result<IndexResult> {
         ..Default::default()
     };
 
-    // Collect scanned paths to detect deleted files later
     let scanned_paths: HashSet<String> = scanned.iter().map(|f| f.relative_path.clone()).collect();
 
-    // Wrap entire indexing loop in a single transaction for performance
     db.conn().execute_batch("BEGIN IMMEDIATE")?;
     let tx_result = (|| -> Result<()> {
-        // Phase 1: Remove files from index that no longer exist on disk
-        let indexed_files = db.get_all_files()?;
-        for indexed_file in &indexed_files {
-            if !scanned_paths.contains(&indexed_file.path) {
-                db.delete_file(indexed_file.id)?;
-                result.deleted_from_index += 1;
-            }
-        }
+        result.deleted_from_index = purge_deleted_files(&db, &scanned_paths)?;
 
-        // Phase 2: Index new/changed files
         for file in &scanned {
-            let lang = ext_to_lang(&file.extension);
-
-            // Skip unsupported languages
-            if !dispatcher.supports(lang) {
-                result.skip(SkipReason::UnsupportedLanguage);
-                continue;
-            }
-
-            // Check if file changed (incremental indexing)
-            if let Some(existing) = db.get_file_by_path(&file.relative_path)? {
-                if existing.hash == file.hash {
-                    result.skip(SkipReason::Unchanged);
-                    continue;
-                }
-                // File changed: delete old chunks and re-index
-                db.delete_chunks_for_file(existing.id)?;
-            }
-
-            // Read file content as bytes first to check UTF-8 validity
-            let bytes = if let Ok(b) = std::fs::read(&file.path) {
-                b
-            } else {
-                result.skip(SkipReason::IoError);
-                continue;
-            };
-
-            // Validate UTF-8
-            let source = if let Ok(s) = String::from_utf8(bytes) {
-                s
-            } else {
-                result.skip(SkipReason::NonUtf8);
-                continue;
-            };
-
-            // Upsert file record
-            let file_record = FileRecord::new(
-                file.relative_path.clone(),
-                file.hash.clone(),
-                lang.to_string(),
-                file.size,
-            );
-            let file_id = db.upsert_file(&file_record)?;
-
-            // Single-pass: extract chunks and refs together for code languages
-            let (mut chunks, refs) = if dispatcher.is_code_language(lang) {
-                if let Ok(parse_result) = dispatcher.parse_with_quality(lang, &source, file_id) {
-                    // Store parse quality if not complete
-                    if parse_result.quality.fallback_recommended() {
-                        let quality_str = match &parse_result.quality {
-                            crate::ingest::code::ParseQuality::Partial { .. } => "partial",
-                            crate::ingest::code::ParseQuality::Failed { .. } => "failed",
-                            _ => "complete",
-                        };
-                        let _ = db.set_file_parse_quality(file_id, quality_str);
-                    }
-                    (parse_result.chunks, parse_result.refs)
-                } else {
-                    result.skip(SkipReason::IoError);
-                    continue;
-                }
-            } else if let Ok(c) = dispatcher.parse(lang, &source, file_id) {
-                (c, vec![])
-            } else {
-                result.skip(SkipReason::IoError);
-                continue;
-            };
-
-            // Apply UI context detection
-            let ui_ctx = crate::ingest::scanner::detect_ui_context(&file.relative_path);
-            if let Some(ctx) = &ui_ctx {
-                for chunk in &mut chunks {
-                    chunk.ui_ctx = Some(ctx.clone());
-                }
-            }
-
-            // Insert chunks and get their IDs
-            let mut inserted_chunks = Vec::new();
-            for mut chunk in chunks {
-                let cid = db.insert_chunk(&chunk)?;
-                chunk.id = cid;
-                inserted_chunks.push(chunk);
-                result.chunks_created += 1;
-            }
-
-            // PERF: Sort chunks by start_line for binary search lookup
-            // This converts O(refs * chunks) to O(refs * log(chunks))
-            inserted_chunks.sort_by_key(|c| c.start_line);
-
-            // Insert references, re-mapping chunk IDs to inserted values
-            for mut reference in refs {
-                if reference.chunk_id == 0 {
-                    // Binary search to find the first chunk that could contain this line
-                    let idx = inserted_chunks.partition_point(|c| c.start_line <= reference.line);
-                    // Check chunks from idx backwards until we find one that contains the line
-                    reference.chunk_id = if idx > 0 {
-                        inserted_chunks[..idx]
-                            .iter()
-                            .rev()
-                            .find(|c| reference.line <= c.end_line)
-                            .map_or(0, |c| c.id)
-                    } else {
-                        0
-                    };
-                }
-                if reference.chunk_id > 0 {
-                    db.insert_ref(&reference)?;
-                    result.refs_created += 1;
-                }
-            }
-
-            result.files_indexed += 1;
+            let outcome = process_single_file(&db, &dispatcher, file)?;
+            accumulate_outcome(&mut result, outcome);
         }
         Ok(())
     })();

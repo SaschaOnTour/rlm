@@ -15,19 +15,9 @@
 use clap::Parser;
 
 use rlm::cli::commands::{Cli, Command};
+use rlm::cli::handlers;
+use rlm::cli::handlers_util;
 use rlm::cli::output;
-use rlm::config::Config;
-use rlm::db::Database;
-use rlm::edit::inserter::InsertPosition;
-use rlm::edit::syntax_guard::SyntaxGuard;
-use rlm::edit::{inserter, replacer};
-use rlm::indexer;
-use rlm::ingest::code::quality_log;
-use rlm::models::token_estimate::estimate_tokens;
-use rlm::operations;
-use rlm::operations::savings;
-use rlm::rlm::{partition, peek, summarize};
-use rlm::search::tree;
 
 fn main() {
     let cli = Cli::parse();
@@ -40,444 +30,47 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::fmt::Display>> {
     match cli.command {
-        Command::Index { path } => cmd_index(&path),
-        Command::Search { query, limit } => cmd_search(&query, limit),
+        Command::Index { path } => handlers::cmd_index(&path),
+        Command::Search { query, limit } => handlers::cmd_search(&query, limit),
         Command::Read {
             path,
             symbol,
             section,
             metadata,
-        } => cmd_read(&path, symbol.as_deref(), section.as_deref(), metadata),
-        Command::Overview { detail, path } => cmd_overview(&detail, path.as_deref()),
-        Command::Refs { symbol } => cmd_refs(&symbol),
+        } => handlers::cmd_read(&path, symbol.as_deref(), section.as_deref(), metadata),
+        Command::Overview { detail, path } => handlers::cmd_overview(&detail, path.as_deref()),
+        Command::Refs { symbol } => handlers::cmd_refs(&symbol),
         Command::Replace {
             path,
             symbol,
             code,
             preview,
-        } => cmd_replace(&path, &symbol, &code, preview),
+        } => handlers::cmd_replace(&path, &symbol, &code, preview),
         Command::Insert {
             path,
             code,
             position,
-        } => cmd_insert(&path, &code, &position),
-        Command::Stats { savings, since } => cmd_stats(savings, since.as_deref()),
-        Command::Partition { path, strategy } => cmd_partition(&path, &strategy),
-        Command::Summarize { path } => cmd_summarize(&path),
-        Command::Diff { path, symbol } => cmd_diff(&path, symbol.as_deref()),
-        Command::Context { symbol, graph } => cmd_context(&symbol, graph),
-        Command::Deps { path } => cmd_deps(&path),
-        Command::Scope { path, line } => cmd_scope(&path, line),
-        Command::Mcp => cmd_mcp(),
+        } => handlers::cmd_insert(&path, &code, &position),
+        Command::Stats { savings, since } => handlers_util::cmd_stats(savings, since.as_deref()),
+        Command::Partition { path, strategy } => handlers::cmd_partition(&path, &strategy),
+        Command::Summarize { path } => handlers::cmd_summarize(&path),
+        Command::Diff { path, symbol } => handlers::cmd_diff(&path, symbol.as_deref()),
+        Command::Context { symbol, graph } => handlers::cmd_context(&symbol, graph),
+        Command::Deps { path } => handlers::cmd_deps(&path),
+        Command::Scope { path, line } => handlers::cmd_scope(&path, line),
+        Command::Mcp => handlers_util::cmd_mcp(),
         Command::Quality {
             unknown_only,
             all,
             clear,
             summary,
-        } => cmd_quality(unknown_only, all, clear, summary),
+        } => handlers_util::cmd_quality(unknown_only, all, clear, summary),
         Command::Files {
             path,
             skipped_only,
             indexed_only,
-        } => cmd_files(path.as_deref(), skipped_only, indexed_only),
-        Command::Verify { fix } => cmd_verify(fix),
-        Command::Supported => cmd_supported(),
+        } => handlers_util::cmd_files(path.as_deref(), skipped_only, indexed_only),
+        Command::Verify { fix } => handlers_util::cmd_verify(fix),
+        Command::Supported => handlers_util::cmd_supported(),
     }
-}
-
-type CmdResult = Result<(), Box<dyn std::fmt::Display>>;
-
-fn print_json(json: &str) {
-    println!("{json}");
-}
-
-fn map_err(e: impl std::fmt::Display + 'static) -> Box<dyn std::fmt::Display> {
-    Box::new(e.to_string())
-}
-
-fn get_config() -> Result<Config, Box<dyn std::fmt::Display>> {
-    Config::from_cwd().map_err(map_err)
-}
-
-fn get_db(config: &Config) -> Result<Database, Box<dyn std::fmt::Display>> {
-    indexer::ensure_index(config).map_err(map_err)
-}
-
-fn cmd_index(path: &str) -> CmdResult {
-    let config = if path == "." {
-        get_config()?
-    } else {
-        Config::new(path)
-    };
-
-    let result = indexer::run_index(&config).map_err(map_err)?;
-    let output: operations::IndexOutput = result.into();
-    println!("{}", output::format_json(&output));
-    Ok(())
-}
-
-fn cmd_search(query: &str, limit: usize) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = operations::search_chunks(&db, query, limit).map_err(map_err)?;
-    let json = output::format_json(&result);
-    let out_tokens = estimate_tokens(json.len());
-    let file_count = result.results.len() as u64;
-    let alt_tokens = result.tokens.output.max(out_tokens);
-    savings::record(&db, "search", out_tokens, alt_tokens, file_count);
-    print_json(&json);
-    Ok(())
-}
-
-fn cmd_read(path: &str, symbol: Option<&str>, section: Option<&str>, metadata: bool) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-
-    if let Some(sym) = symbol {
-        // Read specific symbol
-        let chunks = db.get_chunks_by_ident(sym).map_err(map_err)?;
-        let file_chunks: Vec<_> = chunks
-            .iter()
-            .filter(|c| {
-                db.get_all_files()
-                    .ok()
-                    .is_some_and(|files| files.iter().any(|f| f.id == c.file_id && f.path == path))
-            })
-            .collect();
-
-        let target = if file_chunks.is_empty() {
-            if chunks.is_empty() {
-                return Err(map_err(format!("symbol not found: {sym}")));
-            }
-            &chunks
-        } else {
-            // We know file_chunks is non-empty; serialize it
-            let json = if metadata {
-                let type_info = operations::get_type_info(&db, sym).ok();
-                let signature = operations::get_signature(&db, sym).ok();
-                output::format_json(&serde_json::json!({
-                    "chunks": file_chunks,
-                    "type_info": type_info,
-                    "signature": signature,
-                }))
-            } else {
-                output::format_json(&file_chunks)
-            };
-            let out_tokens = estimate_tokens(json.len());
-            let alt_tokens = savings::alternative_single_file(&db, path).unwrap_or(out_tokens);
-            savings::record(&db, "read_symbol", out_tokens, alt_tokens, 1);
-            print_json(&json);
-            return Ok(());
-        };
-
-        let json = if metadata {
-            let type_info = operations::get_type_info(&db, sym).ok();
-            let signature = operations::get_signature(&db, sym).ok();
-            output::format_json(&serde_json::json!({
-                "chunks": target,
-                "type_info": type_info,
-                "signature": signature,
-            }))
-        } else {
-            output::format_json(&target)
-        };
-        let out_tokens = estimate_tokens(json.len());
-        let alt_tokens = savings::alternative_single_file(&db, path).unwrap_or(out_tokens);
-        savings::record(&db, "read_symbol", out_tokens, alt_tokens, 1);
-        print_json(&json);
-    } else if let Some(heading) = section {
-        // Read specific markdown section
-        let file = db.get_file_by_path(path).map_err(map_err)?;
-        let file = file.ok_or_else(|| map_err(format!("file not found: {path}")))?;
-        let chunks = db.get_chunks_for_file(file.id).map_err(map_err)?;
-        let section_chunk = chunks.iter().find(|c| c.ident == heading);
-        match section_chunk {
-            Some(c) => {
-                let json = output::format_json(c);
-                let out_tokens = estimate_tokens(json.len());
-                let alt_tokens = savings::alternative_single_file(&db, path).unwrap_or(out_tokens);
-                savings::record(&db, "read_section", out_tokens, alt_tokens, 1);
-                print_json(&json);
-            }
-            None => return Err(map_err(format!("section not found: {heading}"))),
-        }
-    } else {
-        return Err(map_err(
-            "read requires --symbol or --section. Use Claude Code's Read for full files or line ranges.",
-        ));
-    }
-    Ok(())
-}
-
-fn cmd_overview(detail: &str, path: Option<&str>) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-
-    match detail {
-        "minimal" => {
-            let result = peek::peek(&db, path).map_err(map_err)?;
-            let json = savings::record_scoped_op(&db, "overview", &result, path);
-            print_json(&json);
-        }
-        "standard" => {
-            let entries = operations::build_map(&db, path).map_err(map_err)?;
-            let json = savings::record_scoped_op(&db, "overview", &entries, path);
-            print_json(&json);
-        }
-        "tree" => {
-            let nodes = tree::build_tree(&db, path).map_err(map_err)?;
-            let json = savings::record_scoped_op(&db, "overview", &nodes, path);
-            print_json(&json);
-        }
-        other => {
-            return Err(map_err(format!(
-                "unknown detail level: '{other}'. Use 'minimal', 'standard', or 'tree'."
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn cmd_refs(symbol: &str) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = operations::analyze_impact(&db, symbol).map_err(map_err)?;
-    let json = savings::record_symbol_op(&db, "refs", &result, symbol, result.count as u64);
-    print_json(&json);
-    Ok(())
-}
-
-fn cmd_replace(path: &str, symbol: &str, code: &str, preview: bool) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-
-    if preview {
-        let diff = replacer::preview_replace(&db, path, symbol, code).map_err(map_err)?;
-        #[derive(serde::Serialize)]
-        struct DiffOutput {
-            file: String,
-            symbol: String,
-            old_lines: (u32, u32),
-            old_code: String,
-            new_code: String,
-        }
-        println!(
-            "{}",
-            output::format_json(&DiffOutput {
-                file: diff.file,
-                symbol: diff.symbol,
-                old_lines: (diff.start_line, diff.end_line),
-                old_code: diff.old_code,
-                new_code: diff.new_code,
-            })
-        );
-    } else {
-        let guard = SyntaxGuard::new();
-        replacer::replace_symbol(&db, path, symbol, code, &guard).map_err(map_err)?;
-        println!("{{\"ok\":true}}");
-    }
-    Ok(())
-}
-
-fn cmd_insert(path: &str, code: &str, position: &InsertPosition) -> CmdResult {
-    let guard = SyntaxGuard::new();
-    inserter::insert_code(path, position, code, &guard).map_err(map_err)?;
-    println!("{{\"ok\":true}}");
-    Ok(())
-}
-
-fn cmd_stats(show_savings: bool, since: Option<&str>) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-
-    if show_savings {
-        let report = savings::get_savings_report(&db, since).map_err(map_err)?;
-        println!("{}", output::format_json(&report));
-        return Ok(());
-    }
-
-    let result = operations::get_stats(&db).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
-
-    // Check for files with quality issues (output to stderr as diagnostic info)
-    if let Ok(Some(quality_info)) = operations::get_quality_info(&db) {
-        eprintln!("{}", output::format_json(&quality_info));
-    }
-
-    Ok(())
-}
-
-fn cmd_partition(path: &str, strategy_str: &str) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let strategy = parse_strategy(strategy_str)?;
-    let result =
-        partition::partition_file(&db, path, &strategy, &config.project_root).map_err(map_err)?;
-    let json = savings::record_file_op(&db, "partition", &result, path);
-    print_json(&json);
-    Ok(())
-}
-
-fn parse_strategy(s: &str) -> Result<partition::Strategy, Box<dyn std::fmt::Display>> {
-    if s == "semantic" {
-        Ok(partition::Strategy::Semantic)
-    } else if let Some(rest) = s.strip_prefix("uniform:") {
-        let n: usize = rest.parse().map_err(map_err)?;
-        Ok(partition::Strategy::Uniform(n))
-    } else if let Some(rest) = s.strip_prefix("keyword:") {
-        Ok(partition::Strategy::Keyword(rest.to_string()))
-    } else {
-        Err(map_err(
-            "strategy must be: semantic, uniform:N, or keyword:PATTERN",
-        ))
-    }
-}
-
-fn cmd_single_file_op<T: serde::Serialize>(
-    command: &str,
-    path: &str,
-    op: impl FnOnce(&Database, &str) -> rlm::error::Result<T>,
-) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = op(&db, path).map_err(map_err)?;
-    let json = savings::record_file_op(&db, command, &result, path);
-    print_json(&json);
-    Ok(())
-}
-
-fn cmd_summarize(path: &str) -> CmdResult {
-    cmd_single_file_op("summarize", path, |db, p| summarize::summarize(db, p))
-}
-
-fn cmd_diff(path: &str, symbol: Option<&str>) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-
-    if let Some(sym) = symbol {
-        let result =
-            operations::diff_symbol(&db, path, sym, &config.project_root).map_err(map_err)?;
-        let json = savings::record_file_op(&db, "diff", &result, path);
-        print_json(&json);
-    } else {
-        let result = operations::diff_file(&db, path, &config.project_root).map_err(map_err)?;
-        let json = savings::record_file_op(&db, "diff", &result, path);
-        print_json(&json);
-    }
-    Ok(())
-}
-
-fn cmd_context(symbol: &str, graph: bool) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = operations::build_context(&db, symbol).map_err(map_err)?;
-
-    if graph {
-        let callgraph = operations::build_callgraph(&db, symbol).map_err(map_err)?;
-        let combined = serde_json::json!({
-            "context": result,
-            "callgraph": callgraph,
-        });
-        let json = savings::record_symbol_op(&db, "context", &combined, symbol, 0);
-        print_json(&json);
-    } else {
-        let json = savings::record_symbol_op(&db, "context", &result, symbol, 0);
-        print_json(&json);
-    }
-    Ok(())
-}
-
-fn cmd_deps(path: &str) -> CmdResult {
-    cmd_single_file_op("deps", path, |db, p| operations::get_deps(db, p))
-}
-
-fn cmd_scope(path: &str, line: u32) -> CmdResult {
-    cmd_single_file_op("scope", path, |db, p| operations::get_scope(db, p, line))
-}
-
-fn cmd_mcp() -> CmdResult {
-    let rt = tokio::runtime::Runtime::new().map_err(map_err)?;
-    rt.block_on(async { rlm::mcp::server::start_mcp_server().await.map_err(map_err) })
-}
-
-fn cmd_quality(unknown_only: bool, all: bool, clear: bool, summary: bool) -> CmdResult {
-    let config = get_config()?;
-    let log_path = config.get_quality_log_path();
-
-    if clear {
-        let logger = quality_log::QualityLogger::new(&log_path, true);
-        logger.clear().map_err(map_err)?;
-        println!("{{\"cleared\":true}}");
-        return Ok(());
-    }
-
-    let mut issues = quality_log::read_quality_log(&log_path).map_err(map_err)?;
-
-    // Annotate known issues
-    quality_log::annotate_known_issues(&mut issues);
-
-    // Filter if requested
-    if unknown_only {
-        issues = quality_log::filter_unknown(issues);
-    } else if !all {
-        // Default: show only unknown issues
-        issues = quality_log::filter_unknown(issues);
-    }
-
-    if summary {
-        let stats = quality_log::summarize_issues(&issues);
-        println!("{}", output::format_json(&stats));
-    } else {
-        #[derive(serde::Serialize)]
-        struct QualityOutput {
-            count: usize,
-            issues: Vec<quality_log::QualityIssue>,
-        }
-
-        println!(
-            "{}",
-            output::format_json(&QualityOutput {
-                count: issues.len(),
-                issues,
-            })
-        );
-    }
-    Ok(())
-}
-
-fn cmd_files(path_filter: Option<&str>, skipped_only: bool, indexed_only: bool) -> CmdResult {
-    let config = get_config()?;
-    let filter = operations::FilesFilter {
-        path_prefix: path_filter.map(String::from),
-        skipped_only,
-        indexed_only,
-    };
-    let result = operations::list_files(&config.project_root, filter).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
-    Ok(())
-}
-
-fn cmd_verify(fix: bool) -> CmdResult {
-    let config = get_config()?;
-
-    if !config.index_exists() {
-        return Err(map_err("Index not found. Run 'rlm index' first."));
-    }
-
-    let db = rlm::db::Database::open(&config.db_path).map_err(map_err)?;
-    let report = operations::verify_index(&db, &config.project_root).map_err(map_err)?;
-
-    if fix && !report.is_ok() {
-        let fix_result = operations::fix_integrity(&db, &report).map_err(map_err)?;
-        println!("{}", output::format_json(&fix_result));
-    } else {
-        println!("{}", output::format_json(&report));
-    }
-    Ok(())
-}
-
-fn cmd_supported() -> CmdResult {
-    let result = operations::list_supported();
-    println!("{}", output::format_json(&result));
-    Ok(())
 }

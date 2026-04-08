@@ -11,7 +11,8 @@
 use tree_sitter::{Language, Query};
 
 use crate::ingest::code::base::{
-    build_language_config, collect_prev_siblings, BaseParser, ChunkCaptureResult, LanguageConfig,
+    build_language_config, collect_prev_siblings, first_child_text_by_kind, BaseParser,
+    ChunkCaptureResult, LanguageConfig, SiblingCollectConfig,
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
@@ -208,15 +209,26 @@ impl LanguageConfig for TypeScriptConfig {
         collect_prev_siblings(
             node,
             source,
-            &["comment"],
-            &["decorator"],
-            &["/**", "//"],
-            false,
+            &SiblingCollectConfig {
+                kinds: &["comment"],
+                skip_kinds: &["decorator"],
+                prefixes: &["/**", "//"],
+                multi: false,
+            },
         )
     }
 
     fn collect_attributes(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_prev_siblings(node, source, &["decorator"], &["comment"], &[], true)
+        collect_prev_siblings(
+            node,
+            source,
+            &SiblingCollectConfig {
+                kinds: &["decorator"],
+                skip_kinds: &["comment"],
+                prefixes: &[],
+                multi: true,
+            },
+        )
     }
 }
 
@@ -243,21 +255,21 @@ impl TypeScriptParser {
     }
 }
 
+/// Visibility keywords to check, ordered so longer prefixes come first.
+const TS_VISIBILITY_KEYWORDS: &[&str] = &[
+    "export default",
+    "export",
+    "public",
+    "private",
+    "protected",
+];
+
 fn extract_ts_visibility(content: &str) -> Option<String> {
     let trimmed = content.trim_start();
-    if trimmed.starts_with("export default") {
-        Some("export default".into())
-    } else if trimmed.starts_with("export") {
-        Some("export".into())
-    } else if trimmed.starts_with("public") {
-        Some("public".into())
-    } else if trimmed.starts_with("private") {
-        Some("private".into())
-    } else if trimmed.starts_with("protected") {
-        Some("protected".into())
-    } else {
-        None
-    }
+    TS_VISIBILITY_KEYWORDS
+        .iter()
+        .find(|kw| trimmed.starts_with(**kw))
+        .map(|kw| (*kw).to_string())
 }
 
 fn extract_ts_signature(content: &str, kind: &ChunkKind) -> Option<String> {
@@ -291,41 +303,44 @@ fn extract_ts_signature(content: &str, kind: &ChunkKind) -> Option<String> {
     }
 }
 
-fn find_ts_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+/// Describes a parent context found by walking up the tree.
+enum TsParentContext<'a> {
+    /// Found a class_body whose parent is a class declaration.
+    ClassDecl(tree_sitter::Node<'a>),
+    /// Found an interface declaration.
+    InterfaceDecl(tree_sitter::Node<'a>),
+}
+
+/// Walk up the tree to find the enclosing class or interface (operation: logic only).
+///
+/// Returns the relevant parent node without extracting its name.
+fn find_ts_parent_context(node: tree_sitter::Node) -> Option<TsParentContext> {
     let mut current = node.parent();
     while let Some(parent) = current {
         let kind = parent.kind();
         if kind == "class_body" {
-            // Go up one more to get class_declaration
-            if let Some(class_decl) = parent.parent() {
-                if class_decl.kind() == "class_declaration" || class_decl.kind() == "class" {
-                    for i in 0..class_decl.child_count() {
-                        if let Some(child) = class_decl.child(i as u32) {
-                            if child.kind() == "type_identifier" || child.kind() == "identifier" {
-                                return child
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(std::string::ToString::to_string);
-                            }
-                        }
-                    }
-                }
+            let class_decl = parent.parent()?;
+            if class_decl.kind() == "class_declaration" || class_decl.kind() == "class" {
+                return Some(TsParentContext::ClassDecl(class_decl));
             }
         } else if kind == "interface_declaration" {
-            for i in 0..parent.child_count() {
-                if let Some(child) = parent.child(i as u32) {
-                    if child.kind() == "type_identifier" {
-                        return child
-                            .utf8_text(source)
-                            .ok()
-                            .map(std::string::ToString::to_string);
-                    }
-                }
-            }
+            return Some(TsParentContext::InterfaceDecl(parent));
         }
         current = parent.parent();
     }
     None
+}
+
+/// Extract the parent name from a TypeScript parent context (integration: calls only).
+fn find_ts_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    match find_ts_parent_context(node)? {
+        TsParentContext::ClassDecl(decl) => {
+            first_child_text_by_kind(decl, source, &["type_identifier", "identifier"])
+        }
+        TsParentContext::InterfaceDecl(decl) => {
+            first_child_text_by_kind(decl, source, &["type_identifier"])
+        }
+    }
 }
 
 #[cfg(test)]

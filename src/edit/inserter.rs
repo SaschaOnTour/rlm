@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::edit::syntax_guard::SyntaxGuard;
+use crate::edit::syntax_guard::{validate_and_write, SyntaxGuard};
 use crate::error::{Result, RlmError};
 use crate::ingest::scanner::ext_to_lang;
 
@@ -65,64 +65,70 @@ pub fn insert_code(
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let lang = ext_to_lang(ext);
 
-    guard.validate_and_write(lang, &modified, path)?;
+    validate_and_write(guard, lang, &modified, path)?;
 
     Ok(modified)
 }
 
-/// Apply insertion to source string without writing to disk.
-pub fn apply_insertion(source: &str, position: &InsertPosition, code: &str) -> Result<String> {
-    let lines: Vec<&str> = source.lines().collect();
+/// Insert code at the top of the source.
+fn insert_at_top(source: &str, code: &str) -> String {
+    let mut parts = Vec::new();
+    parts.push(code.to_string());
+    if !source.is_empty() {
+        parts.push(source.to_string());
+    }
+    parts.join("\n")
+}
 
+/// Insert code at the bottom of the source.
+fn insert_at_bottom(source: &str, code: &str) -> String {
+    let mut parts = Vec::new();
+    parts.push(source.to_string());
+    if !source.ends_with('\n') && !source.is_empty() {
+        parts.push(String::new());
+    }
+    parts.push(code.to_string());
+    parts.join("\n")
+}
+
+/// Insert code at a specific 1-based line number, either before or after the target line.
+fn insert_at_line(lines: &[&str], code: &str, line_idx: usize, after: bool) -> String {
     let mut result = Vec::new();
-
-    match position {
-        InsertPosition::Top => {
-            result.push(code.to_string());
-            if !source.is_empty() {
-                result.push(source.to_string());
-            }
-        }
-        InsertPosition::Bottom => {
-            result.push(source.to_string());
-            if !source.ends_with('\n') && !source.is_empty() {
-                result.push(String::new()); // add newline separator
-            }
+    for (i, l) in lines.iter().enumerate() {
+        if i == line_idx && !after {
             result.push(code.to_string());
         }
-        InsertPosition::BeforeLine(line) => {
-            let idx = (*line as usize).saturating_sub(1);
-            if idx > lines.len() {
-                return Err(RlmError::Other(format!(
-                    "line {line} is beyond file length ({})",
-                    lines.len()
-                )));
-            }
-            for (i, l) in lines.iter().enumerate() {
-                if i == idx {
-                    result.push(code.to_string());
-                }
-                result.push(l.to_string());
-            }
-        }
-        InsertPosition::AfterLine(line) => {
-            let idx = (*line as usize).saturating_sub(1);
-            if idx >= lines.len() {
-                return Err(RlmError::Other(format!(
-                    "line {line} is beyond file length ({})",
-                    lines.len()
-                )));
-            }
-            for (i, l) in lines.iter().enumerate() {
-                result.push(l.to_string());
-                if i == idx {
-                    result.push(code.to_string());
-                }
-            }
+        result.push(l.to_string());
+        if i == line_idx && after {
+            result.push(code.to_string());
         }
     }
+    result.join("\n")
+}
 
-    Ok(result.join("\n"))
+/// Insert code before or after a specific 1-based line number.
+fn insert_relative(source: &str, code: &str, line: u32, after: bool) -> Result<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let idx = (line as usize).saturating_sub(1);
+    // "before" allows idx == lines.len() (appending); "after" requires idx < lines.len()
+    let out_of_bounds = if after { idx >= lines.len() } else { idx > lines.len() };
+    if out_of_bounds {
+        return Err(RlmError::Other(format!(
+            "line {line} is beyond file length ({})",
+            lines.len()
+        )));
+    }
+    Ok(insert_at_line(&lines, code, idx, after))
+}
+
+/// Apply insertion to source string without writing to disk.
+pub fn apply_insertion(source: &str, position: &InsertPosition, code: &str) -> Result<String> {
+    match position {
+        InsertPosition::Top => Ok(insert_at_top(source, code)),
+        InsertPosition::Bottom => Ok(insert_at_bottom(source, code)),
+        InsertPosition::BeforeLine(line) => insert_relative(source, code, *line, false),
+        InsertPosition::AfterLine(line) => insert_relative(source, code, *line, true),
+    }
 }
 
 #[cfg(test)]

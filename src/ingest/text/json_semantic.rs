@@ -9,7 +9,7 @@
 use serde_json::Value;
 
 use crate::error::Result;
-use crate::ingest::text::{create_fallback_chunk, extract_structured_chunks, value_preview_string, TextParser};
+use crate::ingest::text::{create_fallback_chunk, extract_structured_chunks, value_preview_string, StructuredChunkConfig, TextParser};
 use crate::models::chunk::{Chunk, ChunkKind};
 
 pub struct JsonSemanticParser;
@@ -43,14 +43,16 @@ impl TextParser for JsonSemanticParser {
             }
         };
 
-        extract_structured_chunks(
-            &value, "", source, file_id, &mut chunks, 0,
-            &determine_json_kind,
-            &|key, val| format!("\"{}\": {}", key, json_type_name(val)),
-            &|src, key, _full_path| find_json_key_lines(src, key),
-            &|v, indent| value_preview_string(v, indent, true, ": "),
-            &is_important_json_key,
-        );
+        let cfg = StructuredChunkConfig {
+            source,
+            file_id,
+            determine_kind: determine_json_kind,
+            format_signature: |key, val| format!("\"{}\": {}", key, json_type_name(val)),
+            find_lines: |src, key, _full_path| find_json_key_lines(src, key),
+            value_to_string: |v, indent| value_preview_string(v, indent, true, ": "),
+            is_important_key: is_important_json_key,
+        };
+        extract_structured_chunks(&value, "", &mut chunks, 0, &cfg);
 
         if chunks.is_empty() {
             chunks.push(create_fallback_chunk(source, file_id, "json"));
@@ -115,6 +117,22 @@ fn is_important_json_key(key: &str) -> bool {
     )
 }
 
+/// Count brace/bracket balance deltas on a single line.
+fn count_delimiters(line: &str) -> (i32, i32) {
+    let mut braces = 0i32;
+    let mut brackets = 0i32;
+    for ch in line.chars() {
+        match ch {
+            '{' => braces += 1,
+            '}' => braces -= 1,
+            '[' => brackets += 1,
+            ']' => brackets -= 1,
+            _ => {}
+        }
+    }
+    (braces, brackets)
+}
+
 fn find_json_key_lines(source: &str, key: &str) -> (u32, u32) {
     let lines: Vec<&str> = source.lines().collect();
     let search_pattern = format!("\"{key}\"");
@@ -129,37 +147,20 @@ fn find_json_key_lines(source: &str, key: &str) -> (u32, u32) {
         if !found && line.contains(&search_pattern) {
             start_line = (i + 1) as u32;
             found = true;
+        }
 
-            // Count opening braces/brackets on this line
-            for ch in line.chars() {
-                match ch {
-                    '{' => brace_count += 1,
-                    '}' => brace_count -= 1,
-                    '[' => bracket_count += 1,
-                    ']' => bracket_count -= 1,
-                    _ => {}
-                }
-            }
+        if !found {
             continue;
         }
 
-        if found {
-            // Track braces/brackets to find matching close
-            for ch in line.chars() {
-                match ch {
-                    '{' => brace_count += 1,
-                    '}' => brace_count -= 1,
-                    '[' => bracket_count += 1,
-                    ']' => bracket_count -= 1,
-                    _ => {}
-                }
-            }
+        let (bd, kd) = count_delimiters(line);
+        brace_count += bd;
+        bracket_count += kd;
 
-            // When we're back to balanced, we've found the end
-            if brace_count <= 0 && bracket_count <= 0 {
-                end_line = (i + 1) as u32;
-                break;
-            }
+        // When we're back to balanced, we've found the end
+        if brace_count <= 0 && bracket_count <= 0 {
+            end_line = (i + 1) as u32;
+            break;
         }
     }
 
@@ -281,5 +282,28 @@ mod tests {
 }"#;
         let chunks = parser().parse_chunks(source, 1).unwrap();
         assert!(chunks.iter().any(|c| c.ident == "items"));
+    }
+
+    #[test]
+    fn test_json_type_name() {
+        assert_eq!(json_type_name(&serde_json::Value::Null), "null");
+        assert_eq!(json_type_name(&serde_json::Value::Bool(true)), "bool");
+        assert_eq!(json_type_name(&serde_json::Value::Bool(false)), "bool");
+        assert_eq!(
+            json_type_name(&serde_json::Value::Number(serde_json::Number::from(42))),
+            "number"
+        );
+        assert_eq!(
+            json_type_name(&serde_json::Value::String("hello".into())),
+            "string"
+        );
+        assert_eq!(
+            json_type_name(&serde_json::Value::Array(vec![])),
+            "array"
+        );
+        assert_eq!(
+            json_type_name(&serde_json::Value::Object(serde_json::Map::new())),
+            "object"
+        );
     }
 }

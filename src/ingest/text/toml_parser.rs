@@ -9,7 +9,7 @@
 use toml::Table;
 
 use crate::error::Result;
-use crate::ingest::text::{create_fallback_chunk, extract_structured_chunks, value_preview_string, TextParser};
+use crate::ingest::text::{create_fallback_chunk, extract_structured_chunks, value_preview_string, StructuredChunkConfig, TextParser};
 use crate::models::chunk::{Chunk, ChunkKind};
 
 pub struct TomlParser;
@@ -46,14 +46,16 @@ impl TextParser for TomlParser {
         // Convert TOML Table -> serde_json::Value for shared extraction
         let json_value = toml_table_to_json(&table);
 
-        extract_structured_chunks(
-            &json_value, "", source, file_id, &mut chunks, 0,
-            &determine_toml_kind,
-            &|key, val| format!("{} = {}", key, toml_json_type_name(val)),
-            &find_toml_key_lines,
-            &|v, indent| value_preview_string(v, indent, false, " = "),
-            &is_important_toml_key,
-        );
+        let cfg = StructuredChunkConfig {
+            source,
+            file_id,
+            determine_kind: determine_toml_kind,
+            format_signature: |key, val| format!("{} = {}", key, toml_value_kind_label(val)),
+            find_lines: find_toml_key_lines,
+            value_to_string: |v, indent| value_preview_string(v, indent, false, " = "),
+            is_important_key: is_important_toml_key,
+        };
+        extract_structured_chunks(&json_value, "", &mut chunks, 0, &cfg);
 
         if chunks.is_empty() {
             chunks.push(create_fallback_chunk(source, file_id, "toml"));
@@ -86,39 +88,48 @@ fn toml_val_to_json(val: &toml::Value) -> serde_json::Value {
     }
 }
 
-fn determine_toml_kind(key: &str, value: &serde_json::Value) -> ChunkKind {
-    // Special patterns for common TOML file types
-    match key.to_lowercase().as_str() {
+/// Map a TOML key to a known kind label, if it matches a well-known pattern (operation: logic only).
+fn toml_key_kind_label(key_lower: &str) -> Option<&'static str> {
+    match key_lower {
         // Cargo.toml
-        "package" | "lib" | "bin" => ChunkKind::Other("cargo".into()),
-        "dependencies" | "dev-dependencies" | "build-dependencies" => {
-            ChunkKind::Other("deps".into())
-        }
-        "features" => ChunkKind::Other("features".into()),
-        "workspace" => ChunkKind::Other("workspace".into()),
+        "package" | "lib" | "bin" => Some("cargo"),
+        "dependencies" | "dev-dependencies" | "build-dependencies" => Some("deps"),
+        "features" => Some("features"),
+        "workspace" => Some("workspace"),
         // pyproject.toml
-        "project" | "tool" => ChunkKind::Other("pyproject".into()),
-        "build-system" => ChunkKind::Other("build".into()),
+        "project" | "tool" => Some("pyproject"),
+        "build-system" => Some("build"),
         // Generic
-        "scripts" | "commands" => ChunkKind::Other("scripts".into()),
-        "env" | "environment" => ChunkKind::Other("env".into()),
-        "settings" | "config" | "options" => ChunkKind::Other("config".into()),
-        // Default based on value type
-        _ => match value {
-            serde_json::Value::Object(_) => ChunkKind::Other("table".into()),
-            serde_json::Value::Array(_) => ChunkKind::Other("array".into()),
-            serde_json::Value::String(_) => ChunkKind::Other("string".into()),
-            serde_json::Value::Number(n) => {
-                if n.is_f64() && !n.is_i64() && !n.is_u64() {
-                    ChunkKind::Other("float".into())
-                } else {
-                    ChunkKind::Other("integer".into())
-                }
-            }
-            serde_json::Value::Bool(_) => ChunkKind::Other("bool".into()),
-            serde_json::Value::Null => ChunkKind::Other("string".into()), // datetime -> string in JSON
-        },
+        "scripts" | "commands" => Some("scripts"),
+        "env" | "environment" => Some("env"),
+        "settings" | "config" | "options" => Some("config"),
+        _ => None,
     }
+}
+
+/// Map a JSON value type to a TOML kind label (operation: logic only).
+fn toml_value_kind_label(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Object(_) => "table",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Number(n) => {
+            if n.is_f64() && !n.is_i64() && !n.is_u64() {
+                "float"
+            } else {
+                "integer"
+            }
+        }
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Null => "null",
+    }
+}
+
+/// Determine the `ChunkKind` for a TOML key-value pair (integration: dispatches to operations).
+fn determine_toml_kind(key: &str, value: &serde_json::Value) -> ChunkKind {
+    let label = toml_key_kind_label(&key.to_lowercase())
+        .unwrap_or_else(|| toml_value_kind_label(value));
+    ChunkKind::Other(label.into())
 }
 
 fn is_important_toml_key(key: &str) -> bool {
@@ -141,10 +152,23 @@ fn is_important_toml_key(key: &str) -> bool {
     )
 }
 
+/// Check whether a line matches a TOML table or array-of-tables header.
+fn is_toml_header_match(trimmed: &str, table_header: &str, array_header: &str) -> bool {
+    trimmed == table_header || trimmed == array_header
+}
+
+/// Check whether a line matches a TOML key assignment.
+fn is_toml_key_match(trimmed: &str, key: &str) -> bool {
+    trimmed.starts_with(&format!("{key} ")) || trimmed.starts_with(&format!("{key}="))
+}
+
+/// Check whether a line starts a new TOML section.
+fn is_toml_section_start(trimmed: &str) -> bool {
+    trimmed.starts_with('[')
+}
+
 fn find_toml_key_lines(source: &str, key: &str, full_path: &str) -> (u32, u32) {
     let lines: Vec<&str> = source.lines().collect();
-
-    // Look for table header [path] or [[path]] first
     let table_header = format!("[{full_path}]");
     let array_header = format!("[[{full_path}]]");
 
@@ -155,28 +179,16 @@ fn find_toml_key_lines(source: &str, key: &str, full_path: &str) -> (u32, u32) {
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
 
-        // Check for table header
-        if !found && (trimmed == table_header || trimmed == array_header) {
-            start_line = (i + 1) as u32;
-            found = true;
-            continue;
-        }
-
-        // Check for key = value
-        if !found && trimmed.starts_with(&format!("{key} "))
-            || trimmed.starts_with(&format!("{key}="))
+        if !found
+            && (is_toml_header_match(trimmed, &table_header, &array_header)
+                || is_toml_key_match(trimmed, key))
         {
             start_line = (i + 1) as u32;
             found = true;
             continue;
         }
 
-        // Find end: next table header or section
-        if found && trimmed.starts_with('[') && !trimmed.starts_with("[[") {
-            end_line = i as u32;
-            break;
-        }
-        if found && trimmed.starts_with("[[") {
+        if found && is_toml_section_start(trimmed) {
             end_line = i as u32;
             break;
         }
@@ -196,22 +208,7 @@ fn find_toml_key_lines(source: &str, key: &str, full_path: &str) -> (u32, u32) {
     (start_line, end_line.max(start_line))
 }
 
-fn toml_json_type_name(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Object(_) => "table",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Number(n) => {
-            if n.is_f64() && !n.is_i64() && !n.is_u64() {
-                "float"
-            } else {
-                "integer"
-            }
-        }
-        serde_json::Value::Bool(_) => "bool",
-        serde_json::Value::Null => "null",
-    }
-}
+// toml_json_type_name was identical to toml_value_kind_label; consolidated.
 
 #[cfg(test)]
 mod tests {
@@ -296,5 +293,34 @@ path = "src/cli.rs"
     fn empty_toml() {
         let chunks = parser().parse_chunks("", 1).unwrap();
         assert_eq!(chunks.len(), 1);
+    }
+
+    #[test]
+    fn test_toml_json_type_name() {
+        assert_eq!(toml_value_kind_label(&serde_json::Value::Null), "null");
+        assert_eq!(toml_value_kind_label(&serde_json::Value::Bool(true)), "bool");
+        assert_eq!(toml_value_kind_label(&serde_json::Value::Bool(false)), "bool");
+        assert_eq!(
+            toml_value_kind_label(&serde_json::Value::Number(serde_json::Number::from(42))),
+            "integer"
+        );
+        assert_eq!(
+            toml_value_kind_label(&serde_json::Value::Number(
+                serde_json::Number::from_f64(3.14).unwrap()
+            )),
+            "float"
+        );
+        assert_eq!(
+            toml_value_kind_label(&serde_json::Value::String("hello".into())),
+            "string"
+        );
+        assert_eq!(
+            toml_value_kind_label(&serde_json::Value::Array(vec![])),
+            "array"
+        );
+        assert_eq!(
+            toml_value_kind_label(&serde_json::Value::Object(serde_json::Map::new())),
+            "table"
+        );
     }
 }

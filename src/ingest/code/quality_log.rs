@@ -331,14 +331,22 @@ const CENTURY_DIVISOR: i64 = 100;
 #[cfg(test)]
 const QUAD_CENTURY_DIVISOR: i64 = 400;
 
+/// Date components extracted from epoch seconds.
 #[cfg(test)]
-fn chrono_timestamp() -> String {
-    use std::time::SystemTime;
-    let duration = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = duration.as_secs();
+struct DateComponents {
+    year: i64,
+    month: i64,
+    day: i64,
+    hours: u64,
+    minutes: u64,
+    seconds: u64,
+}
 
+/// Convert epoch seconds to date components (operation: logic only).
+///
+/// Performs all date arithmetic without calling any own-crate functions.
+#[cfg(test)]
+fn epoch_secs_to_date(secs: u64) -> DateComponents {
     let days_since_epoch = secs / SECONDS_PER_DAY;
     let time_of_day = secs % SECONDS_PER_DAY;
     let hours = time_of_day / SECONDS_PER_HOUR;
@@ -348,7 +356,9 @@ fn chrono_timestamp() -> String {
     let mut days = days_since_epoch as i64;
     let mut year = EPOCH_YEAR;
     loop {
-        let days_in_year = if is_leap_year(year) { DAYS_IN_LEAP_YEAR } else { DAYS_IN_YEAR };
+        let leap = (year % LEAP_YEAR_DIVISOR == 0 && year % CENTURY_DIVISOR != 0)
+            || (year % QUAD_CENTURY_DIVISOR == 0);
+        let days_in_year = if leap { DAYS_IN_LEAP_YEAR } else { DAYS_IN_YEAR };
         if days < days_in_year {
             break;
         }
@@ -356,29 +366,41 @@ fn chrono_timestamp() -> String {
         year += 1;
     }
 
-    let months_days: [i64; MONTHS_IN_YEAR] = if is_leap_year(year) {
+    let leap = (year % LEAP_YEAR_DIVISOR == 0 && year % CENTURY_DIVISOR != 0)
+        || (year % QUAD_CENTURY_DIVISOR == 0);
+    let months_days: [i64; MONTHS_IN_YEAR] = if leap {
         [DAYS_IN_JAN, DAYS_IN_FEB_LEAP, DAYS_IN_MAR, DAYS_IN_APR, DAYS_IN_MAY, DAYS_IN_JUN, DAYS_IN_JUL, DAYS_IN_AUG, DAYS_IN_SEP, DAYS_IN_OCT, DAYS_IN_NOV, DAYS_IN_DEC]
     } else {
         [DAYS_IN_JAN, DAYS_IN_FEB, DAYS_IN_MAR, DAYS_IN_APR, DAYS_IN_MAY, DAYS_IN_JUN, DAYS_IN_JUL, DAYS_IN_AUG, DAYS_IN_SEP, DAYS_IN_OCT, DAYS_IN_NOV, DAYS_IN_DEC]
     };
 
-    let mut month = 1;
-    for &m_days in &months_days {
-        if days < m_days {
-            break;
-        }
-        days -= m_days;
-        month += 1;
-    }
+    let month_index = months_days
+        .iter()
+        .scan(0i64, |acc, &m| {
+            *acc += m;
+            Some(*acc)
+        })
+        .position(|cumulative| days < cumulative)
+        .unwrap_or(MONTHS_IN_YEAR - 1);
+    let consumed: i64 = months_days[..month_index].iter().sum();
+    days -= consumed;
+    let month = (month_index as i64) + 1;
     let day = days + 1;
 
-    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
+    DateComponents { year, month, day, hours, minutes, seconds }
 }
 
+/// Format date components as an ISO 8601 timestamp (integration: calls only).
 #[cfg(test)]
-fn is_leap_year(year: i64) -> bool {
-    (year % LEAP_YEAR_DIVISOR == 0 && year % CENTURY_DIVISOR != 0) || (year % QUAD_CENTURY_DIVISOR == 0)
+fn chrono_timestamp() -> String {
+    use std::time::SystemTime;
+    let duration = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    let d = epoch_secs_to_date(duration.as_secs());
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", d.year, d.month, d.day, d.hours, d.minutes, d.seconds)
 }
+
 
 #[cfg(test)]
 fn extract_context(source: &str, line: u32) -> Option<String> {

@@ -10,7 +10,8 @@
 use tree_sitter::{Language, Query};
 
 use crate::ingest::code::base::{
-    build_language_config, collect_prev_siblings, BaseParser, ChunkCaptureResult, LanguageConfig,
+    build_language_config, collect_prev_siblings, first_child_text_by_kind, BaseParser,
+    ChunkCaptureResult, LanguageConfig, SiblingCollectConfig,
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
@@ -178,7 +179,16 @@ impl LanguageConfig for JavaScriptConfig {
     }
 
     fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_prev_siblings(node, source, &["comment"], &[], &["/**"], false)
+        collect_prev_siblings(
+            node,
+            source,
+            &SiblingCollectConfig {
+                kinds: &["comment"],
+                skip_kinds: &[],
+                prefixes: &["/**"],
+                multi: false,
+            },
+        )
     }
 
     fn collect_attributes(&self, _node: tree_sitter::Node, _source: &[u8]) -> Option<String> {
@@ -239,22 +249,10 @@ fn extract_js_signature(content: &str, kind: &ChunkKind) -> Option<String> {
 fn find_js_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let mut current = node.parent();
     while let Some(parent) = current {
-        let kind = parent.kind();
-        if kind == "class_body" {
-            // Go up one more to get class_declaration
-            if let Some(class_decl) = parent.parent() {
-                if class_decl.kind() == "class_declaration" || class_decl.kind() == "class" {
-                    for i in 0..class_decl.child_count() {
-                        if let Some(child) = class_decl.child(i as u32) {
-                            if child.kind() == "identifier" {
-                                return child
-                                    .utf8_text(source)
-                                    .ok()
-                                    .map(std::string::ToString::to_string);
-                            }
-                        }
-                    }
-                }
+        if parent.kind() == "class_body" {
+            let class_decl = parent.parent()?;
+            if class_decl.kind() == "class_declaration" || class_decl.kind() == "class" {
+                return first_child_text_by_kind(class_decl, source, &["identifier"]);
             }
         }
         current = parent.parent();

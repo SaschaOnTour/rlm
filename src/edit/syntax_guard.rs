@@ -34,36 +34,37 @@ impl SyntaxGuard {
         }
     }
 
-    /// Validate and then write file atomically.
-    /// First validates syntax, then writes to a temp file and renames.
-    pub fn validate_and_write(
-        &self,
-        lang: &str,
-        source: &str,
-        path: &std::path::Path,
-    ) -> Result<()> {
-        self.validate(lang, source)?;
+}
 
-        // Atomic write: write to temp file, then rename
-        let parent = path.parent().unwrap_or(std::path::Path::new("."));
-        let temp_path = parent.join(format!(
-            ".rlm_tmp_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
+/// Validate syntax then write file atomically (free function, decoupled from `SyntaxGuard`).
+/// First validates via `guard.validate()`, then writes to a temp file and renames.
+pub fn validate_and_write(
+    guard: &SyntaxGuard,
+    lang: &str,
+    source: &str,
+    path: &std::path::Path,
+) -> Result<()> {
+    guard.validate(lang, source)?;
 
-        std::fs::write(&temp_path, source)?;
+    // Atomic write: write to temp file, then rename
+    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+    let temp_path = parent.join(format!(
+        ".rlm_tmp_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
 
-        if let Err(e) = std::fs::rename(&temp_path, path) {
-            // Clean up temp file on rename failure
-            let _ = std::fs::remove_file(&temp_path);
-            return Err(e.into());
-        }
+    std::fs::write(&temp_path, source)?;
 
-        Ok(())
+    if let Err(e) = std::fs::rename(&temp_path, path) {
+        // Clean up temp file on rename failure
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(e.into());
     }
+
+    Ok(())
 }
 
 impl Default for SyntaxGuard {
@@ -103,9 +104,7 @@ mod tests {
         let guard = SyntaxGuard::new();
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("test.rs");
-        guard
-            .validate_and_write("rust", "fn main() {}", &path)
-            .unwrap();
+        validate_and_write(&guard, "rust", "fn main() {}", &path).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn main() {}");
     }
 
@@ -114,7 +113,7 @@ mod tests {
         let guard = SyntaxGuard::new();
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("test.rs");
-        let result = guard.validate_and_write("rust", "fn main() {", &path);
+        let result = validate_and_write(&guard, "rust", "fn main() {", &path);
         assert!(result.is_err());
         assert!(!path.exists()); // File should NOT be written
     }

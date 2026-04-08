@@ -1,5 +1,7 @@
 pub mod base;
+pub(crate) mod base_ops;
 pub mod csharp;
+pub mod helpers;
 pub mod css;
 pub mod go;
 pub mod html;
@@ -9,6 +11,7 @@ pub mod php;
 pub mod python;
 pub mod quality_log;
 pub mod rust;
+pub(crate) mod rust_impl_methods;
 pub mod typescript;
 
 #[cfg(test)]
@@ -125,33 +128,38 @@ pub trait CodeParser: Send + Sync {
     }
 }
 
-/// Helper to find error nodes in a tree-sitter tree.
+/// Helper to find error nodes in a tree-sitter tree (operation: logic only).
+///
+/// Uses an iterative depth-first traversal via the tree-sitter cursor API.
 /// Returns 1-based line numbers of all ERROR nodes.
 #[must_use]
 pub fn find_error_lines(root: tree_sitter::Node) -> Vec<u32> {
     let mut errors = Vec::new();
     let mut cursor = root.walk();
+    let mut did_enter = true;
 
-    fn visit(cursor: &mut tree_sitter::TreeCursor, errors: &mut Vec<u32>) {
-        loop {
-            let node = cursor.node();
-            if node.is_error() || node.is_missing() {
-                let line = node.start_position().row as u32 + 1;
-                if !errors.contains(&line) {
-                    errors.push(line);
-                }
+    loop {
+        let node = cursor.node();
+
+        if did_enter && (node.is_error() || node.is_missing()) {
+            let line = node.start_position().row as u32 + 1;
+            if !errors.contains(&line) {
+                errors.push(line);
             }
-            if cursor.goto_first_child() {
-                visit(cursor, errors);
-                cursor.goto_parent();
-            }
-            if !cursor.goto_next_sibling() {
-                break;
-            }
+        }
+
+        // Depth-first: try child, then sibling, then uncle
+        if did_enter && cursor.goto_first_child() {
+            did_enter = true;
+        } else if cursor.goto_next_sibling() {
+            did_enter = true;
+        } else if cursor.goto_parent() {
+            did_enter = false;
+        } else {
+            break;
         }
     }
 
-    visit(&mut cursor, &mut errors);
     errors.sort_unstable();
     errors
 }

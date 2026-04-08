@@ -3,7 +3,7 @@ use tree_sitter::{Language, Query};
 use crate::ingest::code::base::{
     build_language_config, collect_prev_siblings, collect_prev_siblings_filtered_skip,
     extract_keyword_visibility, extract_type_signature_to_brace, find_parent_by_kind, BaseParser,
-    ChunkCaptureResult, LanguageConfig,
+    ChunkCaptureResult, LanguageConfig, SiblingCollectConfig,
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
@@ -127,10 +127,12 @@ impl LanguageConfig for CSharpConfig {
         collect_prev_siblings(
             node,
             source,
-            &["comment"],
-            &["attribute_list"],
-            &["///"],
-            true,
+            &SiblingCollectConfig {
+                kinds: &["comment"],
+                skip_kinds: &["attribute_list"],
+                prefixes: &["///"],
+                multi: true,
+            },
         )
     }
 
@@ -138,10 +140,12 @@ impl LanguageConfig for CSharpConfig {
         collect_prev_siblings_filtered_skip(
             node,
             source,
-            &["attribute_list"],
-            &["comment"],
-            &["///"],
-            true,
+            &SiblingCollectConfig {
+                kinds: &["attribute_list"],
+                skip_kinds: &["comment"],
+                prefixes: &["///"],
+                multi: true,
+            },
         )
     }
 }

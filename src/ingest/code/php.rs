@@ -3,7 +3,7 @@ use tree_sitter::{Language, Query};
 use crate::ingest::code::base::{
     build_language_config, collect_prev_siblings, extract_keyword_visibility,
     extract_type_signature_to_brace, find_parent_by_kind, BaseParser, ChunkCaptureResult,
-    LanguageConfig,
+    LanguageConfig, SiblingCollectConfig,
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
@@ -124,10 +124,12 @@ impl LanguageConfig for PhpConfig {
         collect_prev_siblings(
             node,
             source,
-            &["comment"],
-            &["attribute_list"],
-            &["/**"],
-            false,
+            &SiblingCollectConfig {
+                kinds: &["comment"],
+                skip_kinds: &["attribute_list"],
+                prefixes: &["/**"],
+                multi: false,
+            },
         )
     }
 
@@ -135,10 +137,12 @@ impl LanguageConfig for PhpConfig {
         collect_prev_siblings(
             node,
             source,
-            &["attribute_list", "attribute_group"],
-            &["comment"],
-            &[],
-            true,
+            &SiblingCollectConfig {
+                kinds: &["attribute_list", "attribute_group"],
+                skip_kinds: &["comment"],
+                prefixes: &[],
+                multi: true,
+            },
         )
     }
 }

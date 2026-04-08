@@ -71,7 +71,9 @@ pub fn get_type_info(db: &Database, symbol: &str) -> Result<TypeInfoResult> {
                 None => UNKNOWN_FILE_PRIORITY, // Unknown files get lowest priority
             }
         })
-        .unwrap(); // Safe: we already checked chunks is not empty
+        .ok_or_else(|| {
+            crate::error::RlmError::Other(format!("symbol not found: {symbol}"))
+        })?;
 
     let file_path = files
         .iter()

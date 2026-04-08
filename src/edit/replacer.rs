@@ -1,5 +1,5 @@
 use crate::db::Database;
-use crate::edit::syntax_guard::SyntaxGuard;
+use crate::edit::syntax_guard::{validate_and_write, SyntaxGuard};
 use crate::error::{Result, RlmError};
 use crate::ingest::scanner::ext_to_lang;
 use crate::models::chunk::Chunk;
@@ -63,7 +63,7 @@ pub fn replace_symbol(
     let lang = ext_to_lang(ext);
 
     // Validate and write
-    guard.validate_and_write(lang, &modified, full_path)?;
+    validate_and_write(guard, lang, &modified, full_path)?;
 
     Ok(modified)
 }

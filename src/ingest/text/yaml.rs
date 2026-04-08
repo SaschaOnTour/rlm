@@ -5,21 +5,21 @@
 //! - Nested structures with dot-notation paths
 //! - Arrays and sequences
 //! - Special handling for common patterns (K8s, Docker Compose, GitHub Actions)
+//!
+//! Value formatting and kind-detection helpers live in `yaml_helpers`.
 
 use serde_yaml::Value;
 
 use crate::error::Result;
+use crate::ingest::text::yaml_helpers::{
+    determine_yaml_kind, find_key_lines, is_important_key, yaml_key_to_string, yaml_type_name,
+    yaml_value_to_string,
+};
 use crate::ingest::text::{create_fallback_chunk, TextParser};
-use crate::models::chunk::{Chunk, ChunkKind};
+use crate::models::chunk::Chunk;
 
 /// Maximum nesting depth for recursive YAML chunk extraction.
 const MAX_NESTING_DEPTH: usize = 3;
-/// Maximum string length before truncation in YAML value previews.
-const MAX_PREVIEW_LENGTH: usize = 100;
-/// Maximum number of sequence items shown in a YAML value preview.
-const ARRAY_PREVIEW_ITEMS: usize = 5;
-/// Maximum number of mapping keys shown in a YAML value preview.
-const OBJECT_PREVIEW_KEYS: usize = 5;
 
 pub struct YamlParser;
 
@@ -54,7 +54,8 @@ impl TextParser for YamlParser {
         };
 
         // Extract chunks from the parsed YAML
-        extract_yaml_chunks(&value, "", source, file_id, &mut chunks, 0);
+        let cfg = YamlChunkConfig { source, file_id };
+        extract_yaml_chunks(&value, "", &mut chunks, 0, &cfg);
 
         // If no chunks were created, create a fallback
         if chunks.is_empty() {
@@ -65,27 +66,47 @@ impl TextParser for YamlParser {
     }
 }
 
-fn extract_yaml_chunks(
+/// Configuration bundle for YAML chunk extraction, reducing parameter count.
+struct YamlChunkConfig<'a> {
+    source: &'a str,
+    file_id: i64,
+}
+
+/// Per-entry context for YAML mapping chunk processing, reducing parameter count.
+struct YamlEntryContext<'a> {
+    /// Full dot-notation path for this entry.
+    full_path: &'a str,
+    /// Parent path (dot-notation) for hierarchy.
+    parent_path: &'a str,
+    /// Current nesting depth.
+    depth: usize,
+}
+
+/// An entry extracted from a YAML mapping for processing.
+struct YamlEntry {
+    key_str: String,
+    full_path: String,
+}
+
+/// Collect entries and recursion targets from a YAML value (operation: logic only).
+fn collect_yaml_entries(
     value: &Value,
     path: &str,
-    source: &str,
-    file_id: i64,
-    chunks: &mut Vec<Chunk>,
     depth: usize,
-) {
-    // Limit depth to avoid excessive chunking
+) -> Option<(Vec<YamlEntry>, Vec<String>)> {
     if depth > MAX_NESTING_DEPTH {
-        return;
+        return None;
     }
 
     match value {
         Value::Mapping(map) => {
-            for (key, val) in map {
-                let key_str = match key {
-                    Value::String(s) => s.clone(),
-                    Value::Number(n) => n.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    _ => continue,
+            let mut entries = Vec::new();
+            let mut recurse_paths = Vec::new();
+
+            for (key, _val) in map {
+                let key_str = match yaml_key_to_string(key) {
+                    Some(s) => s,
+                    None => continue,
                 };
 
                 let full_path = if path.is_empty() {
@@ -94,219 +115,125 @@ fn extract_yaml_chunks(
                     format!("{path}.{key_str}")
                 };
 
-                // Determine chunk kind based on key name or content
-                let kind = determine_yaml_kind(&key_str, val);
-
-                // Find approximate line range for this key
-                let (start_line, end_line) = find_key_lines(source, &key_str, depth);
-
-                // Create content representation
-                let content = yaml_value_to_string(val, 0);
-
-                // Create chunk for top-level or important keys
-                if depth < 2 || is_important_key(&key_str) {
-                    chunks.push(Chunk {
-                        id: 0,
-                        file_id,
-                        start_line,
-                        end_line,
-                        start_byte: 0, // Approximate
-                        end_byte: 0,
-                        kind: kind.clone(),
-                        ident: full_path.clone(),
-                        parent: if path.is_empty() {
-                            None
-                        } else {
-                            Some(path.to_string())
-                        },
-                        signature: Some(format!("{}: {}", key_str, yaml_type_name(val))),
-                        visibility: None,
-                        ui_ctx: None,
-                        doc_comment: None,
-                        attributes: None,
-                        content,
-                    });
-                }
-
-                // Recurse into nested structures
-                extract_yaml_chunks(val, &full_path, source, file_id, chunks, depth + 1);
+                recurse_paths.push(full_path.clone());
+                entries.push(YamlEntry { key_str, full_path });
             }
+
+            Some((entries, recurse_paths))
         }
         Value::Sequence(seq) if !seq.is_empty() && depth == 0 => {
-            // Handle root-level arrays (uncommon but possible)
-            for (i, item) in seq.iter().enumerate() {
-                let item_path = format!("{path}[{i}]");
-                extract_yaml_chunks(item, &item_path, source, file_id, chunks, depth + 1);
-            }
+            let recurse_paths: Vec<String> = (0..seq.len())
+                .map(|i| format!("{path}[{i}]"))
+                .collect();
+            Some((Vec::new(), recurse_paths))
         }
-        _ => {}
+        _ => None,
     }
 }
 
-fn determine_yaml_kind(key: &str, value: &Value) -> ChunkKind {
-    // Special patterns for common YAML file types
-    match key.to_lowercase().as_str() {
-        // Kubernetes
-        "apiversion" | "kind" | "metadata" | "spec" | "status" => ChunkKind::Other("k8s".into()),
-        // Docker Compose
-        "services" | "volumes" | "networks" => ChunkKind::Other("compose".into()),
-        // GitHub Actions
-        "jobs" | "steps" | "runs-on" | "uses" => ChunkKind::Other("actions".into()),
-        // CI/CD
-        "stages" | "pipeline" | "build" | "test" | "deploy" => ChunkKind::Other("ci".into()),
-        // Dependencies
-        "dependencies" | "devdependencies" | "peerdependencies" => ChunkKind::Other("deps".into()),
-        // Scripts
-        "scripts" | "commands" => ChunkKind::Other("scripts".into()),
-        // Default based on value type
-        _ => match value {
-            Value::Mapping(_) => ChunkKind::Other("object".into()),
-            Value::Sequence(_) => ChunkKind::Other("array".into()),
-            Value::String(_) => ChunkKind::Other("string".into()),
-            Value::Number(_) => ChunkKind::Other("number".into()),
-            Value::Bool(_) => ChunkKind::Other("bool".into()),
-            Value::Null => ChunkKind::Other("null".into()),
-            Value::Tagged(_) => ChunkKind::Other("tagged".into()),
+/// Extract chunks from a parsed YAML value tree (integration: calls only).
+fn extract_yaml_chunks(
+    value: &Value,
+    path: &str,
+    chunks: &mut Vec<Chunk>,
+    depth: usize,
+    cfg: &YamlChunkConfig<'_>,
+) {
+    let (entries, recurse_paths) = match collect_yaml_entries(value, path, depth) {
+        Some(pair) => pair,
+        None => return,
+    };
+
+    // Process mapping entries
+    if let Value::Mapping(map) = value {
+        for entry in &entries {
+            let val = match map.get(Value::String(entry.key_str.clone())) {
+                Some(v) => v,
+                None => continue,
+            };
+            let entry_ctx = YamlEntryContext {
+                full_path: &entry.full_path,
+                parent_path: path,
+                depth,
+            };
+            process_yaml_mapping_entry(&entry.key_str, val, &entry_ctx, chunks, cfg);
+        }
+    }
+
+    // Recurse into nested structures
+    for recurse_path in &recurse_paths {
+        let child_val = resolve_yaml_child(value, path, recurse_path);
+        let child_val = match child_val {
+            Some(v) => v,
+            None => continue,
+        };
+        extract_yaml_chunks(child_val, recurse_path, chunks, depth + 1, cfg);
+    }
+}
+
+/// Resolve a child value from a YAML value by its full path (operation: logic only).
+fn resolve_yaml_child<'a>(value: &'a Value, parent_path: &str, child_path: &str) -> Option<&'a Value> {
+    let relative = if parent_path.is_empty() {
+        child_path
+    } else if let Some(stripped) = child_path.strip_prefix(parent_path) {
+        stripped.strip_prefix('.').unwrap_or(stripped)
+    } else {
+        child_path
+    };
+
+    // Handle array index: "[N]"
+    if let Some(idx_str) = relative.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let idx: usize = idx_str.parse().ok()?;
+        return value.as_sequence()?.get(idx);
+    }
+
+    // Handle mapping key
+    value.as_mapping()?.get(Value::String(relative.to_string()))
+}
+
+/// Process a single YAML mapping entry, creating a chunk if appropriate (operation: logic only).
+fn process_yaml_mapping_entry(
+    key_str: &str,
+    val: &Value,
+    entry_ctx: &YamlEntryContext<'_>,
+    chunks: &mut Vec<Chunk>,
+    cfg: &YamlChunkConfig<'_>,
+) {
+    let kind = determine_yaml_kind(key_str, val);
+    let (start_line, end_line) = find_key_lines(cfg.source, key_str, entry_ctx.depth);
+    let content = yaml_value_to_string(val, 0);
+
+    if entry_ctx.depth >= 2 && !is_important_key(key_str) {
+        return;
+    }
+
+    chunks.push(Chunk {
+        id: 0,
+        file_id: cfg.file_id,
+        start_line,
+        end_line,
+        start_byte: 0,
+        end_byte: 0,
+        kind,
+        ident: entry_ctx.full_path.to_string(),
+        parent: if entry_ctx.parent_path.is_empty() {
+            None
+        } else {
+            Some(entry_ctx.parent_path.to_string())
         },
-    }
-}
-
-fn is_important_key(key: &str) -> bool {
-    // Keys that should always be chunked
-    matches!(
-        key.to_lowercase().as_str(),
-        "name"
-            | "version"
-            | "description"
-            | "main"
-            | "scripts"
-            | "dependencies"
-            | "services"
-            | "jobs"
-            | "env"
-            | "environment"
-            | "config"
-            | "settings"
-            | "apiversion"
-            | "kind"
-            | "metadata"
-            | "spec"
-    )
-}
-
-fn find_key_lines(source: &str, key: &str, _depth: usize) -> (u32, u32) {
-    // Simple heuristic: find the key in the source
-    let lines: Vec<&str> = source.lines().collect();
-    let search_key = format!("{key}:");
-    let quoted_key = format!("\"{key}\":");
-
-    let mut start_line = 1u32;
-    let mut end_line = 1u32;
-    let mut found = false;
-
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if !found && (trimmed.starts_with(&search_key) || trimmed.starts_with(&quoted_key)) {
-            start_line = (i + 1) as u32;
-            found = true;
-        } else if found {
-            // Find the end: next line at same or lower indentation
-            let current_indent = line.len() - line.trim_start().len();
-            let start_indent = lines
-                .get((start_line - 1) as usize)
-                .map_or(0, |l| l.len() - l.trim_start().len());
-
-            if !trimmed.is_empty() && current_indent <= start_indent && i > start_line as usize - 1
-            {
-                end_line = i as u32;
-                break;
-            }
-        }
-    }
-
-    if found && end_line <= start_line {
-        end_line = lines.len() as u32;
-    }
-    if !found {
-        end_line = lines.len() as u32;
-    }
-
-    (start_line, end_line)
-}
-
-fn yaml_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Mapping(_) => "object",
-        Value::Sequence(_) => "array",
-        Value::String(_) => "string",
-        Value::Number(_) => "number",
-        Value::Bool(_) => "bool",
-        Value::Null => "null",
-        Value::Tagged(_) => "tagged",
-    }
-}
-
-fn yaml_value_to_string(value: &Value, indent: usize) -> String {
-    let prefix = "  ".repeat(indent);
-    match value {
-        Value::Null => "null".to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => n.to_string(),
-        Value::String(s) => {
-            if s.len() > MAX_PREVIEW_LENGTH {
-                format!("\"{}...\"", &s[..MAX_PREVIEW_LENGTH - 3])
-            } else {
-                format!("\"{s}\"")
-            }
-        }
-        Value::Sequence(seq) => {
-            if seq.len() > ARRAY_PREVIEW_ITEMS {
-                format!("[...{} items]", seq.len())
-            } else {
-                let items: Vec<String> = seq
-                    .iter()
-                    .map(|v| yaml_value_to_string(v, indent + 1))
-                    .collect();
-                format!("[{}]", items.join(", "))
-            }
-        }
-        Value::Mapping(map) => {
-            if map.len() > OBJECT_PREVIEW_KEYS {
-                format!("{{...{} keys}}", map.len())
-            } else {
-                let items: Vec<String> = map
-                    .iter()
-                    .map(|(k, v)| {
-                        let key_str = match k {
-                            Value::String(s) => s.clone(),
-                            _ => format!("{k:?}"),
-                        };
-                        format!(
-                            "{}{}: {}",
-                            prefix,
-                            key_str,
-                            yaml_value_to_string(v, indent + 1)
-                        )
-                    })
-                    .collect();
-                format!(
-                    "{{\n{}\n{}}}",
-                    items.join(",\n"),
-                    "  ".repeat(indent.saturating_sub(1))
-                )
-            }
-        }
-        Value::Tagged(tagged) => format!(
-            "!{} {}",
-            tagged.tag,
-            yaml_value_to_string(&tagged.value, indent)
-        ),
-    }
+        signature: Some(format!("{}: {}", key_str, yaml_type_name(val))),
+        visibility: None,
+        ui_ctx: None,
+        doc_comment: None,
+        attributes: None,
+        content,
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::text::yaml_helpers::yaml_type_name;
 
     fn parser() -> YamlParser {
         YamlParser::new()
@@ -355,7 +282,6 @@ jobs:
 "#;
         let chunks = parser().parse_chunks(source, 1).unwrap();
         assert!(chunks.iter().any(|c| c.ident == "jobs"));
-        // Should detect GitHub Actions patterns
         let jobs_chunk = chunks.iter().find(|c| c.ident == "jobs");
         assert!(jobs_chunk.is_some());
     }
@@ -391,5 +317,37 @@ spec:
     fn empty_yaml() {
         let chunks = parser().parse_chunks("", 1).unwrap();
         assert_eq!(chunks.len(), 1);
+    }
+
+    #[test]
+    fn test_yaml_type_name() {
+        use serde_yaml::Value;
+        assert_eq!(yaml_type_name(&Value::Null), "null");
+        assert_eq!(yaml_type_name(&Value::Bool(true)), "bool");
+        assert_eq!(yaml_type_name(&Value::Bool(false)), "bool");
+        assert_eq!(
+            yaml_type_name(&Value::Number(serde_yaml::Number::from(42))),
+            "number"
+        );
+        assert_eq!(
+            yaml_type_name(&Value::String("hello".into())),
+            "string"
+        );
+        assert_eq!(
+            yaml_type_name(&Value::Sequence(vec![])),
+            "array"
+        );
+        assert_eq!(
+            yaml_type_name(&Value::Mapping(serde_yaml::Mapping::new())),
+            "object"
+        );
+        // Tagged values
+        assert_eq!(
+            yaml_type_name(&Value::Tagged(Box::new(serde_yaml::value::TaggedValue {
+                tag: serde_yaml::value::Tag::new("!custom"),
+                value: Value::Null,
+            }))),
+            "tagged"
+        );
     }
 }

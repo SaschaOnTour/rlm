@@ -153,25 +153,26 @@ impl PythonParser {
 
 fn collect_python_docstring(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     // Python docstrings are INSIDE the function/class body, not before it
-    if let Some(body) = node.child_by_field_name("body") {
-        // body is a "block" node; first child after ":" could be a string expression
-        for i in 0..body.child_count() {
-            if let Some(child) = body.child(i as u32) {
-                if child.kind() == "expression_statement" {
-                    if let Some(str_node) = child.child(0) {
-                        if str_node.kind() == "string" {
-                            return str_node
-                                .utf8_text(source)
-                                .ok()
-                                .map(std::string::ToString::to_string);
-                        }
-                    }
-                }
-                // Skip newline/indent nodes but stop at non-string statements
-                if child.kind() != "comment" && child.kind() != "expression_statement" {
-                    break;
-                }
-            }
+    let body = node.child_by_field_name("body")?;
+    // body is a "block" node; first child after ":" could be a string expression
+    for i in 0..body.child_count() {
+        let child = match body.child(i as u32) {
+            Some(c) => c,
+            None => continue,
+        };
+        if child.kind() == "expression_statement" {
+            let str_node = match child.child(0) {
+                Some(n) if n.kind() == "string" => n,
+                _ => continue,
+            };
+            return str_node
+                .utf8_text(source)
+                .ok()
+                .map(std::string::ToString::to_string);
+        }
+        // Skip newline/indent nodes but stop at non-string statements
+        if child.kind() != "comment" {
+            break;
         }
     }
     None
@@ -179,22 +180,21 @@ fn collect_python_docstring(node: tree_sitter::Node, source: &[u8]) -> Option<St
 
 fn collect_python_decorators(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     // Check if this function/class is wrapped in a decorated_definition
-    if let Some(parent) = node.parent() {
-        if parent.kind() == "decorated_definition" {
-            let mut decorators = Vec::new();
-            for i in 0..parent.child_count() {
-                if let Some(child) = parent.child(i as u32) {
-                    if child.kind() == "decorator" {
-                        decorators.push(child.utf8_text(source).unwrap_or("").to_string());
-                    }
-                }
-            }
-            if !decorators.is_empty() {
-                return Some(decorators.join("\n"));
-            }
-        }
+    let parent = node.parent()?;
+    if parent.kind() != "decorated_definition" {
+        return None;
     }
-    None
+    let decorators: Vec<String> = (0..parent.child_count())
+        .filter_map(|i| parent.child(i as u32))
+        .filter(|c| c.kind() == "decorator")
+        .map(|c| c.utf8_text(source).unwrap_or("").to_string())
+        .collect();
+
+    if decorators.is_empty() {
+        None
+    } else {
+        Some(decorators.join("\n"))
+    }
 }
 
 fn collect_python_comment(node: tree_sitter::Node, source: &[u8]) -> Option<String> {

@@ -2,27 +2,27 @@
 //!
 //! Exposes all rlm functionality as MCP tools over stdio transport.
 //! Each tool calls the same core logic as the CLI commands.
+//!
+//! Helper methods and server startup live in `server_helpers`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
-use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler, ServiceExt};
+use rmcp::model::{CallToolResult, ServerCapabilities, ServerInfo};
+use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
 use serde::Serialize;
 
 use crate::config::Config;
-use crate::db::Database;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
+use crate::models::token_estimate::estimate_tokens;
 use crate::operations;
+use crate::operations::savings;
 use crate::rlm::{partition, summarize};
 use crate::search::tree;
-
-use crate::models::token_estimate::estimate_tokens;
-use crate::operations::savings;
 
 /// Default maximum number of search results when no explicit limit is provided.
 const DEFAULT_SEARCH_LIMIT: usize = 20;
@@ -32,6 +32,9 @@ use super::tools::{
     PartitionParams, ReadParams, RefsParams, ReplaceParams, SavingsParams, ScopeParams,
     SearchParams, SummarizeParams, VerifyParams,
 };
+
+// Re-export start_mcp_server from the helpers module.
+pub use super::server_helpers::start_mcp_server;
 
 /// The RLM MCP Server.
 ///
@@ -43,54 +46,10 @@ pub struct RlmServer {
     tool_router: Arc<ToolRouter<Self>>,
 }
 
-// -- Helper functions --------------------------------------------------------
-
 impl RlmServer {
-    fn config(&self) -> Config {
-        Config::new(&self.project_root)
-    }
-
-    /// Get the database. Returns an error if the index doesn't exist.
-    /// Unlike the CLI, MCP does NOT auto-index to avoid blocking on large projects.
-    fn ensure_db(&self) -> Result<Database, McpError> {
-        let config = self.config();
-        if !config.index_exists() {
-            return Err(McpError::invalid_request(
-                "Index not found. Call the 'index' tool first.",
-                None,
-            ));
-        }
-        Database::open(&config.db_path)
-            .map_err(|e| McpError::internal_error(format!("database error: {e}"), None))
-    }
-
-    fn to_json<T: Serialize>(val: &T) -> String {
-        serde_json::to_string(val).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
-    }
-
-    fn success_text(text: String) -> CallToolResult {
-        CallToolResult::success(vec![Content::text(text)])
-    }
-
-    fn error_text(msg: String) -> CallToolResult {
-        CallToolResult::success(vec![Content::text(format!("{{\"error\":\"{msg}\"}}"))])
-    }
-
-    /// Helper for tools that run a single file operation: call `op`, record savings, return JSON.
-    fn file_op_result<T: serde::Serialize>(
-        &self,
-        command: &str,
-        path: &str,
-        result: Result<T, impl std::fmt::Display>,
-    ) -> Result<CallToolResult, McpError> {
-        match result {
-            Ok(val) => {
-                let db = self.ensure_db()?;
-                let json = savings::record_file_op(&db, command, &val, path);
-                Ok(Self::success_text(json))
-            }
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
+    /// Get the project root path.
+    pub(crate) fn project_root(&self) -> &PathBuf {
+        &self.project_root
     }
 
     /// Get access to the tool router for testing purposes.
@@ -176,56 +135,68 @@ impl RlmServer {
         let db = self.ensure_db()?;
         let params = &params.0;
 
-        if let Some(sym) = &params.symbol {
-            match db.get_chunks_by_ident(sym) {
-                Ok(chunks) => {
-                    let file_chunks: Vec<_> = chunks
-                        .iter()
-                        .filter(|c| {
-                            db.get_all_files().ok().is_some_and(|files| {
-                                files
-                                    .iter()
-                                    .any(|f| f.id == c.file_id && f.path == params.path)
-                            })
-                        })
-                        .collect();
-
-                    let target_chunks = if file_chunks.is_empty() {
-                        if chunks.is_empty() {
-                            return Ok(Self::error_text(format!("symbol not found: {sym}")));
-                        }
-                        &chunks
-                    } else {
-                        // SAFETY: file_chunks borrows from chunks, but we only need
-                        // the data for serialization below, so this is fine.
-                        // We'll serialize file_chunks directly.
-                        return self.read_symbol_result(&db, params, &file_chunks);
-                    };
-
-                    self.read_symbol_result(&db, params, target_chunks)
-                }
-                Err(e) => Ok(Self::error_text(e.to_string())),
-            }
-        } else if let Some(heading) = &params.section {
-            match db.get_file_by_path(&params.path) {
-                Ok(Some(file)) => match db.get_chunks_for_file(file.id) {
-                    Ok(chunks) => match chunks.iter().find(|c| c.ident == *heading) {
-                        Some(c) => {
-                            let json =
-                                savings::record_file_op(&db, "read_section", c, &params.path);
-                            Ok(Self::success_text(json))
-                        }
-                        None => Ok(Self::error_text(format!("section not found: {heading}"))),
-                    },
-                    Err(e) => Ok(Self::error_text(e.to_string())),
-                },
-                Ok(None) => Ok(Self::error_text(format!("file not found: {}", params.path))),
-                Err(e) => Ok(Self::error_text(e.to_string())),
-            }
-        } else {
-            Ok(Self::error_text(
+        match (&params.symbol, &params.section) {
+            (Some(_), _) => self.read_symbol(&db, params),
+            (_, Some(_)) => Self::read_section(&db, params),
+            _ => Ok(Self::error_text(
                 "read requires 'symbol' or 'section'. Use Claude Code's Read for full files or line ranges.".into(),
-            ))
+            )),
+        }
+    }
+
+    fn read_symbol(
+        &self,
+        db: &crate::db::Database,
+        params: &ReadParams,
+    ) -> Result<CallToolResult, McpError> {
+        let sym = params.symbol.as_deref().unwrap_or_default();
+        match db.get_chunks_by_ident(sym) {
+            Ok(chunks) => {
+                let file_chunks: Vec<_> = chunks
+                    .iter()
+                    .filter(|c| {
+                        db.get_all_files().ok().is_some_and(|files| {
+                            files
+                                .iter()
+                                .any(|f| f.id == c.file_id && f.path == params.path)
+                        })
+                    })
+                    .collect();
+
+                let target_chunks = if file_chunks.is_empty() {
+                    if chunks.is_empty() {
+                        return Ok(Self::error_text(format!("symbol not found: {sym}")));
+                    }
+                    &chunks
+                } else {
+                    return Self::read_symbol_result(db, params, &file_chunks);
+                };
+
+                Self::read_symbol_result(db, params, target_chunks)
+            }
+            Err(e) => Ok(Self::error_text(e.to_string())),
+        }
+    }
+
+    fn read_section(
+        db: &crate::db::Database,
+        params: &ReadParams,
+    ) -> Result<CallToolResult, McpError> {
+        let heading = params.section.as_deref().unwrap_or_default();
+        match db.get_file_by_path(&params.path) {
+            Ok(Some(file)) => match db.get_chunks_for_file(file.id) {
+                Ok(chunks) => match chunks.iter().find(|c| c.ident == *heading) {
+                    Some(c) => {
+                        let json =
+                            savings::record_file_op(db, "read_section", c, &params.path);
+                        Ok(Self::success_text(json))
+                    }
+                    None => Ok(Self::error_text(format!("section not found: {heading}"))),
+                },
+                Err(e) => Ok(Self::error_text(e.to_string())),
+            },
+            Ok(None) => Ok(Self::error_text(format!("file not found: {}", params.path))),
+            Err(e) => Ok(Self::error_text(e.to_string())),
         }
     }
 
@@ -602,53 +573,6 @@ impl RlmServer {
     }
 }
 
-// -- Helper method for read with metadata enrichment -------------------------
-
-impl RlmServer {
-    fn read_symbol_result<T: Serialize>(
-        &self,
-        db: &Database,
-        params: &ReadParams,
-        chunks: &T,
-    ) -> Result<CallToolResult, McpError> {
-        let include_metadata = params.metadata.unwrap_or(false);
-
-        if include_metadata {
-            if let Some(sym) = &params.symbol {
-                let type_info = operations::get_type_info(db, sym).ok();
-                let signature = operations::get_signature(db, sym).ok();
-
-                #[derive(Serialize)]
-                struct Enriched<'a, T: Serialize> {
-                    chunks: &'a T,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    type_info: Option<operations::TypeInfoResult>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    signature: Option<operations::SignatureResult>,
-                }
-
-                let enriched = Enriched {
-                    chunks,
-                    type_info,
-                    signature,
-                };
-                let json = Self::to_json(&enriched);
-                let out_tokens = estimate_tokens(json.len());
-                let alt_tokens =
-                    savings::alternative_single_file(db, &params.path).unwrap_or(out_tokens);
-                savings::record(db, "read_symbol", out_tokens, alt_tokens, 1);
-                return Ok(Self::success_text(json));
-            }
-        }
-
-        let json = Self::to_json(chunks);
-        let out_tokens = estimate_tokens(json.len());
-        let alt_tokens = savings::alternative_single_file(db, &params.path).unwrap_or(out_tokens);
-        savings::record(db, "read_symbol", out_tokens, alt_tokens, 1);
-        Ok(Self::success_text(json))
-    }
-}
-
 // -- ServerHandler implementation --------------------------------------------
 
 #[tool_handler]
@@ -674,43 +598,6 @@ impl ServerHandler for RlmServer {
     }
 }
 
-// -- Server startup ----------------------------------------------------------
-
-/// Start the MCP server on stdio transport.
-// qual:api
-pub async fn start_mcp_server() -> crate::error::Result<()> {
-    // Initialize tracing to stderr (stdout is the MCP transport)
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .init();
-
-    tracing::info!("Starting rlm MCP server");
-
-    // Determine project root from current working directory
-    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-    let server = RlmServer::new(project_root);
-
-    let service = server
-        .serve(rmcp::transport::stdio())
-        .await
-        .map_err(|e| crate::error::RlmError::Other(format!("MCP server error: {e}")))?;
-
-    tracing::info!("MCP server running on stdio");
-
-    service
-        .waiting()
-        .await
-        .map_err(|e| crate::error::RlmError::Other(format!("MCP server error: {e}")))?;
-
-    Ok(())
-}
-
 // ============================================================================
 // Unit Tests
 // ============================================================================
@@ -724,7 +611,7 @@ mod tests {
     const TEST_SEARCH_LIMIT: usize = 10;
 
     /// Setup: create temp dir with test file and index it
-    fn setup_indexed_project() -> (TempDir, Config, Database) {
+    fn setup_indexed_project() -> (TempDir, Config, crate::db::Database) {
         let tmp = TempDir::new().expect("create tempdir");
 
         std::fs::write(
@@ -756,7 +643,7 @@ fn internal() {
 
         let config = Config::new(tmp.path());
         crate::indexer::run_index(&config).expect("index project");
-        let db = Database::open(&config.db_path).expect("open db");
+        let db = crate::db::Database::open(&config.db_path).expect("open db");
 
         (tmp, config, db)
     }
