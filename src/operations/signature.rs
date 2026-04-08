@@ -59,7 +59,12 @@ mod tests {
     fn get_signature_basic() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "src/lib.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
@@ -102,7 +107,12 @@ mod tests {
     fn get_signature_no_signature() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "src/lib.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {

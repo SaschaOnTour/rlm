@@ -124,8 +124,8 @@ const UI_CONTEXT_TABLE: &[(&[&str], &[&str], &str)] = &[
 pub fn detect_ui_context(path: &str) -> Option<String> {
     let lower = path.to_lowercase();
     UI_CONTEXT_TABLE.iter().find_map(|(contains, ends, ctx)| {
-        let hit = contains.iter().any(|p| lower.contains(p))
-            || ends.iter().any(|p| lower.ends_with(p));
+        let hit =
+            contains.iter().any(|p| lower.contains(p)) || ends.iter().any(|p| lower.ends_with(p));
         hit.then(|| (*ctx).into())
     })
 }

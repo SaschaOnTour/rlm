@@ -53,11 +53,7 @@ fn matches_path_filter(file_path: &str, path_filter: Option<&str>) -> bool {
 }
 
 /// Build a `PeekFile` from chunks (operation: logic only, uses only std methods).
-fn build_peek_file(
-    path: &str,
-    lang: &str,
-    chunks: &[crate::models::chunk::Chunk],
-) -> PeekFile {
+fn build_peek_file(path: &str, lang: &str, chunks: &[crate::models::chunk::Chunk]) -> PeekFile {
     let max_line = chunks.iter().map(|c| c.end_line).max().unwrap_or(0);
 
     let symbols: Vec<PeekSymbol> = chunks
@@ -118,7 +114,12 @@ mod tests {
     #[test]
     fn peek_returns_structure_no_content() {
         let db = Database::open_in_memory().unwrap();
-        let f = FileRecord::new("src/main.rs".into(), "h".into(), "rust".into(), TEST_FILE_SIZE);
+        let f = FileRecord::new(
+            "src/main.rs".into(),
+            "h".into(),
+            "rust".into(),
+            TEST_FILE_SIZE,
+        );
         let fid = db.upsert_file(&f).unwrap();
         let c = Chunk {
             id: 0,

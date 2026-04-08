@@ -15,12 +15,13 @@ fn find_symbol_in_file<'a>(db: &Database, file_path: &str, symbol: &str) -> Resu
         })?;
 
     let chunks = db.get_chunks_for_file(file.id)?;
-    let chunk = chunks
-        .iter()
-        .find(|c| c.ident == symbol)
-        .ok_or_else(|| RlmError::SymbolNotFound {
-            ident: symbol.into(),
-        })?;
+    let chunk =
+        chunks
+            .iter()
+            .find(|c| c.ident == symbol)
+            .ok_or_else(|| RlmError::SymbolNotFound {
+                ident: symbol.into(),
+            })?;
 
     Ok(chunk.clone())
 }

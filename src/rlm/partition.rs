@@ -133,6 +133,16 @@ struct RawPartition {
     content: String,
 }
 
+impl RawPartition {
+    fn new(start_line: u32, end_line: u32, content: String) -> Self {
+        Self {
+            start_line,
+            end_line,
+            content,
+        }
+    }
+}
+
 /// Split source lines by regex matches into raw partitions (operation: logic only).
 ///
 /// Matching lines become their own partitions; non-matching lines are grouped
@@ -147,19 +157,15 @@ fn split_by_keyword(lines: &[&str], re: &regex::Regex) -> Vec<RawPartition> {
             // Save accumulated non-matching lines
             if !current_lines.is_empty() {
                 let content = current_lines.join("\n");
-                raw.push(RawPartition {
-                    start_line: start_line + 1,
-                    end_line: i as u32,
-                    content,
-                });
+                raw.push(RawPartition::new(start_line + 1, i as u32, content));
                 current_lines.clear();
             }
             // Matching line as its own partition
-            raw.push(RawPartition {
-                start_line: i as u32 + 1,
-                end_line: i as u32 + 1,
-                content: line.to_string(),
-            });
+            raw.push(RawPartition::new(
+                i as u32 + 1,
+                i as u32 + 1,
+                line.to_string(),
+            ));
             start_line = i as u32 + 1;
         } else {
             if current_lines.is_empty() {
@@ -173,11 +179,7 @@ fn split_by_keyword(lines: &[&str], re: &regex::Regex) -> Vec<RawPartition> {
     if !current_lines.is_empty() {
         let content = current_lines.join("\n");
         let end = start_line + current_lines.len() as u32;
-        raw.push(RawPartition {
-            start_line: start_line + 1,
-            end_line: end,
-            content,
-        });
+        raw.push(RawPartition::new(start_line + 1, end, content));
     }
 
     raw

@@ -61,7 +61,10 @@ pub fn search_chunks(db: &Database, query: &str, limit: usize) -> Result<SearchR
 
     Ok(SearchResult {
         results: hits,
-        tokens: TokenEstimate::new(0, estimate_tokens_str(query) + total_chars as u64 / MIN_FTS_TOKEN_LENGTH),
+        tokens: TokenEstimate::new(
+            0,
+            estimate_tokens_str(query) + total_chars as u64 / MIN_FTS_TOKEN_LENGTH,
+        ),
     })
 }
 
@@ -86,7 +89,12 @@ mod tests {
     fn search_basic() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "src/lib.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {

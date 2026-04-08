@@ -43,7 +43,12 @@ pub fn cmd_search(query: &str, limit: usize) -> CmdResult {
     Ok(())
 }
 
-pub fn cmd_read(path: &str, symbol: Option<&str>, section: Option<&str>, metadata: bool) -> CmdResult {
+pub fn cmd_read(
+    path: &str,
+    symbol: Option<&str>,
+    section: Option<&str>,
+    metadata: bool,
+) -> CmdResult {
     match (symbol, section) {
         (Some(sym), _) => cmd_read_symbol(path, sym, metadata),
         (_, Some(heading)) => cmd_read_section(path, heading),

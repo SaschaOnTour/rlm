@@ -93,7 +93,11 @@ impl JavaScriptConfig {
             REF_QUERY_SRC,
             "JavaScript",
         );
-        Self { language, chunk_query, ref_query }
+        Self {
+            language,
+            chunk_query,
+            ref_query,
+        }
     }
 }
 
@@ -128,11 +132,15 @@ impl LanguageConfig for JavaScriptConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" | "gen_fn_name" | "arrow_name" => {
-                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function))
-            }
+            "fn_name" | "gen_fn_name" | "arrow_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Function,
+            )),
             "class_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class)),
-            "method_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method)),
+            "method_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Method,
+            )),
             n if n.ends_with("_def") => Some(ChunkCaptureResult::definition()),
             _ => None,
         }
@@ -159,9 +167,7 @@ impl LanguageConfig for JavaScriptConfig {
     fn transform_ref_text(&self, capture_name: &str, text: &str) -> String {
         match capture_name {
             // Clean up string quotes from import paths
-            "import_path" | "require_path" => {
-                text.trim_matches('"').trim_matches('\'').to_string()
-            }
+            "import_path" | "require_path" => text.trim_matches('"').trim_matches('\'').to_string(),
             _ => text.to_string(),
         }
     }

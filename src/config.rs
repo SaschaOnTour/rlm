@@ -273,7 +273,10 @@ mod tests {
 
         // Create new config from same path (should load saved settings)
         let cfg2 = Config::new(tmp.path());
-        assert_eq!(cfg2.settings.indexing.max_file_size_mb, TEST_MAX_FILE_SIZE_MB);
+        assert_eq!(
+            cfg2.settings.indexing.max_file_size_mb,
+            TEST_MAX_FILE_SIZE_MB
+        );
         assert_eq!(cfg2.settings.output.format, "pretty");
         assert!(cfg2.settings.quality.log_all_issues);
     }
@@ -374,7 +377,10 @@ mod tests {
 
         // Should fall back to defaults
         let cfg = Config::new(tmp.path());
-        assert_eq!(cfg.settings.indexing.max_file_size_mb, DEFAULT_MAX_FILE_SIZE_MB);
+        assert_eq!(
+            cfg.settings.indexing.max_file_size_mb,
+            DEFAULT_MAX_FILE_SIZE_MB
+        );
         assert!(cfg.settings.indexing.incremental);
     }
 }

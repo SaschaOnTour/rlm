@@ -99,7 +99,11 @@ impl TypeScriptConfig {
             REF_QUERY_SRC,
             "TypeScript",
         );
-        Self { language, chunk_query, ref_query }
+        Self {
+            language,
+            chunk_query,
+            ref_query,
+        }
     }
 
     fn new_tsx() -> Self {
@@ -111,7 +115,11 @@ impl TypeScriptConfig {
             &tsx_ref_query,
             "TSX",
         );
-        Self { language, chunk_query, ref_query }
+        Self {
+            language,
+            chunk_query,
+            ref_query,
+        }
     }
 }
 
@@ -142,24 +150,30 @@ impl LanguageConfig for TypeScriptConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" | "gen_fn_name" | "arrow_name" => {
-                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function))
-            }
+            "fn_name" | "gen_fn_name" | "arrow_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Function,
+            )),
             "class_name" | "abs_class_name" => {
                 Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class))
             }
-            "method_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method)),
-            "iface_name" => {
-                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Interface))
-            }
+            "method_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Method,
+            )),
+            "iface_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Interface,
+            )),
             "type_alias_name" => Some(ChunkCaptureResult::name(
                 text.to_string(),
                 ChunkKind::Other("type_alias".into()),
             )),
             "enum_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Enum)),
-            "namespace_name" | "internal_namespace_name" => {
-                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Module))
-            }
+            "namespace_name" | "internal_namespace_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Module,
+            )),
             n if n.ends_with("_def") => Some(ChunkCaptureResult::definition()),
             _ => None,
         }
@@ -256,13 +270,8 @@ impl TypeScriptParser {
 }
 
 /// Visibility keywords to check, ordered so longer prefixes come first.
-const TS_VISIBILITY_KEYWORDS: &[&str] = &[
-    "export default",
-    "export",
-    "public",
-    "private",
-    "protected",
-];
+const TS_VISIBILITY_KEYWORDS: &[&str] =
+    &["export default", "export", "public", "private", "protected"];
 
 fn extract_ts_visibility(content: &str) -> Option<String> {
     let trimmed = content.trim_start();

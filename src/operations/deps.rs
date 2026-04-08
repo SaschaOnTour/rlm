@@ -77,7 +77,12 @@ mod tests {
         let db = test_db();
 
         // Insert a file and chunk
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "src/lib.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
@@ -131,7 +136,12 @@ mod tests {
     fn get_deps_excludes_calls() {
         let db = test_db();
 
-        let file = FileRecord::new("src/main.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "src/main.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
@@ -193,7 +203,12 @@ mod tests {
     fn get_deps_empty() {
         let db = test_db();
 
-        let file = FileRecord::new("src/empty.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "src/empty.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {

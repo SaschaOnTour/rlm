@@ -159,7 +159,16 @@ pub(crate) fn gather_chunk_metadata<C: LanguageConfig>(
     let attributes = config.collect_attributes(data.node, source_bytes);
     let ui_ctx = config.ui_ctx();
 
-    ChunkMetadata { parent, kind, visibility, signature, doc_comment, attributes, ui_ctx, should_skip }
+    ChunkMetadata {
+        parent,
+        kind,
+        visibility,
+        signature,
+        doc_comment,
+        attributes,
+        ui_ctx,
+        should_skip,
+    }
 }
 
 /// Build a `Chunk` from match data, handling deduplication and skip logic.

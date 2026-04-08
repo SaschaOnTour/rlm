@@ -83,18 +83,29 @@ impl LanguageConfig for RustConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function)),
-            "struct_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Struct)),
+            "fn_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Function,
+            )),
+            "struct_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Struct,
+            )),
             "enum_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Enum)),
             "trait_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Trait)),
             "impl_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Impl)),
-            "const_name" | "static_name" => {
-                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Constant))
-            }
-            "mod_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Module)),
-            "macro_name" => {
-                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Other("macro".into())))
-            }
+            "const_name" | "static_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Constant,
+            )),
+            "mod_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Module,
+            )),
+            "macro_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Other("macro".into()),
+            )),
             "type_alias_name" => Some(ChunkCaptureResult::name(
                 text.to_string(),
                 ChunkKind::Other("type_alias".into()),
@@ -136,29 +147,11 @@ impl LanguageConfig for RustConfig {
     }
 
     fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_prev_siblings(
-            node,
-            source,
-            &SiblingCollectConfig {
-                kinds: &["line_comment"],
-                skip_kinds: &["attribute_item"],
-                prefixes: &["///", "//!"],
-                multi: true,
-            },
-        )
+        collect_prev_siblings(node, source, &SiblingCollectConfig::rust_doc_comments())
     }
 
     fn collect_attributes(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_prev_siblings_filtered_skip(
-            node,
-            source,
-            &SiblingCollectConfig {
-                kinds: &["attribute_item"],
-                skip_kinds: &["line_comment"],
-                prefixes: &["///", "//!"],
-                multi: true,
-            },
-        )
+        collect_prev_siblings_filtered_skip(node, source, &SiblingCollectConfig::rust_attributes())
     }
 
     fn should_skip_function(&self, kind: &ChunkKind, parent: &Option<String>) -> bool {

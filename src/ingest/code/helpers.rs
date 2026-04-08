@@ -100,7 +100,10 @@ pub fn first_child_text_by_kind(
     for i in 0..node.child_count() {
         let child = node.child(i as u32)?;
         if kinds.contains(&child.kind()) {
-            return child.utf8_text(source).ok().map(std::string::ToString::to_string);
+            return child
+                .utf8_text(source)
+                .ok()
+                .map(std::string::ToString::to_string);
         }
     }
     None
@@ -155,6 +158,28 @@ pub struct SiblingCollectConfig<'a> {
     pub multi: bool,
 }
 
+impl<'a> SiblingCollectConfig<'a> {
+    /// Config for collecting Rust doc comments (`///`, `//!`), skipping attributes.
+    pub fn rust_doc_comments() -> Self {
+        Self {
+            kinds: &["line_comment"],
+            skip_kinds: &["attribute_item"],
+            prefixes: &["///", "//!"],
+            multi: true,
+        }
+    }
+
+    /// Config for collecting Rust attributes (`#[...]`), skipping doc comments.
+    pub fn rust_attributes() -> Self {
+        Self {
+            kinds: &["attribute_item"],
+            skip_kinds: &["line_comment"],
+            prefixes: &["///", "//!"],
+            multi: true,
+        }
+    }
+}
+
 /// Controls where prefix-based filtering is applied in [`collect_prev_siblings_core`].
 enum PrefixFilter<'a> {
     /// Filter on `collect_kinds`: only collect nodes whose text matches a prefix.
@@ -176,7 +201,6 @@ enum FilterAction {
     /// Stop the walk immediately.
     Stop,
 }
-
 
 /// Classify a sibling node against the collect/skip/prefix rules (operation: logic only).
 ///
@@ -281,12 +305,7 @@ pub fn collect_prev_siblings_filtered_skip(
     source: &[u8],
     config: &SiblingCollectConfig<'_>,
 ) -> Option<String> {
-    collect_prev_siblings_core(
-        node,
-        source,
-        config,
-        &PrefixFilter::OnSkip(config.prefixes),
-    )
+    collect_prev_siblings_core(node, source, config, &PrefixFilter::OnSkip(config.prefixes))
 }
 
 // =============================================================================

@@ -3,9 +3,7 @@
 //! Code-exploration commands live in `cli::handlers`.
 //! Shared helpers live in `cli::helpers`.
 
-use crate::cli::helpers::{
-    get_config, get_db, map_err, should_filter_unknown, CmdResult,
-};
+use crate::cli::helpers::{get_config, get_db, map_err, should_filter_unknown, CmdResult};
 use crate::cli::output;
 use crate::ingest::code::quality_log;
 use crate::operations;
@@ -34,7 +32,11 @@ pub fn cmd_stats(show_savings: bool, since: Option<&str>) -> CmdResult {
 
 pub fn cmd_mcp() -> CmdResult {
     let rt = tokio::runtime::Runtime::new().map_err(map_err)?;
-    rt.block_on(async { crate::mcp::server::start_mcp_server().await.map_err(map_err) })
+    rt.block_on(async {
+        crate::mcp::server::start_mcp_server()
+            .await
+            .map_err(map_err)
+    })
 }
 
 /// Clear the quality log and return early (integration: calls only).

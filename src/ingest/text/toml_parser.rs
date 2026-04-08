@@ -9,7 +9,10 @@
 use toml::Table;
 
 use crate::error::Result;
-use crate::ingest::text::{create_fallback_chunk, extract_structured_chunks, value_preview_string, StructuredChunkConfig, TextParser};
+use crate::ingest::text::{
+    create_fallback_chunk, extract_structured_chunks, value_preview_string, StructuredChunkConfig,
+    TextParser,
+};
 use crate::models::chunk::{Chunk, ChunkKind};
 
 pub struct TomlParser;
@@ -32,6 +35,7 @@ impl TextParser for TomlParser {
         "toml"
     }
 
+    // qual:allow(iosp) reason: "if-dispatch: parse valid TOML or return fallback chunk"
     fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
         let mut chunks = Vec::new();
 
@@ -127,8 +131,8 @@ fn toml_value_kind_label(value: &serde_json::Value) -> &'static str {
 
 /// Determine the `ChunkKind` for a TOML key-value pair (integration: dispatches to operations).
 fn determine_toml_kind(key: &str, value: &serde_json::Value) -> ChunkKind {
-    let label = toml_key_kind_label(&key.to_lowercase())
-        .unwrap_or_else(|| toml_value_kind_label(value));
+    let label =
+        toml_key_kind_label(&key.to_lowercase()).unwrap_or_else(|| toml_value_kind_label(value));
     ChunkKind::Other(label.into())
 }
 
@@ -298,8 +302,14 @@ path = "src/cli.rs"
     #[test]
     fn test_toml_json_type_name() {
         assert_eq!(toml_value_kind_label(&serde_json::Value::Null), "null");
-        assert_eq!(toml_value_kind_label(&serde_json::Value::Bool(true)), "bool");
-        assert_eq!(toml_value_kind_label(&serde_json::Value::Bool(false)), "bool");
+        assert_eq!(
+            toml_value_kind_label(&serde_json::Value::Bool(true)),
+            "bool"
+        );
+        assert_eq!(
+            toml_value_kind_label(&serde_json::Value::Bool(false)),
+            "bool"
+        );
         assert_eq!(
             toml_value_kind_label(&serde_json::Value::Number(serde_json::Number::from(42))),
             "integer"

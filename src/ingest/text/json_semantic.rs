@@ -9,7 +9,10 @@
 use serde_json::Value;
 
 use crate::error::Result;
-use crate::ingest::text::{create_fallback_chunk, extract_structured_chunks, value_preview_string, StructuredChunkConfig, TextParser};
+use crate::ingest::text::{
+    create_fallback_chunk, extract_structured_chunks, value_preview_string, StructuredChunkConfig,
+    TextParser,
+};
 use crate::models::chunk::{Chunk, ChunkKind};
 
 pub struct JsonSemanticParser;
@@ -32,6 +35,7 @@ impl TextParser for JsonSemanticParser {
         "json"
     }
 
+    // qual:allow(iosp) reason: "if-dispatch: parse valid JSON or return fallback chunk"
     fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
         let mut chunks = Vec::new();
 
@@ -297,10 +301,7 @@ mod tests {
             json_type_name(&serde_json::Value::String("hello".into())),
             "string"
         );
-        assert_eq!(
-            json_type_name(&serde_json::Value::Array(vec![])),
-            "array"
-        );
+        assert_eq!(json_type_name(&serde_json::Value::Array(vec![])), "array");
         assert_eq!(
             json_type_name(&serde_json::Value::Object(serde_json::Map::new())),
             "object"

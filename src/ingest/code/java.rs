@@ -36,7 +36,11 @@ impl JavaConfig {
             REF_QUERY_SRC,
             "Java",
         );
-        Self { language, chunk_query, ref_query }
+        Self {
+            language,
+            chunk_query,
+            ref_query,
+        }
     }
 }
 
@@ -68,13 +72,15 @@ impl LanguageConfig for JavaConfig {
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
             "class_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class)),
-            "iface_name" => {
-                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Interface))
-            }
+            "iface_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Interface,
+            )),
             "enum_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Enum)),
-            "method_name" | "ctor_name" => {
-                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method))
-            }
+            "method_name" | "ctor_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Method,
+            )),
             "class_def" | "iface_def" | "enum_def" | "method_def" | "ctor_def" => {
                 Some(ChunkCaptureResult::definition())
             }

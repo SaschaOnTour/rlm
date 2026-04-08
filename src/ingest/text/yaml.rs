@@ -41,6 +41,7 @@ impl TextParser for YamlParser {
         "yaml"
     }
 
+    // qual:allow(iosp) reason: "if-dispatch: parse valid YAML or return fallback chunk"
     fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
         let mut chunks = Vec::new();
 
@@ -122,9 +123,8 @@ fn collect_yaml_entries(
             Some((entries, recurse_paths))
         }
         Value::Sequence(seq) if !seq.is_empty() && depth == 0 => {
-            let recurse_paths: Vec<String> = (0..seq.len())
-                .map(|i| format!("{path}[{i}]"))
-                .collect();
+            let recurse_paths: Vec<String> =
+                (0..seq.len()).map(|i| format!("{path}[{i}]")).collect();
             Some((Vec::new(), recurse_paths))
         }
         _ => None,
@@ -132,6 +132,8 @@ fn collect_yaml_entries(
 }
 
 /// Extract chunks from a parsed YAML value tree (integration: calls only).
+// qual:recursive
+// qual:allow(iosp) reason: "recursive tree traversal inherently mixes iteration with delegation"
 fn extract_yaml_chunks(
     value: &Value,
     path: &str,
@@ -172,7 +174,11 @@ fn extract_yaml_chunks(
 }
 
 /// Resolve a child value from a YAML value by its full path (operation: logic only).
-fn resolve_yaml_child<'a>(value: &'a Value, parent_path: &str, child_path: &str) -> Option<&'a Value> {
+fn resolve_yaml_child<'a>(
+    value: &'a Value,
+    parent_path: &str,
+    child_path: &str,
+) -> Option<&'a Value> {
     let relative = if parent_path.is_empty() {
         child_path
     } else if let Some(stripped) = child_path.strip_prefix(parent_path) {
@@ -329,14 +335,8 @@ spec:
             yaml_type_name(&Value::Number(serde_yaml::Number::from(42))),
             "number"
         );
-        assert_eq!(
-            yaml_type_name(&Value::String("hello".into())),
-            "string"
-        );
-        assert_eq!(
-            yaml_type_name(&Value::Sequence(vec![])),
-            "array"
-        );
+        assert_eq!(yaml_type_name(&Value::String("hello".into())), "string");
+        assert_eq!(yaml_type_name(&Value::Sequence(vec![])), "array");
         assert_eq!(
             yaml_type_name(&Value::Mapping(serde_yaml::Mapping::new())),
             "object"

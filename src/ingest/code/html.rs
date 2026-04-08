@@ -8,7 +8,9 @@
 
 use tree_sitter::{Language, Query};
 
-use crate::ingest::code::base::{build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{
+    build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig,
+};
 use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r#"
@@ -66,7 +68,11 @@ impl HtmlConfig {
             REF_QUERY_SRC,
             "HTML",
         );
-        Self { language, chunk_query, ref_query }
+        Self {
+            language,
+            chunk_query,
+            ref_query,
+        }
     }
 }
 
@@ -111,7 +117,10 @@ impl LanguageConfig for HtmlConfig {
             "id_value" => {
                 // Remove quotes from the id value
                 let name = text.trim_matches('"').trim_matches('\'').to_string();
-                Some(ChunkCaptureResult::name(name, ChunkKind::Other("element".into())))
+                Some(ChunkCaptureResult::name(
+                    name,
+                    ChunkKind::Other("element".into()),
+                ))
             }
             "script_el" => Some(ChunkCaptureResult::named_definition(
                 "_script".to_string(),

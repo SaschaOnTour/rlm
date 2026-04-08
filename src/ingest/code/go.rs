@@ -35,7 +35,11 @@ impl GoConfig {
             REF_QUERY_SRC,
             "Go",
         );
-        Self { language, chunk_query, ref_query }
+        Self {
+            language,
+            chunk_query,
+            ref_query,
+        }
     }
 }
 
@@ -62,9 +66,18 @@ impl LanguageConfig for GoConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function)),
-            "method_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method)),
-            "type_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Struct)),
+            "fn_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Function,
+            )),
+            "method_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Method,
+            )),
+            "type_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Struct,
+            )),
             "fn_def" | "method_def" | "type_def" => Some(ChunkCaptureResult::definition()),
             _ => None,
         }
@@ -93,9 +106,9 @@ impl LanguageConfig for GoConfig {
 
     fn extract_signature(&self, content: &str, kind: &ChunkKind) -> Option<String> {
         match kind {
-            ChunkKind::Function | ChunkKind::Method => {
-                content.find('{').map(|pos| content[..pos].trim().to_string())
-            }
+            ChunkKind::Function | ChunkKind::Method => content
+                .find('{')
+                .map(|pos| content[..pos].trim().to_string()),
             ChunkKind::Struct => extract_type_signature_to_brace(content),
             _ => None,
         }

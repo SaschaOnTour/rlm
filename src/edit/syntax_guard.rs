@@ -33,7 +33,6 @@ impl SyntaxGuard {
             })
         }
     }
-
 }
 
 /// Validate syntax then write file atomically (free function, decoupled from `SyntaxGuard`).

@@ -141,7 +141,12 @@ mod tests {
         std::fs::write(&file_path, "fn main() { new code }").unwrap();
 
         // Index with different hash
-        let file = FileRecord::new("test.rs".into(), "oldhash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "test.rs".into(),
+            "oldhash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         db.upsert_file(&file).unwrap();
 
         let result = diff_file(&db, "test.rs", tmp.path()).unwrap();
@@ -172,7 +177,12 @@ mod tests {
         writeln!(file, "}}").unwrap();
 
         // Index the file and chunk
-        let file_rec = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file_rec = FileRecord::new(
+            "test.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file_rec).unwrap();
 
         let chunk = Chunk {

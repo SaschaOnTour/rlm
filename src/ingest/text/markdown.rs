@@ -106,11 +106,7 @@ fn build_document_fallback(source: &str, lines: &[&str], file_id: i64) -> Vec<Ch
 ///
 /// Computes line range, byte offsets, content, and parent heading
 /// from the section list context.
-fn build_section_chunk(
-    ctx: &SectionBuildContext<'_>,
-    idx: usize,
-    section: &SectionStart,
-) -> Chunk {
+fn build_section_chunk(ctx: &SectionBuildContext<'_>, idx: usize, section: &SectionStart) -> Chunk {
     let start_line = section.line;
     let end_line = if idx + 1 < ctx.sections.len() {
         ctx.sections[idx + 1].line.saturating_sub(1)

@@ -103,7 +103,12 @@ mod tests {
     fn get_stats_basic() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_SIZE);
+        let file = FileRecord::new(
+            "src/lib.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_SIZE,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
@@ -142,7 +147,12 @@ mod tests {
     fn get_quality_info_with_issues() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES_SMALL);
+        let file = FileRecord::new(
+            "src/lib.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES_SMALL,
+        );
         let file_id = db.upsert_file(&file).unwrap();
         db.set_file_parse_quality(file_id, "partial").unwrap();
 

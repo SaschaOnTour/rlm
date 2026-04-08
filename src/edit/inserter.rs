@@ -111,7 +111,11 @@ fn insert_relative(source: &str, code: &str, line: u32, after: bool) -> Result<S
     let lines: Vec<&str> = source.lines().collect();
     let idx = (line as usize).saturating_sub(1);
     // "before" allows idx == lines.len() (appending); "after" requires idx < lines.len()
-    let out_of_bounds = if after { idx >= lines.len() } else { idx > lines.len() };
+    let out_of_bounds = if after {
+        idx >= lines.len()
+    } else {
+        idx > lines.len()
+    };
     if out_of_bounds {
         return Err(RlmError::Other(format!(
             "line {line} is beyond file length ({})",
@@ -176,7 +180,11 @@ mod tests {
     #[test]
     fn insert_beyond_file_errors() {
         let source = "line1\nline2";
-        let result = apply_insertion(source, &InsertPosition::AfterLine(BEYOND_FILE_LINE), "// nope");
+        let result = apply_insertion(
+            source,
+            &InsertPosition::AfterLine(BEYOND_FILE_LINE),
+            "// nope",
+        );
         assert!(result.is_err());
     }
 

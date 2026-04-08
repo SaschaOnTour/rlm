@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-08
+
 ### Added
 
 - `overview` MCP tool: consolidated `peek`/`map`/`tree` into one tool with `detail` parameter
@@ -17,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (consolidates `callgraph` tool)
 - `refs` now includes full impact analysis (consolidates `impact` tool)
 - `build_tree()` accepts optional path prefix filter for scoped tree views
+- `rustqual.toml` configuration for code quality analysis
+- Shared helper infrastructure: `BaseParser<LanguageConfig>` for all 10 language parsers,
+  `Chunk::stub()`, `Partition::new()`, `TreeNode::new()` constructors,
+  `ChunkCaptureResult::name()`/`definition()`/`named_definition()` builders
+- Savings recording helpers: `record_file_op`, `record_symbol_op`, `record_scoped_op`
 
 ### Changed
 
@@ -28,12 +35,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use Claude Code's native Read tool
 - MCP server instructions rewritten for 18-tool surface with 4-tier organization
   (Orient → Search → Analyze → Edit)
+- **Code quality: rustqual 100.0% (0 findings)**
+  - All functions comply with IOSP (Integration/Operation Segregation Principle)
+  - All 10 language parsers migrated to shared `BaseParser<LanguageConfig>` (~1,300 lines of duplication removed)
+  - Database queries split into 6 domain modules (files, chunks, refs, search, stats, savings)
+  - MCP server split: tool handlers extracted to `tool_handlers.rs`/`tool_handlers_util.rs`
+  - CLI handlers split into exploration (`handlers.rs`) + utility (`handlers_util.rs`)
+  - All magic numbers replaced with named constants
+  - All dead code removed, all struct boilerplate eliminated
+  - `SyntaxGuard::validate_and_write` extracted as free function (SRP)
 
 ### Removed
 
 - `src/rlm/grep.rs` — redundant with Claude Code's Grep tool
 - `src/rlm/batch.rs` — redundant with Claude Code's concurrent tool calls
 - `src/operations/patterns.rs` — low-value, search covers this use case
+- `cli/output::format_with_tokens` — unused after savings helper refactoring
 
 ### Previous
 

@@ -126,6 +126,8 @@ fn collect_structured_entries(
 /// Both the JSON and TOML parsers convert their parsed data into
 /// `serde_json::Value` and then call this function.  Delegates entry analysis
 /// to `collect_structured_entries` and per-entry processing to `process_structured_entry`.
+// qual:recursive
+// qual:allow(iosp) reason: "recursive tree traversal inherently mixes iteration with delegation"
 pub fn extract_structured_chunks<FK, FS, FL, FV, FI>(
     value: &serde_json::Value,
     path: &str,
@@ -176,7 +178,10 @@ pub fn extract_structured_chunks<FK, FS, FL, FV, FI>(
 /// Resolve a JSON path segment to a value (operation: logic only).
 ///
 /// Handles both direct keys ("foo") and array-indexed keys ("foo[2]").
-fn resolve_json_path<'a>(value: &'a serde_json::Value, path_segment: &str) -> Option<&'a serde_json::Value> {
+fn resolve_json_path<'a>(
+    value: &'a serde_json::Value,
+    path_segment: &str,
+) -> Option<&'a serde_json::Value> {
     if let Some(bracket_pos) = path_segment.find('[') {
         let key = &path_segment[..bracket_pos];
         let idx_str = &path_segment[bracket_pos + 1..path_segment.len() - 1];
@@ -208,8 +213,10 @@ fn process_structured_entry<FK, FS, FL, FV, FI>(
     let (start_line, end_line) = (cfg.find_lines)(cfg.source, key, entry_ctx.full_path);
     let content = (cfg.value_to_string)(val, 0);
 
-    let should_chunk = matches!(val, serde_json::Value::Object(_) | serde_json::Value::Array(_))
-        || entry_ctx.depth < 2
+    let should_chunk = matches!(
+        val,
+        serde_json::Value::Object(_) | serde_json::Value::Array(_)
+    ) || entry_ctx.depth < 2
         || (cfg.is_important_key)(key);
 
     if !should_chunk {

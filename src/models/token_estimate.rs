@@ -63,8 +63,11 @@ mod tests {
 
     #[test]
     fn token_estimate_total() {
-        let te = TokenEstimate::new(100, 50);
-        assert_eq!(te.total(), 150);
+        const INPUT_TOKENS: u64 = 100;
+        const OUTPUT_TOKENS: u64 = 50;
+
+        let te = TokenEstimate::new(INPUT_TOKENS, OUTPUT_TOKENS);
+        assert_eq!(te.total(), INPUT_TOKENS + OUTPUT_TOKENS);
     }
 
     #[test]

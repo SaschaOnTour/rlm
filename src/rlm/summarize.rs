@@ -126,7 +126,12 @@ mod tests {
     #[test]
     fn summarize_file() {
         let db = Database::open_in_memory().unwrap();
-        let f = FileRecord::new("src/lib.rs".into(), "h".into(), "rust".into(), TEST_FILE_SIZE);
+        let f = FileRecord::new(
+            "src/lib.rs".into(),
+            "h".into(),
+            "rust".into(),
+            TEST_FILE_SIZE,
+        );
         let fid = db.upsert_file(&f).unwrap();
 
         for (name, kind, vis) in [

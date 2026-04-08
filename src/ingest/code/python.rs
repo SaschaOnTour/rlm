@@ -37,7 +37,11 @@ impl PythonConfig {
             REF_QUERY_SRC,
             "Python",
         );
-        Self { language, chunk_query, ref_query }
+        Self {
+            language,
+            chunk_query,
+            ref_query,
+        }
     }
 }
 
@@ -64,7 +68,10 @@ impl LanguageConfig for PythonConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function)),
+            "fn_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Function,
+            )),
             "class_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class)),
             "fn_def" | "class_def" => Some(ChunkCaptureResult::definition()),
             _ => None,

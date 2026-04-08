@@ -9,7 +9,9 @@
 
 use tree_sitter::{Language, Query};
 
-use crate::ingest::code::base::{build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{
+    build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig,
+};
 use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
@@ -51,7 +53,11 @@ impl CssConfig {
             REF_QUERY_SRC,
             "CSS",
         );
-        Self { language, chunk_query, ref_query }
+        Self {
+            language,
+            chunk_query,
+            ref_query,
+        }
     }
 }
 
@@ -84,7 +90,10 @@ impl LanguageConfig for CssConfig {
         match capture_name {
             "selector" => {
                 let name = text.split(',').next().unwrap_or(text).trim().to_string();
-                Some(ChunkCaptureResult::name(name, ChunkKind::Other("rule".into())))
+                Some(ChunkCaptureResult::name(
+                    name,
+                    ChunkKind::Other("rule".into()),
+                ))
             }
             "rule" => Some(ChunkCaptureResult::definition()),
             "media_query" => Some(ChunkCaptureResult::named_definition(

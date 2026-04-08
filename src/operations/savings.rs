@@ -240,9 +240,27 @@ mod tests {
     #[test]
     fn savings_report_with_data() {
         let db = test_db();
-        record(&db, "peek", PEEK_OUTPUT_TOKENS, PEEK_ALT_TOKENS, PEEK_FILES_TOUCHED);
-        record(&db, "grep", GREP_OUTPUT_TOKENS, GREP_ALT_TOKENS, GREP_FILES_TOUCHED);
-        record(&db, "peek", PEEK2_OUTPUT_TOKENS, PEEK2_ALT_TOKENS, PEEK2_FILES_TOUCHED);
+        record(
+            &db,
+            "peek",
+            PEEK_OUTPUT_TOKENS,
+            PEEK_ALT_TOKENS,
+            PEEK_FILES_TOUCHED,
+        );
+        record(
+            &db,
+            "grep",
+            GREP_OUTPUT_TOKENS,
+            GREP_ALT_TOKENS,
+            GREP_FILES_TOUCHED,
+        );
+        record(
+            &db,
+            "peek",
+            PEEK2_OUTPUT_TOKENS,
+            PEEK2_ALT_TOKENS,
+            PEEK2_FILES_TOUCHED,
+        );
 
         let report = get_savings_report(&db, None).unwrap();
         assert_eq!(report.ops, 3);
@@ -256,7 +274,13 @@ mod tests {
     #[test]
     fn savings_report_with_since_filter() {
         let db = test_db();
-        record(&db, "peek", PEEK_OUTPUT_TOKENS, PEEK_ALT_TOKENS, PEEK_FILES_TOUCHED);
+        record(
+            &db,
+            "peek",
+            PEEK_OUTPUT_TOKENS,
+            PEEK_ALT_TOKENS,
+            PEEK_FILES_TOUCHED,
+        );
 
         // Future date should yield empty report
         let report = get_savings_report(&db, Some("2099-01-01")).unwrap();
@@ -270,7 +294,13 @@ mod tests {
     #[test]
     fn savings_pct_zero_savings() {
         let db = test_db();
-        record(&db, "grep", GREP_OUTPUT_TOKENS, GREP_ALT_TOKENS, GREP_FILES_TOUCHED);
+        record(
+            &db,
+            "grep",
+            GREP_OUTPUT_TOKENS,
+            GREP_ALT_TOKENS,
+            GREP_FILES_TOUCHED,
+        );
 
         let report = get_savings_report(&db, None).unwrap();
         assert_eq!(report.saved, 0);
@@ -280,7 +310,12 @@ mod tests {
     #[test]
     fn alternative_single_file_known() {
         let db = test_db();
-        let file = FileRecord::new("src/main.rs".into(), "hash".into(), "rust".into(), SINGLE_FILE_SIZE);
+        let file = FileRecord::new(
+            "src/main.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            SINGLE_FILE_SIZE,
+        );
         db.upsert_file(&file).unwrap();
 
         let alt = alternative_single_file(&db, "src/main.rs").unwrap();
@@ -297,8 +332,18 @@ mod tests {
     #[test]
     fn alternative_scoped_files_all() {
         let db = test_db();
-        let f1 = FileRecord::new("src/a.rs".into(), "a".into(), "rust".into(), SCOPED_FILE_SIZE_A);
-        let f2 = FileRecord::new("src/b.rs".into(), "b".into(), "rust".into(), SCOPED_FILE_SIZE_B);
+        let f1 = FileRecord::new(
+            "src/a.rs".into(),
+            "a".into(),
+            "rust".into(),
+            SCOPED_FILE_SIZE_A,
+        );
+        let f2 = FileRecord::new(
+            "src/b.rs".into(),
+            "b".into(),
+            "rust".into(),
+            SCOPED_FILE_SIZE_B,
+        );
         db.upsert_file(&f1).unwrap();
         db.upsert_file(&f2).unwrap();
 
@@ -309,8 +354,18 @@ mod tests {
     #[test]
     fn alternative_scoped_files_filtered() {
         let db = test_db();
-        let f1 = FileRecord::new("src/a.rs".into(), "a".into(), "rust".into(), SCOPED_FILE_SIZE_A);
-        let f2 = FileRecord::new("tests/t.rs".into(), "b".into(), "rust".into(), SCOPED_FILE_SIZE_B);
+        let f1 = FileRecord::new(
+            "src/a.rs".into(),
+            "a".into(),
+            "rust".into(),
+            SCOPED_FILE_SIZE_A,
+        );
+        let f2 = FileRecord::new(
+            "tests/t.rs".into(),
+            "b".into(),
+            "rust".into(),
+            SCOPED_FILE_SIZE_B,
+        );
         db.upsert_file(&f1).unwrap();
         db.upsert_file(&f2).unwrap();
 
@@ -321,48 +376,40 @@ mod tests {
     #[test]
     fn alternative_symbol_files_includes_defs_and_refs() {
         let db = test_db();
-        let f1 = FileRecord::new("src/a.rs".into(), "a".into(), "rust".into(), SCOPED_FILE_SIZE_A);
-        let f2 = FileRecord::new("src/b.rs".into(), "b".into(), "rust".into(), SCOPED_FILE_SIZE_B);
+        let f1 = FileRecord::new(
+            "src/a.rs".into(),
+            "a".into(),
+            "rust".into(),
+            SCOPED_FILE_SIZE_A,
+        );
+        let f2 = FileRecord::new(
+            "src/b.rs".into(),
+            "b".into(),
+            "rust".into(),
+            SCOPED_FILE_SIZE_B,
+        );
         let fid1 = db.upsert_file(&f1).unwrap();
         let fid2 = db.upsert_file(&f2).unwrap();
 
         // Symbol defined in f1
         let c1 = Chunk {
-            id: 0,
-            file_id: fid1,
-            start_line: 1,
             end_line: TEST_END_LINE,
-            start_byte: 0,
             end_byte: TEST_END_BYTE,
             kind: ChunkKind::Function,
             ident: "my_fn".into(),
-            parent: None,
-            signature: None,
-            visibility: None,
-            ui_ctx: None,
-            doc_comment: None,
-            attributes: None,
             content: "fn my_fn() {}".into(),
+            ..Chunk::stub(fid1)
         };
         db.insert_chunk(&c1).unwrap();
 
         // Caller in f2 references my_fn
         let c2 = Chunk {
-            id: 0,
-            file_id: fid2,
-            start_line: 1,
             end_line: TEST_END_LINE_SHORT,
-            start_byte: 0,
             end_byte: TEST_END_BYTE_SMALL,
             kind: ChunkKind::Function,
             ident: "caller".into(),
-            parent: None,
-            signature: None,
-            visibility: None,
-            ui_ctx: None,
-            doc_comment: None,
-            attributes: None,
             content: "fn caller() { my_fn(); }".into(),
+            ..Chunk::stub(fid2)
         };
         let cid2 = db.insert_chunk(&c2).unwrap();
 
@@ -384,7 +431,13 @@ mod tests {
     fn record_best_effort_ignores_errors() {
         let db = test_db();
         // Should not panic even on normal usage
-        record(&db, "test_cmd", GREP_OUTPUT_TOKENS, RECORD_ALT_TOKENS, RECORD_FILES_TOUCHED);
+        record(
+            &db,
+            "test_cmd",
+            GREP_OUTPUT_TOKENS,
+            RECORD_ALT_TOKENS,
+            RECORD_FILES_TOUCHED,
+        );
         let (ops, _, _) = db.get_savings_totals(None).unwrap();
         assert_eq!(ops, 1);
     }
@@ -392,8 +445,20 @@ mod tests {
     #[test]
     fn command_savings_percentage() {
         let db = test_db();
-        record(&db, "read_symbol", CMD_SAVINGS_OUTPUT_1, CMD_SAVINGS_ALT_1, 1);
-        record(&db, "read_symbol", CMD_SAVINGS_OUTPUT_2, CMD_SAVINGS_ALT_2, 1);
+        record(
+            &db,
+            "read_symbol",
+            CMD_SAVINGS_OUTPUT_1,
+            CMD_SAVINGS_ALT_1,
+            1,
+        );
+        record(
+            &db,
+            "read_symbol",
+            CMD_SAVINGS_OUTPUT_2,
+            CMD_SAVINGS_ALT_2,
+            1,
+        );
 
         let report = get_savings_report(&db, None).unwrap();
         let cmd = &report.by_cmd[0];

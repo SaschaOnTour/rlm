@@ -39,7 +39,11 @@ impl PhpConfig {
             REF_QUERY_SRC,
             "PHP",
         );
-        Self { language, chunk_query, ref_query }
+        Self {
+            language,
+            chunk_query,
+            ref_query,
+        }
     }
 }
 
@@ -70,12 +74,19 @@ impl LanguageConfig for PhpConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function)),
+            "fn_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Function,
+            )),
             "class_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class)),
-            "iface_name" => {
-                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Interface))
-            }
-            "method_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method)),
+            "iface_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Interface,
+            )),
+            "method_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Method,
+            )),
             "trait_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Trait)),
             n if n.ends_with("_def") => Some(ChunkCaptureResult::definition()),
             _ => None,

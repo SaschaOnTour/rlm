@@ -27,6 +27,7 @@ impl RlmServer {
 
     /// Get the database. Returns an error if the index doesn't exist.
     /// Unlike the CLI, MCP does NOT auto-index to avoid blocking on large projects.
+    // qual:allow(iosp) reason: "check-then-act: verify index exists before opening database"
     pub(crate) fn ensure_db(&self) -> Result<Database, McpError> {
         let config = self.config();
         if !config.index_exists() {
@@ -50,28 +51,26 @@ impl RlmServer {
     pub(crate) fn error_text(msg: String) -> CallToolResult {
         CallToolResult::success(vec![Content::text(format!("{{\"error\":\"{msg}\"}}"))])
     }
-
-    /// Helper for tools that run a single file operation: call `op`, record savings, return JSON.
-    pub(crate) fn file_op_result<T: serde::Serialize>(
-        &self,
-        command: &str,
-        path: &str,
-        result: Result<T, impl std::fmt::Display>,
-    ) -> Result<CallToolResult, McpError> {
-        match result {
-            Ok(val) => {
-                let db = self.ensure_db()?;
-                let json = savings::record_file_op(&db, command, &val, path);
-                Ok(Self::success_text(json))
-            }
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
-    }
 }
 
 // -- Helper method for read with metadata enrichment -------------------------
 
 impl RlmServer {
+    /// Serialize a value, record token savings, and return a success result (operation: calls only).
+    fn serialize_and_record<T: Serialize>(
+        db: &Database,
+        path: &str,
+        val: &T,
+    ) -> Result<CallToolResult, McpError> {
+        let json = Self::to_json(val);
+        let out_tokens = estimate_tokens(json.len());
+        let alt_tokens = savings::alternative_single_file(db, path).unwrap_or(out_tokens);
+        savings::record(db, "read_symbol", out_tokens, alt_tokens, 1);
+        Ok(Self::success_text(json))
+    }
+
+    /// Build the read-symbol response, optionally enriching with metadata (integration: calls only).
+    // qual:allow(iosp) reason: "metadata enrichment dispatch cannot be further separated"
     pub(crate) fn read_symbol_result<T: Serialize>(
         db: &Database,
         params: &super::tools::ReadParams,
@@ -98,20 +97,11 @@ impl RlmServer {
                     type_info,
                     signature,
                 };
-                let json = Self::to_json(&enriched);
-                let out_tokens = estimate_tokens(json.len());
-                let alt_tokens =
-                    savings::alternative_single_file(db, &params.path).unwrap_or(out_tokens);
-                savings::record(db, "read_symbol", out_tokens, alt_tokens, 1);
-                return Ok(Self::success_text(json));
+                return Self::serialize_and_record(db, &params.path, &enriched);
             }
         }
 
-        let json = Self::to_json(chunks);
-        let out_tokens = estimate_tokens(json.len());
-        let alt_tokens = savings::alternative_single_file(db, &params.path).unwrap_or(out_tokens);
-        savings::record(db, "read_symbol", out_tokens, alt_tokens, 1);
-        Ok(Self::success_text(json))
+        Self::serialize_and_record(db, &params.path, chunks)
     }
 }
 

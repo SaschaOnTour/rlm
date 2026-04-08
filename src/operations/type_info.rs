@@ -50,34 +50,30 @@ pub fn get_type_info(db: &Database, symbol: &str) -> Result<TypeInfoResult> {
         )));
     }
 
-    // Get all files for prioritization
+    // Build file lookup for O(1) access instead of O(chunks * files)
     let files = db.get_all_files()?;
+    let file_map: std::collections::HashMap<i64, &crate::models::file::FileRecord> =
+        files.iter().map(|f| (f.id, f)).collect();
 
     // Prioritize chunks: src/ > default > fixtures/tests
     let chunk = chunks
         .iter()
-        .min_by_key(|c| {
-            let file = files.iter().find(|f| f.id == c.file_id);
-            match file {
-                Some(f) => {
-                    if f.path.starts_with("src/") {
-                        0 // Highest priority for src/
-                    } else if f.path.contains("fixtures") || f.path.contains("test") {
-                        2 // Lowest priority for fixtures/tests
-                    } else {
-                        1 // Medium priority for everything else
-                    }
+        .min_by_key(|c| match file_map.get(&c.file_id) {
+            Some(f) => {
+                if f.path.starts_with("src/") {
+                    0 // Highest priority for src/
+                } else if f.path.contains("fixtures") || f.path.contains("test") {
+                    2 // Lowest priority for fixtures/tests
+                } else {
+                    1 // Medium priority for everything else
                 }
-                None => UNKNOWN_FILE_PRIORITY, // Unknown files get lowest priority
             }
+            None => UNKNOWN_FILE_PRIORITY, // Unknown files get lowest priority
         })
-        .ok_or_else(|| {
-            crate::error::RlmError::Other(format!("symbol not found: {symbol}"))
-        })?;
+        .ok_or_else(|| crate::error::RlmError::Other(format!("symbol not found: {symbol}")))?;
 
-    let file_path = files
-        .iter()
-        .find(|f| f.id == chunk.file_id)
+    let file_path = file_map
+        .get(&chunk.file_id)
         .map(|f| f.path.clone())
         .unwrap_or_default();
 
@@ -113,7 +109,12 @@ mod tests {
         let db = test_db();
 
         // Insert a file and chunk
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "src/lib.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
@@ -146,51 +147,46 @@ mod tests {
     fn get_type_info_prioritizes_src() {
         let db = test_db();
 
-        // Insert file in fixtures
-        let fixture_file =
-            FileRecord::new("fixtures/test.rs".into(), "h1".into(), "rust".into(), TEST_FILE_BYTES);
+        let fixture_file = FileRecord::new(
+            "fixtures/test.rs".into(),
+            "h1".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let fixture_id = db.upsert_file(&fixture_file).unwrap();
 
-        // Insert file in src
-        let src_file = FileRecord::new("src/lib.rs".into(), "h2".into(), "rust".into(), TEST_FILE_BYTES);
+        let src_file = FileRecord::new(
+            "src/lib.rs".into(),
+            "h2".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let src_id = db.upsert_file(&src_file).unwrap();
 
         // Same symbol in both files
         let fixture_chunk = Chunk {
-            id: 0,
-            file_id: fixture_id,
             start_line: TEST_START_LINE,
             end_line: TEST_END_LINE_SHORT,
             start_byte: TEST_START_BYTE,
             end_byte: TEST_END_BYTE_SMALL,
             kind: ChunkKind::Function,
             ident: "foo".into(),
-            parent: None,
             signature: Some("fn foo() [fixture]".into()),
-            visibility: None,
-            ui_ctx: None,
-            doc_comment: None,
-            attributes: None,
             content: "fn foo() { fixture }".into(),
+            ..Chunk::stub(fixture_id)
         };
         db.insert_chunk(&fixture_chunk).unwrap();
 
         let src_chunk = Chunk {
-            id: 0,
-            file_id: src_id,
             start_line: TEST_START_LINE,
             end_line: TEST_END_LINE_SHORT,
             start_byte: TEST_START_BYTE,
             end_byte: TEST_END_BYTE_SMALL,
             kind: ChunkKind::Function,
             ident: "foo".into(),
-            parent: None,
             signature: Some("fn foo() [src]".into()),
-            visibility: None,
-            ui_ctx: None,
-            doc_comment: None,
-            attributes: None,
             content: "fn foo() { src }".into(),
+            ..Chunk::stub(src_id)
         };
         db.insert_chunk(&src_chunk).unwrap();
 

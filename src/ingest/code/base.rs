@@ -224,8 +224,7 @@ impl<C: LanguageConfig> BaseParser<C> {
         file_id: i64,
     ) -> Vec<Chunk> {
         use super::base_ops::{
-            build_chunk_from_match_data, build_import_chunk, process_query_match,
-            QueryMatchResult,
+            build_chunk_from_match_data, build_import_chunk, process_query_match, QueryMatchResult,
         };
 
         let mut chunks = Vec::new();
@@ -266,7 +265,6 @@ impl<C: LanguageConfig> BaseParser<C> {
 
         chunks
     }
-
 }
 
 impl<C: LanguageConfig> BaseParser<C> {

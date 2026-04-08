@@ -47,6 +47,7 @@ pub struct SymbolInfo {
 
 /// Build a tree view of the indexed codebase with symbol annotations.
 /// When `path_filter` is set, only files whose path starts with the prefix are included.
+// qual:allow(iosp) reason: "minimal orchestration: fetch data then build tree"
 pub fn build_tree(db: &Database, path_filter: Option<&str>) -> Result<Vec<TreeNode>> {
     let mut files = db.get_all_files()?;
     if let Some(prefix) = path_filter {
@@ -85,6 +86,8 @@ pub fn build_tree(db: &Database, path_filter: Option<&str>) -> Result<Vec<TreeNo
     Ok(root_children.into_values().collect())
 }
 
+// qual:recursive
+// qual:allow(iosp) reason: "recursive tree construction inherently mixes branching with delegation"
 fn insert_into_tree(
     children: &mut BTreeMap<String, TreeNode>,
     parts: &[&str],
@@ -119,6 +122,7 @@ fn insert_into_tree(
 }
 
 /// Format a tree as a string with indentation and symbol annotations.
+// qual:recursive
 #[must_use]
 pub fn format_tree(nodes: &[TreeNode], indent: usize) -> String {
     use std::fmt::Write;
@@ -160,7 +164,12 @@ mod tests {
     #[test]
     fn build_tree_from_db() {
         let db = Database::open_in_memory().unwrap();
-        let f1 = FileRecord::new("src/main.rs".into(), "h1".into(), "rust".into(), TEST_FILE_SIZE);
+        let f1 = FileRecord::new(
+            "src/main.rs".into(),
+            "h1".into(),
+            "rust".into(),
+            TEST_FILE_SIZE,
+        );
         let fid = db.upsert_file(&f1).unwrap();
         let c = Chunk {
             id: 0,

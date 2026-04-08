@@ -50,7 +50,10 @@ enum FileOutcome {
     /// File was skipped for the given reason.
     Skipped(SkipReason),
     /// File was indexed, producing this many chunks and refs.
-    Indexed { chunks_created: usize, refs_created: usize },
+    Indexed {
+        chunks_created: usize,
+        refs_created: usize,
+    },
 }
 
 /// Read file bytes from disk, returning `None` (with skip reason) on failure.
@@ -66,7 +69,13 @@ fn parse_file_chunks(
     lang: &str,
     source: &str,
     file_id: i64,
-) -> std::result::Result<(Vec<crate::models::chunk::Chunk>, Vec<crate::models::chunk::Reference>), SkipReason> {
+) -> std::result::Result<
+    (
+        Vec<crate::models::chunk::Chunk>,
+        Vec<crate::models::chunk::Reference>,
+    ),
+    SkipReason,
+> {
     if dispatcher.is_code_language(lang) {
         let parse_result = dispatcher
             .parse_with_quality(lang, source, file_id)
@@ -116,10 +125,7 @@ fn insert_chunks(
 }
 
 /// Resolve the chunk ID for a reference using binary search over sorted chunks.
-fn resolve_ref_chunk_id(
-    inserted_chunks: &[crate::models::chunk::Chunk],
-    line: u32,
-) -> i64 {
+fn resolve_ref_chunk_id(inserted_chunks: &[crate::models::chunk::Chunk], line: u32) -> i64 {
     let idx = inserted_chunks.partition_point(|c| c.start_line <= line);
     if idx > 0 {
         inserted_chunks[..idx]
@@ -204,7 +210,10 @@ fn ingest_file(
     let chunks_created = inserted_chunks.len();
     let refs_created = insert_refs(db, refs, &inserted_chunks)?;
 
-    Ok(FileOutcome::Indexed { chunks_created, refs_created })
+    Ok(FileOutcome::Indexed {
+        chunks_created,
+        refs_created,
+    })
 }
 
 /// Process a single scanned file: check freshness, read, parse, insert chunks/refs (integration).
@@ -228,10 +237,7 @@ fn process_single_file(
 }
 
 /// Remove indexed files that no longer exist on disk.
-fn purge_deleted_files(
-    db: &Database,
-    scanned_paths: &HashSet<String>,
-) -> Result<usize> {
+fn purge_deleted_files(db: &Database, scanned_paths: &HashSet<String>) -> Result<usize> {
     let indexed_files = db.get_all_files()?;
     let mut deleted = 0;
     for indexed_file in &indexed_files {
@@ -247,7 +253,10 @@ fn purge_deleted_files(
 fn accumulate_outcome(result: &mut IndexResult, outcome: FileOutcome) {
     match outcome {
         FileOutcome::Skipped(reason) => result.skip(reason),
-        FileOutcome::Indexed { chunks_created, refs_created } => {
+        FileOutcome::Indexed {
+            chunks_created,
+            refs_created,
+        } => {
             result.files_indexed += 1;
             result.chunks_created += chunks_created;
             result.refs_created += refs_created;
@@ -296,6 +305,7 @@ pub fn run_index(config: &Config) -> Result<IndexResult> {
 }
 
 /// Ensure the index exists, creating it if necessary (auto-index).
+// qual:allow(iosp) reason: "check-then-act: ensure index exists before opening"
 pub fn ensure_index(config: &Config) -> Result<Database> {
     if !config.index_exists() {
         run_index(config)?;

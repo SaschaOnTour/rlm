@@ -98,7 +98,12 @@ mod tests {
         let file_path = tmp.path().join("test.rs");
         std::fs::write(&file_path, "fn main() {}").unwrap();
 
-        let file = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "test.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
@@ -133,7 +138,12 @@ mod tests {
         let (db, tmp) = setup_test_db_and_dir();
 
         // Index a file but don't create it on disk
-        let file = FileRecord::new("missing.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "missing.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         db.upsert_file(&file).unwrap();
 
         let report = verify_index(&db, tmp.path()).unwrap();
@@ -149,7 +159,12 @@ mod tests {
         let (db, tmp) = setup_test_db_and_dir();
 
         // Index a file that doesn't exist on disk
-        let file = FileRecord::new("missing.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "missing.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         db.upsert_file(&file).unwrap();
 
         let report = verify_index(&db, tmp.path()).unwrap();
@@ -168,30 +183,30 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         let tmp = TempDir::new().unwrap();
 
-        // Create two files in the index
-        let file1 = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file1 = FileRecord::new(
+            "test.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let _file1_id = db.upsert_file(&file1).unwrap();
 
-        let file2 = FileRecord::new("other.rs".into(), "hash2".into(), "rust".into(), TEST_FILE_BYTES);
+        let file2 = FileRecord::new(
+            "other.rs".into(),
+            "hash2".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file2_id = db.upsert_file(&file2).unwrap();
 
         // Create a chunk for file2
         let chunk = Chunk {
-            id: 0,
-            file_id: file2_id,
-            start_line: 1,
-            end_line: 1,
             start_byte: TEST_START_BYTE,
             end_byte: TEST_END_BYTE_SMALL,
             kind: ChunkKind::Function,
             ident: "orphan_soon".into(),
-            parent: None,
-            signature: None,
-            visibility: None,
-            ui_ctx: None,
-            doc_comment: None,
-            attributes: None,
             content: "fn orphan()".into(),
+            ..Chunk::stub(file2_id)
         };
         db.insert_chunk(&chunk).unwrap();
 
@@ -200,7 +215,6 @@ mod tests {
         std::fs::write(tmp.path().join("other.rs"), "").unwrap();
 
         // Delete file2 directly (bypassing cascade to create orphan)
-        // This simulates a corrupted index where FK constraint wasn't enforced
         db.conn().execute("PRAGMA foreign_keys = OFF;", []).unwrap();
         db.conn()
             .execute("DELETE FROM files WHERE id = ?1", params![file2_id])
@@ -214,7 +228,6 @@ mod tests {
         let fix_result = fix_integrity(&db, &report).unwrap();
         assert_eq!(fix_result.orphan_chunks_deleted, 1);
 
-        // Verify chunk is gone
         let all_chunks = db.get_all_chunks().unwrap();
         assert!(all_chunks.is_empty());
     }
@@ -225,7 +238,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
 
         // Create a file and chunk
-        let file = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
+        let file = FileRecord::new(
+            "test.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {

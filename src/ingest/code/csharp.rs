@@ -41,7 +41,11 @@ impl CSharpConfig {
             REF_QUERY_SRC,
             "C#",
         );
-        Self { language, chunk_query, ref_query }
+        Self {
+            language,
+            chunk_query,
+            ref_query,
+        }
     }
 }
 
@@ -73,18 +77,29 @@ impl LanguageConfig for CSharpConfig {
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
             "class_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class)),
-            "iface_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Interface)),
+            "iface_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Interface,
+            )),
             "enum_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Enum)),
-            "struct_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Struct)),
-            "method_name" | "ctor_name" => {
-                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method))
-            }
-            "ns_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Module)),
+            "struct_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Struct,
+            )),
+            "method_name" | "ctor_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Method,
+            )),
+            "ns_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Module,
+            )),
             n if n.ends_with("_def") => Some(ChunkCaptureResult::definition()),
             _ => None,
         }
     }
 
+    // qual:allow(dry) reason: "language-specific ref kind mapping inherently similar across parsers"
     fn map_ref_capture(&self, capture_name: &str) -> Option<RefKind> {
         match capture_name {
             "call_name" | "method_call" => Some(RefKind::Call),

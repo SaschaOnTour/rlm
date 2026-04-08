@@ -195,11 +195,11 @@ pub fn annotate_known_issues(issues: &mut [QualityIssue]) {
 }
 
 #[cfg(test)]
+use super::ParseQuality;
+#[cfg(test)]
 use std::fs::OpenOptions;
 #[cfg(test)]
 use std::io::Write;
-#[cfg(test)]
-use super::ParseQuality;
 
 #[cfg(test)]
 impl QualityIssue {
@@ -297,8 +297,6 @@ const DAYS_IN_LEAP_YEAR: i64 = 366;
 #[cfg(test)]
 const DAYS_IN_YEAR: i64 = 365;
 #[cfg(test)]
-const MONTHS_IN_YEAR: usize = 12;
-#[cfg(test)]
 const DAYS_IN_JAN: i64 = 31;
 #[cfg(test)]
 const DAYS_IN_FEB: i64 = 28;
@@ -342,9 +340,68 @@ struct DateComponents {
     seconds: u64,
 }
 
-/// Convert epoch seconds to date components (operation: logic only).
-///
-/// Performs all date arithmetic without calling any own-crate functions.
+/// Check if a year is a leap year.
+#[cfg(test)]
+fn is_leap_year(year: i64) -> bool {
+    (year % LEAP_YEAR_DIVISOR == 0 && year % CENTURY_DIVISOR != 0)
+        || (year % QUAD_CENTURY_DIVISOR == 0)
+}
+
+/// Convert a day-of-year count to (year, remaining_days).
+#[cfg(test)]
+fn days_to_year(total_days: u64) -> (i64, i64) {
+    let mut days = total_days as i64;
+    let mut year = EPOCH_YEAR;
+    loop {
+        let dy = if is_leap_year(year) {
+            DAYS_IN_LEAP_YEAR
+        } else {
+            DAYS_IN_YEAR
+        };
+        if days < dy {
+            break;
+        }
+        days -= dy;
+        year += 1;
+    }
+    (year, days)
+}
+
+/// Index of December (0-based) used as fallback when day count exceeds all months.
+#[cfg(test)]
+const DECEMBER_INDEX: usize = 11;
+
+/// Convert remaining days within a year to (month, day), both 1-based.
+#[cfg(test)]
+fn days_to_month_day(mut days: i64, leap: bool) -> (i64, i64) {
+    let feb = if leap { DAYS_IN_FEB_LEAP } else { DAYS_IN_FEB };
+    let md = [
+        DAYS_IN_JAN,
+        feb,
+        DAYS_IN_MAR,
+        DAYS_IN_APR,
+        DAYS_IN_MAY,
+        DAYS_IN_JUN,
+        DAYS_IN_JUL,
+        DAYS_IN_AUG,
+        DAYS_IN_SEP,
+        DAYS_IN_OCT,
+        DAYS_IN_NOV,
+        DAYS_IN_DEC,
+    ];
+    let mi = md
+        .iter()
+        .scan(0i64, |a, &m| {
+            *a += m;
+            Some(*a)
+        })
+        .position(|c| days < c)
+        .unwrap_or(DECEMBER_INDEX);
+    days -= md[..mi].iter().sum::<i64>();
+    ((mi as i64) + 1, days + 1)
+}
+
+/// Convert epoch seconds to date components.
 #[cfg(test)]
 fn epoch_secs_to_date(secs: u64) -> DateComponents {
     let days_since_epoch = secs / SECONDS_PER_DAY;
@@ -353,41 +410,17 @@ fn epoch_secs_to_date(secs: u64) -> DateComponents {
     let minutes = (time_of_day % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
     let seconds = time_of_day % SECONDS_PER_MINUTE;
 
-    let mut days = days_since_epoch as i64;
-    let mut year = EPOCH_YEAR;
-    loop {
-        let leap = (year % LEAP_YEAR_DIVISOR == 0 && year % CENTURY_DIVISOR != 0)
-            || (year % QUAD_CENTURY_DIVISOR == 0);
-        let days_in_year = if leap { DAYS_IN_LEAP_YEAR } else { DAYS_IN_YEAR };
-        if days < days_in_year {
-            break;
-        }
-        days -= days_in_year;
-        year += 1;
+    let (year, remaining_days) = days_to_year(days_since_epoch);
+    let (month, day) = days_to_month_day(remaining_days, is_leap_year(year));
+
+    DateComponents {
+        year,
+        month,
+        day,
+        hours,
+        minutes,
+        seconds,
     }
-
-    let leap = (year % LEAP_YEAR_DIVISOR == 0 && year % CENTURY_DIVISOR != 0)
-        || (year % QUAD_CENTURY_DIVISOR == 0);
-    let months_days: [i64; MONTHS_IN_YEAR] = if leap {
-        [DAYS_IN_JAN, DAYS_IN_FEB_LEAP, DAYS_IN_MAR, DAYS_IN_APR, DAYS_IN_MAY, DAYS_IN_JUN, DAYS_IN_JUL, DAYS_IN_AUG, DAYS_IN_SEP, DAYS_IN_OCT, DAYS_IN_NOV, DAYS_IN_DEC]
-    } else {
-        [DAYS_IN_JAN, DAYS_IN_FEB, DAYS_IN_MAR, DAYS_IN_APR, DAYS_IN_MAY, DAYS_IN_JUN, DAYS_IN_JUL, DAYS_IN_AUG, DAYS_IN_SEP, DAYS_IN_OCT, DAYS_IN_NOV, DAYS_IN_DEC]
-    };
-
-    let month_index = months_days
-        .iter()
-        .scan(0i64, |acc, &m| {
-            *acc += m;
-            Some(*acc)
-        })
-        .position(|cumulative| days < cumulative)
-        .unwrap_or(MONTHS_IN_YEAR - 1);
-    let consumed: i64 = months_days[..month_index].iter().sum();
-    days -= consumed;
-    let month = (month_index as i64) + 1;
-    let day = days + 1;
-
-    DateComponents { year, month, day, hours, minutes, seconds }
 }
 
 /// Format date components as an ISO 8601 timestamp (integration: calls only).
@@ -398,9 +431,11 @@ fn chrono_timestamp() -> String {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
     let d = epoch_secs_to_date(duration.as_secs());
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", d.year, d.month, d.day, d.hours, d.minutes, d.seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        d.year, d.month, d.day, d.hours, d.minutes, d.seconds
+    )
 }
-
 
 #[cfg(test)]
 fn extract_context(source: &str, line: u32) -> Option<String> {
@@ -446,6 +481,8 @@ mod tests {
 
     #[test]
     fn logger_writes_jsonl() {
+        const ERROR_LINE: u32 = 5;
+
         let tmp = TempDir::new().unwrap();
         let log_path = tmp.path().join("quality.log");
         let logger = QualityLogger::new(&log_path, true);
@@ -455,7 +492,7 @@ mod tests {
             file: "test.rs".to_string(),
             lang: "rust".to_string(),
             issue: "error_node".to_string(),
-            line: Some(5),
+            line: Some(ERROR_LINE),
             context: Some("bad syntax".to_string()),
             known: false,
             test: None,

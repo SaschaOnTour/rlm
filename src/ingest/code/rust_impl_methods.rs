@@ -56,17 +56,22 @@ pub(crate) fn extract_impl_methods(
 }
 
 /// Raw data extracted from a function_item node (before calling helpers).
+///
+/// Line numbers are 1-based (converted from tree-sitter's 0-based rows).
 struct RawMethodData {
     fn_name: String,
     content: String,
-    start_row: u32,
-    end_row: u32,
+    start_line: u32,
+    end_line: u32,
     start_byte: u32,
     end_byte: u32,
 }
 
 /// Extract raw method data from a declaration_list node (operation: logic only).
-fn extract_raw_methods<'a>(decl_list: tree_sitter::Node<'a>, source: &'a [u8]) -> Vec<(RawMethodData, tree_sitter::Node<'a>)> {
+fn extract_raw_methods<'a>(
+    decl_list: tree_sitter::Node<'a>,
+    source: &'a [u8],
+) -> Vec<(RawMethodData, tree_sitter::Node<'a>)> {
     if decl_list.kind() != "declaration_list" {
         return Vec::new();
     }
@@ -103,8 +108,8 @@ fn extract_raw_methods<'a>(decl_list: tree_sitter::Node<'a>, source: &'a [u8]) -
             RawMethodData {
                 fn_name,
                 content,
-                start_row: start.row as u32,
-                end_row: end.row as u32,
+                start_line: start.row as u32 + 1,
+                end_line: end.row as u32 + 1,
                 start_byte: item.start_byte() as u32,
                 end_byte: item.end_byte() as u32,
             },
@@ -126,32 +131,16 @@ fn collect_methods_from_decl_list(
     let raw_methods = extract_raw_methods(decl_list, source);
 
     for (data, node) in raw_methods {
-        let doc_comment = collect_prev_siblings(
-            node,
-            source,
-            &SiblingCollectConfig {
-                kinds: &["line_comment"],
-                skip_kinds: &["attribute_item"],
-                prefixes: &["///", "//!"],
-                multi: true,
-            },
-        );
-        let attributes = collect_prev_siblings_filtered_skip(
-            node,
-            source,
-            &SiblingCollectConfig {
-                kinds: &["attribute_item"],
-                skip_kinds: &["line_comment"],
-                prefixes: &["///", "//!"],
-                multi: true,
-            },
-        );
+        let doc_config = SiblingCollectConfig::rust_doc_comments();
+        let attr_config = SiblingCollectConfig::rust_attributes();
+        let doc_comment = collect_prev_siblings(node, source, &doc_config);
+        let attributes = collect_prev_siblings_filtered_skip(node, source, &attr_config);
 
         methods.push(Chunk {
             id: 0,
             file_id,
-            start_line: data.start_row + 1,
-            end_line: data.end_row + 1,
+            start_line: data.start_line,
+            end_line: data.end_line,
             start_byte: data.start_byte,
             end_byte: data.end_byte,
             kind: ChunkKind::Method,

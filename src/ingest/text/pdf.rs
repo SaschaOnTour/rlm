@@ -16,7 +16,6 @@ impl PdfParser {
     pub fn new() -> Self {
         Self
     }
-
 }
 
 impl TextParser for PdfParser {
