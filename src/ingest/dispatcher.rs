@@ -22,18 +22,18 @@ impl Dispatcher {
     #[must_use]
     pub fn new() -> Self {
         let mut code_parsers: HashMap<String, Box<dyn CodeParser>> = HashMap::new();
-        code_parsers.insert("rust".into(), Box::new(RustParser::new()));
-        code_parsers.insert("go".into(), Box::new(GoParser::new()));
-        code_parsers.insert("java".into(), Box::new(JavaParser::new()));
-        code_parsers.insert("csharp".into(), Box::new(CSharpParser::new()));
-        code_parsers.insert("python".into(), Box::new(PythonParser::new()));
-        code_parsers.insert("php".into(), Box::new(PhpParser::new()));
-        code_parsers.insert("javascript".into(), Box::new(JavaScriptParser::new()));
-        code_parsers.insert("typescript".into(), Box::new(TypeScriptParser::new()));
+        code_parsers.insert("rust".into(), Box::new(RustParser::create()));
+        code_parsers.insert("go".into(), Box::new(GoParser::create()));
+        code_parsers.insert("java".into(), Box::new(JavaParser::create()));
+        code_parsers.insert("csharp".into(), Box::new(CSharpParser::create()));
+        code_parsers.insert("python".into(), Box::new(PythonParser::create()));
+        code_parsers.insert("php".into(), Box::new(PhpParser::create()));
+        code_parsers.insert("javascript".into(), Box::new(JavaScriptParser::create()));
+        code_parsers.insert("typescript".into(), Box::new(TypeScriptParser::create()));
         // TSX uses the TSX-specific parser
-        code_parsers.insert("tsx".into(), Box::new(TypeScriptParser::new_tsx()));
-        code_parsers.insert("html".into(), Box::new(HtmlParser::new()));
-        code_parsers.insert("css".into(), Box::new(CssParser::new()));
+        code_parsers.insert("tsx".into(), Box::new(TypeScriptParser::create_tsx()));
+        code_parsers.insert("html".into(), Box::new(HtmlParser::create()));
+        code_parsers.insert("css".into(), Box::new(CssParser::create()));
 
         let mut text_parsers: HashMap<String, Box<dyn TextParser>> = HashMap::new();
         text_parsers.insert("markdown".into(), Box::new(MarkdownParser::new()));

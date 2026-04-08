@@ -57,9 +57,40 @@ pub trait LanguageConfig: Send + Sync {
     /// Returns the import declaration capture name (e.g., "`use_decl`", "`import_decl`").
     fn import_capture_name(&self) -> &'static str;
 
+    /// Check if a capture name represents an import declaration.
+    /// Override this for languages with multiple import capture names (e.g., JS `require_decl`).
+    fn is_import_capture(&self, capture_name: &str) -> bool {
+        capture_name == self.import_capture_name()
+    }
+
+    /// Filter a ref capture based on the capture text. Return `false` to skip this reference.
+    /// Default: accept all captures.
+    fn filter_ref_capture(&self, _capture_name: &str, _text: &str) -> bool {
+        true
+    }
+
+    /// Transform the reference target text before storing it.
+    /// Default: return text as-is.
+    fn transform_ref_text(&self, _capture_name: &str, text: &str) -> String {
+        text.to_string()
+    }
+
     /// Returns true if this language uses deduplication (some languages emit duplicate matches).
     fn needs_deduplication(&self) -> bool {
         false
+    }
+
+    /// Optional: adjust chunk kind and visibility after parent is found.
+    /// For example, Python promotes Function to Method when inside a class,
+    /// and derives visibility from the identifier name rather than content.
+    fn adjust_chunk_metadata(
+        &self,
+        _kind: &mut ChunkKind,
+        _name: &str,
+        _parent: &Option<String>,
+        _visibility: &mut Option<String>,
+    ) {
+        // Default: no adjustment
     }
 
     /// Optional: post-process chunks after initial extraction (e.g., extract impl methods).
@@ -76,6 +107,28 @@ pub trait LanguageConfig: Send + Sync {
     /// Optional: determine if a function should be skipped (e.g., methods already captured).
     fn should_skip_function(&self, _kind: &ChunkKind, _parent: &Option<String>) -> bool {
         false
+    }
+
+    /// Optional: return a UI context hint for chunks (e.g., "ui" for CSS/HTML).
+    fn ui_ctx(&self) -> Option<String> {
+        None
+    }
+
+    /// Expand a ref capture into one or more (target, RefKind) pairs.
+    /// Override this when a single capture may produce multiple references
+    /// (e.g., HTML class attributes with space-separated values).
+    /// Default: delegates to `map_ref_capture` + `transform_ref_text`.
+    fn expand_ref_capture(&self, capture_name: &str, text: &str) -> Vec<(String, RefKind)> {
+        match self.map_ref_capture(capture_name) {
+            Some(kind) => {
+                if !self.filter_ref_capture(capture_name, text) {
+                    return Vec::new();
+                }
+                let target = self.transform_ref_text(capture_name, text);
+                vec![(target, kind)]
+            }
+            None => Vec::new(),
+        }
     }
 }
 
@@ -147,7 +200,7 @@ impl<C: LanguageConfig> BaseParser<C> {
                 let text = cap.node.utf8_text(source_bytes).unwrap_or("");
 
                 // Check for import declarations
-                if *cap_name == self.config.import_capture_name() {
+                if self.config.is_import_capture(cap_name) {
                     is_import_decl = true;
                     import_decls.push(cap.node);
                     continue;
@@ -157,6 +210,11 @@ impl<C: LanguageConfig> BaseParser<C> {
                 if let Some(result) = self.config.map_chunk_capture(cap_name, text) {
                     if result.is_definition_node {
                         node = cap.node;
+                        // Some captures are both the definition node AND provide name/kind
+                        if !result.name.is_empty() {
+                            name = result.name;
+                            kind = result.kind;
+                        }
                     } else {
                         name = result.name;
                         kind = result.kind;
@@ -195,7 +253,9 @@ impl<C: LanguageConfig> BaseParser<C> {
                 continue;
             }
 
-            let visibility = self.config.extract_visibility(&content);
+            let mut visibility = self.config.extract_visibility(&content);
+            self.config
+                .adjust_chunk_metadata(&mut kind, &name, &parent, &mut visibility);
             let signature = self.config.extract_signature(&content, &kind);
             let doc_comment = self.config.collect_doc_comment(node, source_bytes);
             let attributes = self.config.collect_attributes(node, source_bytes);
@@ -212,7 +272,7 @@ impl<C: LanguageConfig> BaseParser<C> {
                 parent,
                 signature,
                 visibility,
-                ui_ctx: None,
+                ui_ctx: self.config.ui_ctx(),
                 doc_comment,
                 attributes,
                 content,
@@ -291,10 +351,10 @@ impl<C: LanguageConfig> BaseParser<C> {
                 let text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
                 let pos = cap.node.start_position();
 
-                let ref_kind = match self.config.map_ref_capture(cap_name) {
-                    Some(kind) => kind,
-                    None => continue,
-                };
+                let expanded = self.config.expand_ref_capture(cap_name, &text);
+                if expanded.is_empty() {
+                    continue;
+                }
 
                 let line = pos.row as u32 + 1;
                 let chunk_id = chunks
@@ -302,14 +362,16 @@ impl<C: LanguageConfig> BaseParser<C> {
                     .find(|c| line >= c.start_line && line <= c.end_line)
                     .map_or(0, |c| c.id);
 
-                refs.push(Reference {
-                    id: 0,
-                    chunk_id,
-                    target_ident: text,
-                    ref_kind,
-                    line,
-                    col: pos.column as u32,
-                });
+                for (target, ref_kind) in expanded {
+                    refs.push(Reference {
+                        id: 0,
+                        chunk_id,
+                        target_ident: target,
+                        ref_kind,
+                        line,
+                        col: pos.column as u32,
+                    });
+                }
             }
         }
 

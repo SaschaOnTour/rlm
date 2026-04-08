@@ -6,13 +6,10 @@
 //! - Script and style blocks
 //! - Template markers (Vue, Angular)
 
-use std::collections::HashSet;
+use tree_sitter::{Language, Query};
 
-use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator, Tree};
-
-use crate::error::{Result, RlmError};
-use crate::ingest::code::CodeParser;
-use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
+use crate::ingest::code::base::{BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r#"
     ; Elements with id attribute
@@ -55,21 +52,14 @@ const REF_QUERY_SRC: &str = r#"
         (#eq? @_src_attr "src"))
 "#;
 
-pub struct HtmlParser {
+pub struct HtmlConfig {
     language: Language,
     chunk_query: Query,
     ref_query: Query,
 }
 
-impl Default for HtmlParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl HtmlParser {
-    #[must_use]
-    pub fn new() -> Self {
+impl HtmlConfig {
+    fn new() -> Self {
         let language: Language = tree_sitter_html::LANGUAGE.into();
         let chunk_query =
             Query::new(&language, CHUNK_QUERY_SRC).expect("HTML chunk query must compile");
@@ -80,273 +70,184 @@ impl HtmlParser {
             ref_query,
         }
     }
-
-    fn make_parser(&self) -> Result<Parser> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&self.language)
-            .map_err(|e| RlmError::Parse {
-                path: String::new(),
-                detail: format!("failed to set HTML language: {e}"),
-            })?;
-        Ok(parser)
-    }
-
-    fn extract_chunks_from_tree(
-        &self,
-        tree: &Tree,
-        source_bytes: &[u8],
-        file_id: i64,
-    ) -> Vec<Chunk> {
-        let mut chunks = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&self.chunk_query, tree.root_node(), source_bytes);
-
-        // Track seen to avoid duplicates
-        let mut seen: HashSet<(String, u32)> = HashSet::new();
-
-        while let Some(m) = matches.next() {
-            let mut name = String::new();
-            let mut kind = ChunkKind::Other("element".into());
-            let mut node = tree.root_node();
-            let mut tag_name = String::new();
-
-            for cap in m.captures {
-                let cap_name = &self.chunk_query.capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("");
-
-                match *cap_name {
-                    "element_with_id" => {
-                        node = cap.node;
-                    }
-                    "tag_name" => {
-                        tag_name = text.to_string();
-                    }
-                    "id_value" => {
-                        // Remove quotes
-                        name = text.trim_matches('"').trim_matches('\'').to_string();
-                        kind = ChunkKind::Other("element".into());
-                    }
-                    "script_el" => {
-                        node = cap.node;
-                        name = "_script".to_string();
-                        kind = ChunkKind::Other("script".into());
-                    }
-                    "style_el" => {
-                        node = cap.node;
-                        name = "_style".to_string();
-                        kind = ChunkKind::Other("style".into());
-                    }
-                    "doctype_el" => {
-                        node = cap.node;
-                        name = "_doctype".to_string();
-                        kind = ChunkKind::Other("doctype".into());
-                    }
-                    _ => {}
-                }
-            }
-
-            if name.is_empty() {
-                continue;
-            }
-
-            let start = node.start_position();
-            let start_line = start.row as u32 + 1;
-
-            // Skip duplicates
-            let key = (name.clone(), start_line);
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.insert(key);
-
-            let content = node.utf8_text(source_bytes).unwrap_or("").to_string();
-            let end = node.end_position();
-
-            // Create a signature with the tag name
-            let signature = if tag_name.is_empty() {
-                None
-            } else {
-                Some(format!("<{tag_name} id=\"{name}\">"))
-            };
-
-            chunks.push(Chunk {
-                id: 0,
-                file_id,
-                start_line,
-                end_line: end.row as u32 + 1,
-                start_byte: node.start_byte() as u32,
-                end_byte: node.end_byte() as u32,
-                kind,
-                ident: name,
-                parent: None,
-                signature,
-                visibility: None,
-                ui_ctx: Some("ui".into()),
-                doc_comment: None,
-                attributes: None,
-                content,
-            });
-        }
-
-        chunks
-    }
-
-    fn extract_refs_from_tree(
-        &self,
-        tree: &Tree,
-        source_bytes: &[u8],
-        chunks: &[Chunk],
-    ) -> Vec<Reference> {
-        let mut refs = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&self.ref_query, tree.root_node(), source_bytes);
-
-        while let Some(m) = matches.next() {
-            for cap in m.captures {
-                let cap_name = &self.ref_query.capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
-                let pos = cap.node.start_position();
-
-                let (ref_kind, target) = match *cap_name {
-                    "class_value" => {
-                        // Classes can have multiple space-separated values
-                        let classes = text.trim_matches('"').trim_matches('\'');
-                        for class in classes.split_whitespace() {
-                            let line = pos.row as u32 + 1;
-                            let chunk_id = chunks
-                                .iter()
-                                .find(|c| line >= c.start_line && line <= c.end_line)
-                                .map_or(0, |c| c.id);
-                            refs.push(Reference {
-                                id: 0,
-                                chunk_id,
-                                target_ident: class.to_string(),
-                                ref_kind: RefKind::TypeUse,
-                                line,
-                                col: pos.column as u32,
-                            });
-                        }
-                        continue;
-                    }
-                    "href_value" | "src_value" => (
-                        RefKind::Import,
-                        text.trim_matches('"').trim_matches('\'').to_string(),
-                    ),
-                    _ => continue,
-                };
-
-                let line = pos.row as u32 + 1;
-                let chunk_id = chunks
-                    .iter()
-                    .find(|c| line >= c.start_line && line <= c.end_line)
-                    .map_or(0, |c| c.id);
-
-                refs.push(Reference {
-                    id: 0,
-                    chunk_id,
-                    target_ident: target,
-                    ref_kind,
-                    line,
-                    col: pos.column as u32,
-                });
-            }
-        }
-
-        refs
-    }
 }
 
-impl CodeParser for HtmlParser {
-    fn language(&self) -> &'static str {
+impl LanguageConfig for HtmlConfig {
+    fn language(&self) -> &Language {
+        &self.language
+    }
+
+    fn chunk_query(&self) -> &Query {
+        &self.chunk_query
+    }
+
+    fn ref_query(&self) -> &Query {
+        &self.ref_query
+    }
+
+    fn language_name(&self) -> &'static str {
         "html"
     }
 
-    fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        Ok(self.extract_chunks_from_tree(&tree, source.as_bytes(), file_id))
+    fn import_capture_name(&self) -> &'static str {
+        // HTML doesn't have a dedicated import capture; use a name that won't match
+        "_no_imports"
     }
 
-    fn extract_refs(&self, source: &str, chunks: &[Chunk]) -> Result<Vec<Reference>> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        Ok(self.extract_refs_from_tree(&tree, source.as_bytes(), chunks))
+    fn needs_deduplication(&self) -> bool {
+        true
     }
 
-    fn parse_chunks_and_refs(
-        &self,
-        source: &str,
-        file_id: i64,
-    ) -> Result<(Vec<Chunk>, Vec<Reference>)> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        let source_bytes = source.as_bytes();
-        let chunks = self.extract_chunks_from_tree(&tree, source_bytes, file_id);
-        let refs = self.extract_refs_from_tree(&tree, source_bytes, &chunks);
-        Ok((chunks, refs))
-    }
-
-    fn validate_syntax(&self, source: &str) -> bool {
-        let mut parser = match self.make_parser() {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-        match parser.parse(source, None) {
-            Some(tree) => !tree.root_node().has_error(),
-            None => false,
+    fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
+        match capture_name {
+            "element_with_id" => Some(ChunkCaptureResult {
+                name: String::new(),
+                kind: ChunkKind::Other("element".into()),
+                is_definition_node: true,
+            }),
+            "tag_name" => {
+                // Tag name is stored but the actual ident comes from id_value
+                // We just note it for signature construction; not the name.
+                // Returning None here because tag_name alone doesn't set the chunk name.
+                None
+            }
+            "id_value" => {
+                // Remove quotes from the id value
+                let name = text.trim_matches('"').trim_matches('\'').to_string();
+                Some(ChunkCaptureResult {
+                    name,
+                    kind: ChunkKind::Other("element".into()),
+                    is_definition_node: false,
+                })
+            }
+            "script_el" => Some(ChunkCaptureResult {
+                name: "_script".to_string(),
+                kind: ChunkKind::Other("script".into()),
+                is_definition_node: true,
+            }),
+            "style_el" => Some(ChunkCaptureResult {
+                name: "_style".to_string(),
+                kind: ChunkKind::Other("style".into()),
+                is_definition_node: true,
+            }),
+            "doctype_el" => Some(ChunkCaptureResult {
+                name: "_doctype".to_string(),
+                kind: ChunkKind::Other("doctype".into()),
+                is_definition_node: true,
+            }),
+            _ => None,
         }
     }
 
-    fn parse_with_quality(
-        &self,
-        source: &str,
-        file_id: i64,
-    ) -> Result<crate::ingest::code::ParseResult> {
-        use crate::ingest::code::{find_error_lines, ParseQuality, ParseResult};
-
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        let source_bytes = source.as_bytes();
-        let chunks = self.extract_chunks_from_tree(&tree, source_bytes, file_id);
-        let refs = self.extract_refs_from_tree(&tree, source_bytes, &chunks);
-
-        let quality = if tree.root_node().has_error() {
-            let error_lines = find_error_lines(tree.root_node());
-            ParseQuality::Partial {
-                error_count: error_lines.len(),
-                error_lines,
-            }
-        } else {
-            ParseQuality::Complete
-        };
-
-        Ok(ParseResult {
-            chunks,
-            refs,
-            quality,
-        })
+    fn map_ref_capture(&self, capture_name: &str) -> Option<RefKind> {
+        match capture_name {
+            "class_value" => Some(RefKind::TypeUse),
+            "href_value" | "src_value" => Some(RefKind::Import),
+            _ => None,
+        }
     }
+
+    fn expand_ref_capture(&self, capture_name: &str, text: &str) -> Vec<(String, RefKind)> {
+        match capture_name {
+            "class_value" => {
+                // Classes can have multiple space-separated values
+                let classes = text.trim_matches('"').trim_matches('\'');
+                classes
+                    .split_whitespace()
+                    .map(|class| (class.to_string(), RefKind::TypeUse))
+                    .collect()
+            }
+            "href_value" | "src_value" => {
+                let target = text.trim_matches('"').trim_matches('\'').to_string();
+                vec![(target, RefKind::Import)]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn extract_visibility(&self, _content: &str) -> Option<String> {
+        None // HTML has no visibility modifiers
+    }
+
+    fn extract_signature(&self, content: &str, kind: &ChunkKind) -> Option<String> {
+        // For elements with id, extract the opening tag as signature
+        if *kind == ChunkKind::Other("element".into()) {
+            extract_html_id_signature(content)
+        } else {
+            None
+        }
+    }
+
+    fn find_parent(&self, _node: tree_sitter::Node, _source: &[u8]) -> Option<String> {
+        None
+    }
+
+    fn collect_doc_comment(&self, _node: tree_sitter::Node, _source: &[u8]) -> Option<String> {
+        None
+    }
+
+    fn collect_attributes(&self, _node: tree_sitter::Node, _source: &[u8]) -> Option<String> {
+        None
+    }
+
+    fn ui_ctx(&self) -> Option<String> {
+        Some("ui".into())
+    }
+}
+
+/// Public type alias for the HTML parser.
+pub type HtmlParser = BaseParser<HtmlConfig>;
+
+impl Default for HtmlParser {
+    fn default() -> Self {
+        Self::new(HtmlConfig::new())
+    }
+}
+
+impl HtmlParser {
+    /// Create a new HTML parser.
+    #[must_use]
+    pub fn create() -> Self {
+        Self::new(HtmlConfig::new())
+    }
+}
+
+/// Extract signature for HTML elements with id, e.g. `<div id="app">`.
+fn extract_html_id_signature(content: &str) -> Option<String> {
+    // Find the tag name and id from the content
+    if let Some(tag_end) = content.find('>') {
+        let open_tag = &content[..=tag_end];
+        // Extract tag name
+        let tag_name = open_tag
+            .trim_start_matches('<')
+            .split_whitespace()
+            .next()
+            .unwrap_or("");
+        // Extract id value
+        if let Some(id_start) = open_tag.find("id=") {
+            let after_id = &open_tag[id_start + 3..];
+            let id_val = after_id
+                .trim_start_matches('"')
+                .trim_start_matches('\'')
+                .split(|c: char| c == '"' || c == '\'')
+                .next()
+                .unwrap_or("");
+            if !tag_name.is_empty() && !id_val.is_empty() {
+                return Some(format!("<{tag_name} id=\"{id_val}\">"));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::code::CodeParser;
+    use crate::models::chunk::RefKind;
 
     fn parser() -> HtmlParser {
-        HtmlParser::new()
+        HtmlParser::create()
     }
 
     #[test]

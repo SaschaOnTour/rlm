@@ -1,8 +1,7 @@
-use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{Language, Query, Tree};
 
-use crate::error::{Result, RlmError};
-use crate::ingest::code::CodeParser;
-use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
+use crate::ingest::code::base::{extract_type_signature, BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::models::chunk::{Chunk, ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
     (function_item name: (identifier) @fn_name) @fn_def
@@ -32,22 +31,14 @@ const REF_QUERY_SRC: &str = r"
     (type_identifier) @type_ref
 ";
 
-/// Tree-sitter Rust parser.
-pub struct RustParser {
+pub struct RustConfig {
     language: Language,
     chunk_query: Query,
     ref_query: Query,
 }
 
-impl Default for RustParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RustParser {
-    #[must_use]
-    pub fn new() -> Self {
+impl RustConfig {
+    fn new() -> Self {
         let language: Language = tree_sitter_rust::LANGUAGE.into();
         let chunk_query =
             Query::new(&language, CHUNK_QUERY_SRC).expect("Rust chunk query must compile");
@@ -58,327 +49,176 @@ impl RustParser {
             ref_query,
         }
     }
-
-    fn make_parser(&self) -> Result<Parser> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&self.language)
-            .map_err(|e| RlmError::Parse {
-                path: String::new(),
-                detail: format!("failed to set Rust language: {e}"),
-            })?;
-        Ok(parser)
-    }
-
-    fn extract_chunks_from_tree(
-        &self,
-        tree: &Tree,
-        source_bytes: &[u8],
-        file_id: i64,
-    ) -> Vec<Chunk> {
-        let mut chunks = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&self.chunk_query, tree.root_node(), source_bytes);
-
-        // Collect use declarations for an imports chunk
-        let mut use_decls: Vec<tree_sitter::Node> = Vec::new();
-
-        while let Some(m) = matches.next() {
-            let mut name = String::new();
-            let mut kind = ChunkKind::Other("unknown".into());
-            let mut node = tree.root_node();
-            let mut is_use_decl = false;
-
-            for cap in m.captures {
-                let cap_name = &self.chunk_query.capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("");
-
-                match *cap_name {
-                    "fn_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Function;
-                    }
-                    "struct_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Struct;
-                    }
-                    "enum_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Enum;
-                    }
-                    "trait_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Trait;
-                    }
-                    "impl_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Impl;
-                    }
-                    "const_name" | "static_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Constant;
-                    }
-                    "mod_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Module;
-                    }
-                    "macro_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Other("macro".into());
-                    }
-                    "type_alias_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Other("type_alias".into());
-                    }
-                    "fn_def" | "struct_def" | "enum_def" | "trait_def" | "impl_def"
-                    | "const_def" | "static_def" | "mod_def" | "macro_def" | "type_alias_def" => {
-                        node = cap.node;
-                    }
-                    "use_decl" => {
-                        is_use_decl = true;
-                        use_decls.push(cap.node);
-                    }
-                    _ => {}
-                }
-            }
-
-            // Skip use declarations - we'll create a single imports chunk
-            if is_use_decl {
-                continue;
-            }
-
-            if name.is_empty() {
-                continue;
-            }
-
-            let start = node.start_position();
-            let end = node.end_position();
-            let content = node.utf8_text(source_bytes).unwrap_or("").to_string();
-
-            let visibility = extract_visibility(&content);
-            let signature = match kind {
-                ChunkKind::Function => extract_fn_signature(&content),
-                ChunkKind::Struct | ChunkKind::Enum | ChunkKind::Trait => {
-                    extract_type_signature(&content)
-                }
-                _ => None,
-            };
-            let parent = find_parent_impl(node, source_bytes);
-
-            if kind == ChunkKind::Impl {
-                let methods = extract_impl_methods(node, source_bytes, file_id, &name);
-                chunks.extend(methods);
-            }
-
-            // Skip functions inside impl blocks - they're captured as methods by extract_impl_methods
-            if kind == ChunkKind::Function && parent.is_some() {
-                continue;
-            }
-
-            let doc_comment = collect_rust_doc_comment(node, source_bytes);
-            let attributes = collect_rust_attributes(node, source_bytes);
-
-            chunks.push(Chunk {
-                id: 0,
-                file_id,
-                start_line: start.row as u32 + 1,
-                end_line: end.row as u32 + 1,
-                start_byte: node.start_byte() as u32,
-                end_byte: node.end_byte() as u32,
-                kind,
-                ident: name,
-                parent,
-                signature,
-                visibility,
-                ui_ctx: None,
-                doc_comment,
-                attributes,
-                content,
-            });
-        }
-
-        // Create an imports chunk if there are use declarations
-        if !use_decls.is_empty() {
-            // Find the range that covers all use declarations
-            let start_line = use_decls
-                .iter()
-                .map(|n| n.start_position().row)
-                .min()
-                .unwrap_or(0);
-            let end_line = use_decls
-                .iter()
-                .map(|n| n.end_position().row)
-                .max()
-                .unwrap_or(0);
-            let start_byte = use_decls
-                .iter()
-                .map(tree_sitter::Node::start_byte)
-                .min()
-                .unwrap_or(0);
-            let end_byte = use_decls
-                .iter()
-                .map(tree_sitter::Node::end_byte)
-                .max()
-                .unwrap_or(0);
-
-            // Collect all use declaration content
-            let content: String = use_decls
-                .iter()
-                .filter_map(|n| n.utf8_text(source_bytes).ok())
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            chunks.push(Chunk {
-                id: 0,
-                file_id,
-                start_line: start_line as u32 + 1,
-                end_line: end_line as u32 + 1,
-                start_byte: start_byte as u32,
-                end_byte: end_byte as u32,
-                kind: ChunkKind::Other("imports".into()),
-                ident: "_imports".to_string(),
-                parent: None,
-                signature: None,
-                visibility: None,
-                ui_ctx: None,
-                doc_comment: None,
-                attributes: None,
-                content,
-            });
-        }
-
-        chunks
-    }
-
-    fn extract_refs_from_tree(
-        &self,
-        tree: &Tree,
-        source_bytes: &[u8],
-        chunks: &[Chunk],
-    ) -> Vec<Reference> {
-        let mut refs = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&self.ref_query, tree.root_node(), source_bytes);
-
-        while let Some(m) = matches.next() {
-            for cap in m.captures {
-                let cap_name = &self.ref_query.capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
-                let pos = cap.node.start_position();
-
-                let ref_kind = match *cap_name {
-                    "call_name" | "scoped_call" => RefKind::Call,
-                    "method_call" => RefKind::Call,
-                    "use_name" | "use_path" | "use_as_path" | "use_list_item"
-                    | "use_list_scoped" | "use_group_path" | "use_simple" => RefKind::Import,
-                    "type_ref" => RefKind::TypeUse,
-                    _ => continue,
-                };
-
-                let line = pos.row as u32 + 1;
-                let chunk_id = chunks
-                    .iter()
-                    .find(|c| line >= c.start_line && line <= c.end_line)
-                    .map_or(0, |c| c.id);
-
-                refs.push(Reference {
-                    id: 0,
-                    chunk_id,
-                    target_ident: text,
-                    ref_kind,
-                    line,
-                    col: pos.column as u32,
-                });
-            }
-        }
-
-        refs
-    }
 }
 
-impl CodeParser for RustParser {
-    fn language(&self) -> &'static str {
+impl LanguageConfig for RustConfig {
+    fn language(&self) -> &Language {
+        &self.language
+    }
+
+    fn chunk_query(&self) -> &Query {
+        &self.chunk_query
+    }
+
+    fn ref_query(&self) -> &Query {
+        &self.ref_query
+    }
+
+    fn language_name(&self) -> &'static str {
         "rust"
     }
 
-    fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        Ok(self.extract_chunks_from_tree(&tree, source.as_bytes(), file_id))
+    fn import_capture_name(&self) -> &'static str {
+        "use_decl"
     }
 
-    fn extract_refs(&self, source: &str, chunks: &[Chunk]) -> Result<Vec<Reference>> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        Ok(self.extract_refs_from_tree(&tree, source.as_bytes(), chunks))
-    }
-
-    fn parse_chunks_and_refs(
-        &self,
-        source: &str,
-        file_id: i64,
-    ) -> Result<(Vec<Chunk>, Vec<Reference>)> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        let source_bytes = source.as_bytes();
-        let chunks = self.extract_chunks_from_tree(&tree, source_bytes, file_id);
-        let refs = self.extract_refs_from_tree(&tree, source_bytes, &chunks);
-        Ok((chunks, refs))
-    }
-
-    fn validate_syntax(&self, source: &str) -> bool {
-        let mut parser = match self.make_parser() {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-        match parser.parse(source, None) {
-            Some(tree) => !tree.root_node().has_error(),
-            None => false,
+    fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
+        match capture_name {
+            "fn_name" => Some(ChunkCaptureResult {
+                name: text.to_string(),
+                kind: ChunkKind::Function,
+                is_definition_node: false,
+            }),
+            "struct_name" => Some(ChunkCaptureResult {
+                name: text.to_string(),
+                kind: ChunkKind::Struct,
+                is_definition_node: false,
+            }),
+            "enum_name" => Some(ChunkCaptureResult {
+                name: text.to_string(),
+                kind: ChunkKind::Enum,
+                is_definition_node: false,
+            }),
+            "trait_name" => Some(ChunkCaptureResult {
+                name: text.to_string(),
+                kind: ChunkKind::Trait,
+                is_definition_node: false,
+            }),
+            "impl_name" => Some(ChunkCaptureResult {
+                name: text.to_string(),
+                kind: ChunkKind::Impl,
+                is_definition_node: false,
+            }),
+            "const_name" | "static_name" => Some(ChunkCaptureResult {
+                name: text.to_string(),
+                kind: ChunkKind::Constant,
+                is_definition_node: false,
+            }),
+            "mod_name" => Some(ChunkCaptureResult {
+                name: text.to_string(),
+                kind: ChunkKind::Module,
+                is_definition_node: false,
+            }),
+            "macro_name" => Some(ChunkCaptureResult {
+                name: text.to_string(),
+                kind: ChunkKind::Other("macro".into()),
+                is_definition_node: false,
+            }),
+            "type_alias_name" => Some(ChunkCaptureResult {
+                name: text.to_string(),
+                kind: ChunkKind::Other("type_alias".into()),
+                is_definition_node: false,
+            }),
+            "fn_def" | "struct_def" | "enum_def" | "trait_def" | "impl_def" | "const_def"
+            | "static_def" | "mod_def" | "macro_def" | "type_alias_def" => {
+                Some(ChunkCaptureResult {
+                    name: String::new(),
+                    kind: ChunkKind::Other("def".into()),
+                    is_definition_node: true,
+                })
+            }
+            _ => None,
         }
     }
 
-    fn parse_with_quality(
-        &self,
-        source: &str,
-        file_id: i64,
-    ) -> Result<crate::ingest::code::ParseResult> {
-        use crate::ingest::code::{find_error_lines, ParseQuality, ParseResult};
+    fn map_ref_capture(&self, capture_name: &str) -> Option<RefKind> {
+        match capture_name {
+            "call_name" | "scoped_call" | "method_call" => Some(RefKind::Call),
+            "use_name" | "use_path" | "use_as_path" | "use_list_item" | "use_list_scoped"
+            | "use_group_path" | "use_simple" => Some(RefKind::Import),
+            "type_ref" => Some(RefKind::TypeUse),
+            _ => None,
+        }
+    }
 
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        let source_bytes = source.as_bytes();
-        let chunks = self.extract_chunks_from_tree(&tree, source_bytes, file_id);
-        let refs = self.extract_refs_from_tree(&tree, source_bytes, &chunks);
+    fn extract_visibility(&self, content: &str) -> Option<String> {
+        extract_visibility(content)
+    }
 
-        let quality = if tree.root_node().has_error() {
-            let error_lines = find_error_lines(tree.root_node());
-            ParseQuality::Partial {
-                error_count: error_lines.len(),
-                error_lines,
+    fn extract_signature(&self, content: &str, kind: &ChunkKind) -> Option<String> {
+        match kind {
+            ChunkKind::Function => extract_fn_signature(content),
+            ChunkKind::Struct | ChunkKind::Enum | ChunkKind::Trait => {
+                extract_type_signature(content)
             }
-        } else {
-            ParseQuality::Complete
-        };
+            _ => None,
+        }
+    }
 
-        Ok(ParseResult {
-            chunks,
-            refs,
-            quality,
-        })
+    fn find_parent(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        find_parent_impl(node, source)
+    }
+
+    fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        collect_rust_doc_comment(node, source)
+    }
+
+    fn collect_attributes(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        collect_rust_attributes(node, source)
+    }
+
+    fn should_skip_function(&self, kind: &ChunkKind, parent: &Option<String>) -> bool {
+        // Skip functions inside impl blocks - they're captured as methods by post_process_chunks
+        *kind == ChunkKind::Function && parent.is_some()
+    }
+
+    fn post_process_chunks(
+        &self,
+        chunks: &mut Vec<Chunk>,
+        tree: &Tree,
+        source: &[u8],
+        file_id: i64,
+    ) {
+        // Find impl chunks and extract their methods
+        let impl_chunks: Vec<_> = chunks
+            .iter()
+            .filter(|c| c.kind == ChunkKind::Impl)
+            .map(|c| (c.ident.clone(), c.start_byte, c.end_byte))
+            .collect();
+
+        for (impl_name, start_byte, end_byte) in &impl_chunks {
+            // Find the impl node in the tree
+            let root = tree.root_node();
+            if let Some(impl_node) =
+                find_node_at_byte_range(root, *start_byte as usize, *end_byte as usize)
+            {
+                let methods = extract_impl_methods(impl_node, source, file_id, impl_name);
+                chunks.extend(methods);
+            }
+        }
     }
 }
+
+/// Public type alias for the Rust parser.
+pub type RustParser = BaseParser<RustConfig>;
+
+impl Default for RustParser {
+    fn default() -> Self {
+        Self::new(RustConfig::new())
+    }
+}
+
+impl RustParser {
+    /// Create a new Rust parser.
+    #[must_use]
+    pub fn create() -> Self {
+        Self::new(RustConfig::new())
+    }
+}
+
+// =============================================================================
+// Language-specific helpers
+// =============================================================================
 
 fn extract_visibility(content: &str) -> Option<String> {
     let trimmed = content.trim_start();
@@ -404,27 +244,6 @@ fn extract_fn_signature(content: &str) -> Option<String> {
     }
 }
 
-/// Extract signature for struct/enum/trait (the first line before the opening brace).
-fn extract_type_signature(content: &str) -> Option<String> {
-    // For structs/enums/traits, get the line up to the opening brace or first newline
-    if let Some(brace_pos) = content.find('{') {
-        let sig = content[..brace_pos].trim();
-        // Remove trailing where clauses if too long
-        let sig = if let Some(where_pos) = sig.find("\nwhere") {
-            sig[..where_pos].trim()
-        } else {
-            sig
-        };
-        Some(sig.to_string())
-    } else if let Some(semi_pos) = content.find(';') {
-        // Unit struct: `pub struct Foo;`
-        Some(content[..=semi_pos].trim().to_string())
-    } else {
-        // Fallback: first line
-        content.lines().next().map(|s| s.trim().to_string())
-    }
-}
-
 fn find_parent_impl(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let mut current = node.parent();
     while let Some(parent) = current {
@@ -443,6 +262,28 @@ fn find_parent_impl(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
         current = parent.parent();
     }
     None
+}
+
+/// Find a tree-sitter node at the given byte range.
+fn find_node_at_byte_range(
+    root: tree_sitter::Node,
+    start_byte: usize,
+    end_byte: usize,
+) -> Option<tree_sitter::Node> {
+    let mut cursor = root.walk();
+    loop {
+        let node = cursor.node();
+        if node.start_byte() == start_byte && node.end_byte() == end_byte {
+            return Some(node);
+        }
+        if !cursor.goto_first_child() {
+            while !cursor.goto_next_sibling() {
+                if !cursor.goto_parent() {
+                    return None;
+                }
+            }
+        }
+    }
 }
 
 fn extract_impl_methods(
@@ -568,6 +409,8 @@ fn collect_rust_attributes(node: tree_sitter::Node, source: &[u8]) -> Option<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::code::CodeParser;
+    use crate::models::chunk::{ChunkKind, RefKind};
 
     /// Number of parameters to generate for the long-signature stress test.
     const LONG_SIGNATURE_PARAM_COUNT: usize = 50;
@@ -575,7 +418,7 @@ mod tests {
     const VERY_LONG_LINE_LENGTH: usize = 10_000;
 
     fn parser() -> RustParser {
-        RustParser::new()
+        RustParser::create()
     }
 
     #[test]

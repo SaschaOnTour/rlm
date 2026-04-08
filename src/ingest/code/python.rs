@@ -1,8 +1,7 @@
-use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{Language, Query};
 
-use crate::error::{Result, RlmError};
-use crate::ingest::code::CodeParser;
-use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
+use crate::ingest::code::base::{BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
     (function_definition name: (identifier) @fn_name) @fn_def
@@ -21,21 +20,14 @@ const REF_QUERY_SRC: &str = r"
     (type) @type_ref
 ";
 
-pub struct PythonParser {
+pub struct PythonConfig {
     language: Language,
     chunk_query: Query,
     ref_query: Query,
 }
 
-impl Default for PythonParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PythonParser {
-    #[must_use]
-    pub fn new() -> Self {
+impl PythonConfig {
+    fn new() -> Self {
         let language: Language = tree_sitter_python::LANGUAGE.into();
         let chunk_query =
             Query::new(&language, CHUNK_QUERY_SRC).expect("Python chunk query must compile");
@@ -47,295 +39,127 @@ impl PythonParser {
             ref_query,
         }
     }
-
-    fn make_parser(&self) -> Result<Parser> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&self.language)
-            .map_err(|e| RlmError::Parse {
-                path: String::new(),
-                detail: format!("failed to set Python language: {e}"),
-            })?;
-        Ok(parser)
-    }
-
-    fn extract_chunks_from_tree(
-        &self,
-        tree: &Tree,
-        source_bytes: &[u8],
-        file_id: i64,
-    ) -> Vec<Chunk> {
-        let mut chunks = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&self.chunk_query, tree.root_node(), source_bytes);
-
-        // Collect import declarations for an imports chunk
-        let mut import_decls: Vec<tree_sitter::Node> = Vec::new();
-
-        while let Some(m) = matches.next() {
-            let mut name = String::new();
-            let mut kind = ChunkKind::Other("unknown".into());
-            let mut node = tree.root_node();
-            let mut is_import_decl = false;
-
-            for cap in m.captures {
-                let cap_name = &self.chunk_query.capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("");
-
-                match *cap_name {
-                    "fn_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Function;
-                    }
-                    "class_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Class;
-                    }
-                    "fn_def" | "class_def" => {
-                        node = cap.node;
-                    }
-                    "import_decl" => {
-                        is_import_decl = true;
-                        import_decls.push(cap.node);
-                    }
-                    _ => {}
-                }
-            }
-
-            // Skip import declarations - we'll create a single imports chunk
-            if is_import_decl {
-                continue;
-            }
-
-            if name.is_empty() {
-                continue;
-            }
-
-            let content = node.utf8_text(source_bytes).unwrap_or("").to_string();
-            let start = node.start_position();
-            let end = node.end_position();
-
-            // Check if method (inside a class) vs function
-            let parent = find_python_parent(node, source_bytes);
-            if parent.is_some() && kind == ChunkKind::Function {
-                kind = ChunkKind::Method;
-            }
-
-            // Python visibility: _private, __dunder__, public
-            let visibility = if name.starts_with("__") && name.ends_with("__") {
-                Some("dunder".into())
-            } else if name.starts_with('_') {
-                Some("private".into())
-            } else {
-                Some("public".into())
-            };
-
-            let signature = match kind {
-                ChunkKind::Function | ChunkKind::Method => content
-                    .find(':')
-                    .map(|pos| content[..pos].trim().to_string()),
-                ChunkKind::Class => extract_python_class_signature(&content),
-                _ => None,
-            };
-
-            chunks.push(Chunk {
-                id: 0,
-                file_id,
-                start_line: start.row as u32 + 1,
-                end_line: end.row as u32 + 1,
-                start_byte: node.start_byte() as u32,
-                end_byte: node.end_byte() as u32,
-                kind,
-                ident: name,
-                parent,
-                signature,
-                visibility,
-                ui_ctx: None,
-                doc_comment: collect_python_docstring(node, source_bytes)
-                    .or_else(|| collect_python_comment(node, source_bytes)),
-                attributes: collect_python_decorators(node, source_bytes),
-                content,
-            });
-        }
-
-        // Create an imports chunk if there are import declarations
-        if !import_decls.is_empty() {
-            let start_line = import_decls
-                .iter()
-                .map(|n| n.start_position().row)
-                .min()
-                .unwrap_or(0);
-            let end_line = import_decls
-                .iter()
-                .map(|n| n.end_position().row)
-                .max()
-                .unwrap_or(0);
-            let start_byte = import_decls
-                .iter()
-                .map(tree_sitter::Node::start_byte)
-                .min()
-                .unwrap_or(0);
-            let end_byte = import_decls
-                .iter()
-                .map(tree_sitter::Node::end_byte)
-                .max()
-                .unwrap_or(0);
-
-            let content: String = import_decls
-                .iter()
-                .filter_map(|n| n.utf8_text(source_bytes).ok())
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            chunks.push(Chunk {
-                id: 0,
-                file_id,
-                start_line: start_line as u32 + 1,
-                end_line: end_line as u32 + 1,
-                start_byte: start_byte as u32,
-                end_byte: end_byte as u32,
-                kind: ChunkKind::Other("imports".into()),
-                ident: "_imports".to_string(),
-                parent: None,
-                signature: None,
-                visibility: None,
-                ui_ctx: None,
-                doc_comment: None,
-                attributes: None,
-                content,
-            });
-        }
-
-        chunks
-    }
-
-    fn extract_refs_from_tree(
-        &self,
-        tree: &Tree,
-        source_bytes: &[u8],
-        chunks: &[Chunk],
-    ) -> Vec<Reference> {
-        let mut refs = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&self.ref_query, tree.root_node(), source_bytes);
-
-        while let Some(m) = matches.next() {
-            for cap in m.captures {
-                let cap_name = &self.ref_query.capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
-                let pos = cap.node.start_position();
-
-                let ref_kind = match *cap_name {
-                    "call_name" | "method_call" => RefKind::Call,
-                    "import_name" | "import_from_module" | "import_from_name" | "import_alias" => {
-                        RefKind::Import
-                    }
-                    "type_ref" => RefKind::TypeUse,
-                    _ => continue,
-                };
-
-                let line = pos.row as u32 + 1;
-                let chunk_id = chunks
-                    .iter()
-                    .find(|c| line >= c.start_line && line <= c.end_line)
-                    .map_or(0, |c| c.id);
-
-                refs.push(Reference {
-                    id: 0,
-                    chunk_id,
-                    target_ident: text,
-                    ref_kind,
-                    line,
-                    col: pos.column as u32,
-                });
-            }
-        }
-
-        refs
-    }
 }
 
-impl CodeParser for PythonParser {
-    fn language(&self) -> &'static str {
+impl LanguageConfig for PythonConfig {
+    fn language(&self) -> &Language {
+        &self.language
+    }
+
+    fn chunk_query(&self) -> &Query {
+        &self.chunk_query
+    }
+
+    fn ref_query(&self) -> &Query {
+        &self.ref_query
+    }
+
+    fn language_name(&self) -> &'static str {
         "python"
     }
 
-    fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        Ok(self.extract_chunks_from_tree(&tree, source.as_bytes(), file_id))
+    fn import_capture_name(&self) -> &'static str {
+        "import_decl"
     }
 
-    fn extract_refs(&self, source: &str, chunks: &[Chunk]) -> Result<Vec<Reference>> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        Ok(self.extract_refs_from_tree(&tree, source.as_bytes(), chunks))
-    }
-
-    fn parse_chunks_and_refs(
-        &self,
-        source: &str,
-        file_id: i64,
-    ) -> Result<(Vec<Chunk>, Vec<Reference>)> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        let source_bytes = source.as_bytes();
-        let chunks = self.extract_chunks_from_tree(&tree, source_bytes, file_id);
-        let refs = self.extract_refs_from_tree(&tree, source_bytes, &chunks);
-        Ok((chunks, refs))
-    }
-
-    fn validate_syntax(&self, source: &str) -> bool {
-        let mut parser = match self.make_parser() {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-        match parser.parse(source, None) {
-            Some(tree) => !tree.root_node().has_error(),
-            None => false,
+    fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
+        match capture_name {
+            "fn_name" => Some(ChunkCaptureResult {
+                name: text.to_string(),
+                kind: ChunkKind::Function,
+                is_definition_node: false,
+            }),
+            "class_name" => Some(ChunkCaptureResult {
+                name: text.to_string(),
+                kind: ChunkKind::Class,
+                is_definition_node: false,
+            }),
+            "fn_def" | "class_def" => Some(ChunkCaptureResult {
+                name: String::new(),
+                kind: ChunkKind::Other("def".into()),
+                is_definition_node: true,
+            }),
+            _ => None,
         }
     }
 
-    fn parse_with_quality(
-        &self,
-        source: &str,
-        file_id: i64,
-    ) -> Result<crate::ingest::code::ParseResult> {
-        use crate::ingest::code::{find_error_lines, ParseQuality, ParseResult};
-
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        let source_bytes = source.as_bytes();
-        let chunks = self.extract_chunks_from_tree(&tree, source_bytes, file_id);
-        let refs = self.extract_refs_from_tree(&tree, source_bytes, &chunks);
-
-        let quality = if tree.root_node().has_error() {
-            let error_lines = find_error_lines(tree.root_node());
-            ParseQuality::Partial {
-                error_count: error_lines.len(),
-                error_lines,
+    fn map_ref_capture(&self, capture_name: &str) -> Option<RefKind> {
+        match capture_name {
+            "call_name" | "method_call" => Some(RefKind::Call),
+            "import_name" | "import_from_module" | "import_from_name" | "import_alias" => {
+                Some(RefKind::Import)
             }
-        } else {
-            ParseQuality::Complete
-        };
+            "type_ref" => Some(RefKind::TypeUse),
+            _ => None,
+        }
+    }
 
-        Ok(ParseResult {
-            chunks,
-            refs,
-            quality,
-        })
+    fn extract_visibility(&self, _content: &str) -> Option<String> {
+        // Python visibility is based on name, not content.
+        // We handle it in adjust_chunk_metadata instead.
+        // Return a placeholder that will be overwritten.
+        None
+    }
+
+    fn adjust_chunk_metadata(
+        &self,
+        kind: &mut ChunkKind,
+        name: &str,
+        parent: &Option<String>,
+        visibility: &mut Option<String>,
+    ) {
+        // Promote Function to Method when inside a class
+        if parent.is_some() && *kind == ChunkKind::Function {
+            *kind = ChunkKind::Method;
+        }
+
+        // Python visibility: _private, __dunder__, public
+        *visibility = if name.starts_with("__") && name.ends_with("__") {
+            Some("dunder".into())
+        } else if name.starts_with('_') {
+            Some("private".into())
+        } else {
+            Some("public".into())
+        };
+    }
+
+    fn extract_signature(&self, content: &str, kind: &ChunkKind) -> Option<String> {
+        match kind {
+            ChunkKind::Function | ChunkKind::Method => content
+                .find(':')
+                .map(|pos| content[..pos].trim().to_string()),
+            ChunkKind::Class => extract_python_class_signature(content),
+            _ => None,
+        }
+    }
+
+    fn find_parent(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        find_python_parent(node, source)
+    }
+
+    fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        collect_python_docstring(node, source).or_else(|| collect_python_comment(node, source))
+    }
+
+    fn collect_attributes(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        collect_python_decorators(node, source)
+    }
+}
+
+/// Public type alias for the Python parser.
+pub type PythonParser = BaseParser<PythonConfig>;
+
+impl Default for PythonParser {
+    fn default() -> Self {
+        Self::new(PythonConfig::new())
+    }
+}
+
+impl PythonParser {
+    /// Create a new Python parser.
+    #[must_use]
+    pub fn create() -> Self {
+        Self::new(PythonConfig::new())
     }
 }
 
@@ -448,9 +272,11 @@ fn collect_python_comment(node: tree_sitter::Node, source: &[u8]) -> Option<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::code::CodeParser;
+    use crate::models::chunk::{ChunkKind, RefKind};
 
     fn parser() -> PythonParser {
-        PythonParser::new()
+        PythonParser::create()
     }
 
     #[test]
