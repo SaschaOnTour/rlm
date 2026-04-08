@@ -1,6 +1,9 @@
 use tree_sitter::{Language, Query, Tree};
 
-use crate::ingest::code::base::{extract_type_signature, BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{
+    build_language_config, collect_prev_siblings, collect_prev_siblings_filtered_skip,
+    extract_type_signature, find_parent_by_kind, BaseParser, ChunkCaptureResult, LanguageConfig,
+};
 use crate::models::chunk::{Chunk, ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
@@ -39,10 +42,12 @@ pub struct RustConfig {
 
 impl RustConfig {
     fn new() -> Self {
-        let language: Language = tree_sitter_rust::LANGUAGE.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("Rust chunk query must compile");
-        let ref_query = Query::new(&language, REF_QUERY_SRC).expect("Rust ref query must compile");
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_rust::LANGUAGE.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "Rust",
+        );
         Self {
             language,
             chunk_query,
@@ -74,58 +79,25 @@ impl LanguageConfig for RustConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Function,
-                is_definition_node: false,
-            }),
-            "struct_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Struct,
-                is_definition_node: false,
-            }),
-            "enum_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Enum,
-                is_definition_node: false,
-            }),
-            "trait_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Trait,
-                is_definition_node: false,
-            }),
-            "impl_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Impl,
-                is_definition_node: false,
-            }),
-            "const_name" | "static_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Constant,
-                is_definition_node: false,
-            }),
-            "mod_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Module,
-                is_definition_node: false,
-            }),
-            "macro_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Other("macro".into()),
-                is_definition_node: false,
-            }),
-            "type_alias_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Other("type_alias".into()),
-                is_definition_node: false,
-            }),
+            "fn_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function)),
+            "struct_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Struct)),
+            "enum_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Enum)),
+            "trait_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Trait)),
+            "impl_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Impl)),
+            "const_name" | "static_name" => {
+                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Constant))
+            }
+            "mod_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Module)),
+            "macro_name" => {
+                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Other("macro".into())))
+            }
+            "type_alias_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Other("type_alias".into()),
+            )),
             "fn_def" | "struct_def" | "enum_def" | "trait_def" | "impl_def" | "const_def"
             | "static_def" | "mod_def" | "macro_def" | "type_alias_def" => {
-                Some(ChunkCaptureResult {
-                    name: String::new(),
-                    kind: ChunkKind::Other("def".into()),
-                    is_definition_node: true,
-                })
+                Some(ChunkCaptureResult::definition())
             }
             _ => None,
         }
@@ -142,7 +114,7 @@ impl LanguageConfig for RustConfig {
     }
 
     fn extract_visibility(&self, content: &str) -> Option<String> {
-        extract_visibility(content)
+        extract_rust_visibility(content)
     }
 
     fn extract_signature(&self, content: &str, kind: &ChunkKind) -> Option<String> {
@@ -156,15 +128,29 @@ impl LanguageConfig for RustConfig {
     }
 
     fn find_parent(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        find_parent_impl(node, source)
+        find_parent_by_kind(node, source, &["impl_item"], "type_identifier")
     }
 
     fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_rust_doc_comment(node, source)
+        collect_prev_siblings(
+            node,
+            source,
+            &["line_comment"],
+            &["attribute_item"],
+            &["///", "//!"],
+            true,
+        )
     }
 
     fn collect_attributes(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_rust_attributes(node, source)
+        collect_prev_siblings_filtered_skip(
+            node,
+            source,
+            &["attribute_item"],
+            &["line_comment"],
+            &["///", "//!"],
+            true,
+        )
     }
 
     fn should_skip_function(&self, kind: &ChunkKind, parent: &Option<String>) -> bool {
@@ -220,7 +206,7 @@ impl RustParser {
 // Language-specific helpers
 // =============================================================================
 
-fn extract_visibility(content: &str) -> Option<String> {
+fn extract_rust_visibility(content: &str) -> Option<String> {
     let trimmed = content.trim_start();
     if trimmed.starts_with("pub(crate)") {
         Some("pub(crate)".into())
@@ -242,26 +228,6 @@ fn extract_fn_signature(content: &str) -> Option<String> {
             .find(';')
             .map(|semi_pos| content[..semi_pos].trim().to_string())
     }
-}
-
-fn find_parent_impl(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if parent.kind() == "impl_item" {
-            for i in 0..parent.child_count() {
-                if let Some(child) = parent.child(i as u32) {
-                    if child.kind() == "type_identifier" {
-                        return child
-                            .utf8_text(source)
-                            .ok()
-                            .map(std::string::ToString::to_string);
-                    }
-                }
-            }
-        }
-        current = parent.parent();
-    }
-    None
 }
 
 /// Find a tree-sitter node at the given byte range.
@@ -326,8 +292,22 @@ fn extract_impl_methods(
                     let start = item.start_position();
                     let end = item.end_position();
 
-                    let doc_comment = collect_rust_doc_comment(item, source);
-                    let attributes = collect_rust_attributes(item, source);
+                    let doc_comment = collect_prev_siblings(
+                        item,
+                        source,
+                        &["line_comment"],
+                        &["attribute_item"],
+                        &["///", "//!"],
+                        true,
+                    );
+                    let attributes = collect_prev_siblings_filtered_skip(
+                        item,
+                        source,
+                        &["attribute_item"],
+                        &["line_comment"],
+                        &["///", "//!"],
+                        true,
+                    );
 
                     methods.push(Chunk {
                         id: 0,
@@ -340,7 +320,7 @@ fn extract_impl_methods(
                         ident: fn_name,
                         parent: Some(impl_name.to_string()),
                         signature: extract_fn_signature(&content),
-                        visibility: extract_visibility(&content),
+                        visibility: extract_rust_visibility(&content),
                         ui_ctx: None,
                         doc_comment,
                         attributes,
@@ -352,58 +332,6 @@ fn extract_impl_methods(
     }
 
     methods
-}
-
-fn collect_rust_doc_comment(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut lines = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == "attribute_item" {
-            current = sib.prev_sibling();
-            continue;
-        }
-        if sib.kind() == "line_comment" {
-            let text = sib.utf8_text(source).unwrap_or("");
-            if text.starts_with("///") || text.starts_with("//!") {
-                lines.push(text.to_string());
-                current = sib.prev_sibling();
-                continue;
-            }
-        }
-        break;
-    }
-    lines.reverse();
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    }
-}
-
-fn collect_rust_attributes(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut attrs = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == "attribute_item" {
-            attrs.push(sib.utf8_text(source).unwrap_or("").to_string());
-            current = sib.prev_sibling();
-            continue;
-        }
-        if sib.kind() == "line_comment" {
-            let text = sib.utf8_text(source).unwrap_or("");
-            if text.starts_with("///") || text.starts_with("//!") {
-                current = sib.prev_sibling();
-                continue;
-            }
-        }
-        break;
-    }
-    attrs.reverse();
-    if attrs.is_empty() {
-        None
-    } else {
-        Some(attrs.join("\n"))
-    }
 }
 
 #[cfg(test)]

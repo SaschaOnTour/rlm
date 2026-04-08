@@ -1,6 +1,9 @@
 use tree_sitter::{Language, Query};
 
-use crate::ingest::code::base::{BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{
+    build_language_config, extract_type_signature_to_colon, find_parent_by_kind, BaseParser,
+    ChunkCaptureResult, LanguageConfig,
+};
 use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
@@ -28,16 +31,13 @@ pub struct PythonConfig {
 
 impl PythonConfig {
     fn new() -> Self {
-        let language: Language = tree_sitter_python::LANGUAGE.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("Python chunk query must compile");
-        let ref_query =
-            Query::new(&language, REF_QUERY_SRC).expect("Python ref query must compile");
-        Self {
-            language,
-            chunk_query,
-            ref_query,
-        }
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_python::LANGUAGE.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "Python",
+        );
+        Self { language, chunk_query, ref_query }
     }
 }
 
@@ -64,21 +64,9 @@ impl LanguageConfig for PythonConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Function,
-                is_definition_node: false,
-            }),
-            "class_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Class,
-                is_definition_node: false,
-            }),
-            "fn_def" | "class_def" => Some(ChunkCaptureResult {
-                name: String::new(),
-                kind: ChunkKind::Other("def".into()),
-                is_definition_node: true,
-            }),
+            "fn_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function)),
+            "class_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class)),
+            "fn_def" | "class_def" => Some(ChunkCaptureResult::definition()),
             _ => None,
         }
     }
@@ -128,13 +116,13 @@ impl LanguageConfig for PythonConfig {
             ChunkKind::Function | ChunkKind::Method => content
                 .find(':')
                 .map(|pos| content[..pos].trim().to_string()),
-            ChunkKind::Class => extract_python_class_signature(content),
+            ChunkKind::Class => extract_type_signature_to_colon(content),
             _ => None,
         }
     }
 
     fn find_parent(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        find_python_parent(node, source)
+        find_parent_by_kind(node, source, &["class_definition"], "identifier")
     }
 
     fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
@@ -160,37 +148,6 @@ impl PythonParser {
     #[must_use]
     pub fn create() -> Self {
         Self::new(PythonConfig::new())
-    }
-}
-
-fn find_python_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if parent.kind() == "class_definition" {
-            for i in 0..parent.child_count() {
-                if let Some(child) = parent.child(i as u32) {
-                    if child.kind() == "identifier" {
-                        return child
-                            .utf8_text(source)
-                            .ok()
-                            .map(std::string::ToString::to_string);
-                    }
-                }
-            }
-        }
-        current = parent.parent();
-    }
-    None
-}
-
-/// Extract signature for Python class definitions.
-fn extract_python_class_signature(content: &str) -> Option<String> {
-    // Python class: class Name(Base1, Base2):
-    if let Some(colon_pos) = content.find(':') {
-        let sig = content[..colon_pos].trim();
-        Some(sig.to_string())
-    } else {
-        content.lines().next().map(|s| s.trim().to_string())
     }
 }
 

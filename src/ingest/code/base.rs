@@ -7,6 +7,22 @@ use std::collections::HashSet;
 
 use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
+/// Build the (Language, chunk Query, ref Query) triple shared by every parser config.
+///
+/// Panics with a descriptive message if either query fails to compile.
+pub fn build_language_config(
+    language: Language,
+    chunk_query_src: &str,
+    ref_query_src: &str,
+    lang_name: &str,
+) -> (Language, Query, Query) {
+    let chunk_query = Query::new(&language, chunk_query_src)
+        .unwrap_or_else(|e| panic!("{lang_name} chunk query must compile: {e}"));
+    let ref_query = Query::new(&language, ref_query_src)
+        .unwrap_or_else(|e| panic!("{lang_name} ref query must compile: {e}"));
+    (language, chunk_query, ref_query)
+}
+
 use crate::error::{Result, RlmError};
 use crate::ingest::code::{find_error_lines, CodeParser, ParseQuality, ParseResult};
 use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
@@ -142,6 +158,35 @@ pub struct ChunkCaptureResult {
     pub is_definition_node: bool,
 }
 
+impl ChunkCaptureResult {
+    /// Create a named capture result (not a definition node).
+    pub fn name(name: String, kind: ChunkKind) -> Self {
+        Self {
+            name,
+            kind,
+            is_definition_node: false,
+        }
+    }
+
+    /// Create a definition-node capture result (no name, `ChunkKind::Other("def")`).
+    pub fn definition() -> Self {
+        Self {
+            name: String::new(),
+            kind: ChunkKind::Other("def".into()),
+            is_definition_node: true,
+        }
+    }
+
+    /// Create a named definition-node capture result.
+    pub fn named_definition(name: String, kind: ChunkKind) -> Self {
+        Self {
+            name,
+            kind,
+            is_definition_node: true,
+        }
+    }
+}
+
 /// Generic base parser that uses a `LanguageConfig` to handle parsing.
 pub struct BaseParser<C: LanguageConfig> {
     config: C,
@@ -261,8 +306,6 @@ impl<C: LanguageConfig> BaseParser<C> {
             let attributes = self.config.collect_attributes(node, source_bytes);
 
             chunks.push(Chunk {
-                id: 0,
-                file_id,
                 start_line,
                 end_line: end.row as u32 + 1,
                 start_byte: node.start_byte() as u32,
@@ -276,6 +319,7 @@ impl<C: LanguageConfig> BaseParser<C> {
                 doc_comment,
                 attributes,
                 content,
+                ..Chunk::stub(file_id)
             });
         }
 
@@ -313,21 +357,14 @@ impl<C: LanguageConfig> BaseParser<C> {
                 .join("\n");
 
             chunks.push(Chunk {
-                id: 0,
-                file_id,
                 start_line: start_line as u32 + 1,
                 end_line: end_line as u32 + 1,
                 start_byte: start_byte as u32,
                 end_byte: end_byte as u32,
                 kind: ChunkKind::Other("imports".into()),
                 ident: "_imports".to_string(),
-                parent: None,
-                signature: None,
-                visibility: None,
-                ui_ctx: None,
-                doc_comment: None,
-                attributes: None,
                 content,
+                ..Chunk::stub(file_id)
             });
         }
 
@@ -480,6 +517,203 @@ pub fn extract_type_signature(content: &str) -> Option<String> {
         // Fallback: first line
         content.lines().next().map(|s| s.trim().to_string())
     }
+}
+
+/// Extract type signature up to the given `delimiter`, or fall back to the first line.
+///
+/// Used by C#, Go, Java, and PHP (delimiter `'{'`) and Python (delimiter `':'`).
+#[must_use]
+pub fn extract_type_signature_to(content: &str, delimiter: char) -> Option<String> {
+    if let Some(pos) = content.find(delimiter) {
+        let sig = content[..pos].trim();
+        Some(sig.to_string())
+    } else {
+        content.lines().next().map(|s| s.trim().to_string())
+    }
+}
+
+/// Convenience wrapper: extract type signature up to `{`.
+#[must_use]
+pub fn extract_type_signature_to_brace(content: &str) -> Option<String> {
+    extract_type_signature_to(content, '{')
+}
+
+/// Convenience wrapper: extract type signature up to `:`.
+#[must_use]
+pub fn extract_type_signature_to_colon(content: &str) -> Option<String> {
+    extract_type_signature_to(content, ':')
+}
+
+/// Extract keyword-based visibility from content.
+///
+/// Scans for common visibility keywords at the start of the content.
+/// `default_visibility` is returned when no keyword matches (language-dependent).
+/// `extra_keywords` allows adding language-specific keywords like `"internal"` for C#.
+#[must_use]
+pub fn extract_keyword_visibility(
+    content: &str,
+    default_visibility: &str,
+    extra_keywords: &[(&str, &str)],
+) -> Option<String> {
+    let trimmed = content.trim_start();
+    // Check extra keywords first (they may be more specific, e.g. "pub(crate)" before "pub")
+    for &(keyword, value) in extra_keywords {
+        if trimmed.starts_with(keyword) {
+            return Some(value.into());
+        }
+    }
+    if trimmed.starts_with("public") {
+        Some("public".into())
+    } else if trimmed.starts_with("protected") {
+        Some("protected".into())
+    } else if trimmed.starts_with("private") {
+        Some("private".into())
+    } else {
+        Some(default_visibility.into())
+    }
+}
+
+/// Walk up the tree-sitter tree to find a parent node matching one of `parent_kinds`,
+/// then extract the identifier from its child matching `ident_kind`.
+///
+/// Used by C#, Java, PHP, Python, and Rust to find enclosing class/struct/impl names.
+#[must_use]
+pub fn find_parent_by_kind(
+    node: tree_sitter::Node,
+    source: &[u8],
+    parent_kinds: &[&str],
+    ident_kind: &str,
+) -> Option<String> {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent_kinds.contains(&parent.kind()) {
+            for i in 0..parent.child_count() {
+                if let Some(child) = parent.child(i as u32) {
+                    if child.kind() == ident_kind {
+                        return child
+                            .utf8_text(source)
+                            .ok()
+                            .map(std::string::ToString::to_string);
+                    }
+                }
+            }
+        }
+        current = parent.parent();
+    }
+    None
+}
+
+/// Controls where prefix-based filtering is applied in [`collect_prev_siblings_core`].
+pub enum PrefixFilter<'a> {
+    /// Filter on `collect_kinds`: only collect nodes whose text matches a prefix.
+    /// A matching kind that fails the prefix check **stops** the walk.
+    OnCollect(&'a [&'a str]),
+    /// Filter on `skip_kinds`: only skip nodes whose text matches a prefix.
+    /// A skip-kind node that fails the prefix check **stops** the walk.
+    OnSkip(&'a [&'a str]),
+    /// No prefix filtering at all.
+    None,
+}
+
+/// Walk previous siblings of `node`, collecting text from siblings whose
+/// `kind()` is in `collect_kinds` and skipping over siblings whose `kind()`
+/// is in `skip_kinds`.  Any other sibling kind stops the walk.
+///
+/// `prefix_filter` controls optional prefix-based filtering (see [`PrefixFilter`]).
+///
+/// When `multi` is `true`, all consecutive matching siblings are accumulated
+/// (e.g. consecutive `///` doc-comment lines).  When `false`, at most one
+/// match is returned (e.g. a single `/** ... */` block).
+///
+/// Results are returned in source order (reversed from walk order).
+#[must_use]
+fn collect_prev_siblings_core(
+    node: tree_sitter::Node,
+    source: &[u8],
+    collect_kinds: &[&str],
+    skip_kinds: &[&str],
+    prefix_filter: &PrefixFilter<'_>,
+    multi: bool,
+) -> Option<String> {
+    let mut items = Vec::new();
+    let mut current = node.prev_sibling();
+    while let Some(sib) = current {
+        let kind = sib.kind();
+        if collect_kinds.contains(&kind) {
+            let text = sib.utf8_text(source).unwrap_or("");
+            if let PrefixFilter::OnCollect(prefixes) = prefix_filter {
+                if !prefixes.is_empty() && !prefixes.iter().any(|p| text.starts_with(p)) {
+                    break;
+                }
+            }
+            items.push(text.to_string());
+            if !multi {
+                break;
+            }
+            current = sib.prev_sibling();
+            continue;
+        }
+        if skip_kinds.contains(&kind) {
+            if let PrefixFilter::OnSkip(prefixes) = prefix_filter {
+                let text = sib.utf8_text(source).unwrap_or("");
+                if !prefixes.iter().any(|p| text.starts_with(p)) {
+                    break;
+                }
+            }
+            current = sib.prev_sibling();
+            continue;
+        }
+        break;
+    }
+    items.reverse();
+    if items.is_empty() {
+        None
+    } else {
+        Some(items.join("\n"))
+    }
+}
+
+/// Walk previous siblings, collecting nodes in `collect_kinds` and skipping
+/// nodes in `skip_kinds`.  When `prefixes` is non-empty, only collected nodes
+/// whose text starts with one of the prefixes are kept; a match that fails the
+/// prefix check stops the walk.
+#[must_use]
+pub fn collect_prev_siblings(
+    node: tree_sitter::Node,
+    source: &[u8],
+    collect_kinds: &[&str],
+    skip_kinds: &[&str],
+    prefixes: &[&str],
+    multi: bool,
+) -> Option<String> {
+    let filter = if prefixes.is_empty() {
+        PrefixFilter::None
+    } else {
+        PrefixFilter::OnCollect(prefixes)
+    };
+    collect_prev_siblings_core(node, source, collect_kinds, skip_kinds, &filter, multi)
+}
+
+/// Like [`collect_prev_siblings`] but skips nodes in `skip_kinds` **only**
+/// when their text starts with one of `skip_prefixes`.  If a node matches
+/// `skip_kinds` but fails the prefix check the walk stops.
+#[must_use]
+pub fn collect_prev_siblings_filtered_skip(
+    node: tree_sitter::Node,
+    source: &[u8],
+    collect_kinds: &[&str],
+    skip_kinds: &[&str],
+    skip_prefixes: &[&str],
+    multi: bool,
+) -> Option<String> {
+    collect_prev_siblings_core(
+        node,
+        source,
+        collect_kinds,
+        skip_kinds,
+        &PrefixFilter::OnSkip(skip_prefixes),
+        multi,
+    )
 }
 
 #[cfg(test)]

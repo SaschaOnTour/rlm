@@ -26,10 +26,7 @@ impl Database {
         let lang_rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;
-        let mut langs = Vec::new();
-        for r in lang_rows {
-            langs.push(r?);
-        }
+        let langs: Vec<_> = lang_rows.collect::<std::result::Result<Vec<_>, _>>()?;
 
         let oldest_indexed: Option<String> = self
             .conn()

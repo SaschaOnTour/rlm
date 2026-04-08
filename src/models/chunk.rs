@@ -20,6 +20,7 @@ pub enum ChunkKind {
 
 impl ChunkKind {
     #[must_use]
+    // qual:allow(dry) reason: "inverse of parse — same match arms but opposite direction (serialize vs deserialize)"
     pub fn as_str(&self) -> &str {
         match self {
             Self::Function => "fn",
@@ -39,6 +40,7 @@ impl ChunkKind {
     }
 
     #[must_use]
+    // qual:allow(dry) reason: "inverse of as_str — same match arms but opposite direction (deserialize vs serialize)"
     pub fn parse(s: &str) -> Self {
         match s {
             "fn" => Self::Function,
@@ -96,6 +98,32 @@ pub struct Chunk {
 }
 
 impl Chunk {
+    /// Create a stub chunk with common defaults for the given `file_id`.
+    ///
+    /// All positional fields are zeroed, optional fields are `None`, and
+    /// strings are empty.  Callers override what they need via struct update syntax:
+    /// `Chunk { kind, ident, content, ..Chunk::stub(file_id) }`.
+    #[must_use]
+    pub fn stub(file_id: i64) -> Self {
+        Self {
+            id: 0,
+            file_id,
+            start_line: 0,
+            end_line: 0,
+            start_byte: 0,
+            end_byte: 0,
+            kind: ChunkKind::Other(String::new()),
+            ident: String::new(),
+            parent: None,
+            signature: None,
+            visibility: None,
+            ui_ctx: None,
+            doc_comment: None,
+            attributes: None,
+            content: String::new(),
+        }
+    }
+
     #[must_use]
     pub fn line_count(&self) -> u32 {
         self.end_line.saturating_sub(self.start_line) + 1

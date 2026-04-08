@@ -6,20 +6,11 @@
 //! - Arrays of tables
 //! - Special handling for Cargo.toml, pyproject.toml patterns
 
-use toml::{Table, Value};
+use toml::Table;
 
 use crate::error::Result;
-use crate::ingest::text::TextParser;
+use crate::ingest::text::{create_fallback_chunk, extract_structured_chunks, value_preview_string, TextParser};
 use crate::models::chunk::{Chunk, ChunkKind};
-
-/// Maximum nesting depth for recursive TOML chunk extraction.
-const MAX_NESTING_DEPTH: usize = 3;
-/// Maximum string length before truncation in TOML value previews.
-const MAX_PREVIEW_LENGTH: usize = 100;
-/// Maximum number of array items shown in a TOML value preview.
-const ARRAY_PREVIEW_ITEMS: usize = 5;
-/// Maximum number of table keys shown in a TOML value preview.
-const OBJECT_PREVIEW_KEYS: usize = 5;
 
 pub struct TomlParser;
 
@@ -44,129 +35,58 @@ impl TextParser for TomlParser {
     fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
         let mut chunks = Vec::new();
 
-        // Parse the TOML document into a Table (toml 0.9 changed Value::from_str to parse single values only)
+        // Parse the TOML document into a Table
         let table: Table = match toml::from_str(source) {
             Ok(t) => t,
             Err(_) => {
-                // If parsing fails, create a single chunk for the whole file
-                return Ok(vec![create_fallback_chunk(source, file_id)]);
+                return Ok(vec![create_fallback_chunk(source, file_id, "toml")]);
             }
         };
 
-        // Convert Table to Value::Table for extraction
-        let value = Value::Table(table);
+        // Convert TOML Table -> serde_json::Value for shared extraction
+        let json_value = toml_table_to_json(&table);
 
-        // Extract chunks from the parsed TOML
-        extract_toml_chunks(&value, "", source, file_id, &mut chunks, 0);
+        extract_structured_chunks(
+            &json_value, "", source, file_id, &mut chunks, 0,
+            &determine_toml_kind,
+            &|key, val| format!("{} = {}", key, toml_json_type_name(val)),
+            &find_toml_key_lines,
+            &|v, indent| value_preview_string(v, indent, false, " = "),
+            &is_important_toml_key,
+        );
 
-        // If no chunks were created, create a fallback
         if chunks.is_empty() {
-            chunks.push(create_fallback_chunk(source, file_id));
+            chunks.push(create_fallback_chunk(source, file_id, "toml"));
         }
 
         Ok(chunks)
     }
 }
 
-fn create_fallback_chunk(source: &str, file_id: i64) -> Chunk {
-    let line_count = source.lines().count() as u32;
-    Chunk {
-        id: 0,
-        file_id,
-        start_line: 1,
-        end_line: line_count.max(1),
-        start_byte: 0,
-        end_byte: source.len() as u32,
-        kind: ChunkKind::Other("toml".into()),
-        ident: "_root".to_string(),
-        parent: None,
-        signature: None,
-        visibility: None,
-        ui_ctx: None,
-        doc_comment: None,
-        attributes: None,
-        content: source.to_string(),
-    }
+/// Convert a TOML `Table` to a `serde_json::Value::Object` for shared extraction.
+fn toml_table_to_json(table: &Table) -> serde_json::Value {
+    let map: serde_json::Map<String, serde_json::Value> = table
+        .iter()
+        .map(|(k, v)| (k.clone(), toml_val_to_json(v)))
+        .collect();
+    serde_json::Value::Object(map)
 }
 
-fn extract_toml_chunks(
-    value: &Value,
-    path: &str,
-    source: &str,
-    file_id: i64,
-    chunks: &mut Vec<Chunk>,
-    depth: usize,
-) {
-    // Limit depth to avoid excessive chunking
-    if depth > MAX_NESTING_DEPTH {
-        return;
-    }
-
-    if let Value::Table(table) = value {
-        for (key, val) in table {
-            let full_path = if path.is_empty() {
-                key.clone()
-            } else {
-                format!("{path}.{key}")
-            };
-
-            // Determine chunk kind based on key name
-            let kind = determine_toml_kind(key, val);
-
-            // Find line range for this key/table
-            let (start_line, end_line) = find_toml_key_lines(source, key, &full_path);
-
-            // Create content representation
-            let content = toml_value_to_string(val, 0);
-
-            // Create chunk for tables and important keys
-            let should_chunk = matches!(val, Value::Table(_) | Value::Array(_))
-                || depth < 2
-                || is_important_toml_key(key);
-
-            if should_chunk {
-                chunks.push(Chunk {
-                    id: 0,
-                    file_id,
-                    start_line,
-                    end_line,
-                    start_byte: 0,
-                    end_byte: 0,
-                    kind: kind.clone(),
-                    ident: full_path.clone(),
-                    parent: if path.is_empty() {
-                        None
-                    } else {
-                        Some(path.to_string())
-                    },
-                    signature: Some(format!("{} = {}", key, toml_type_name(val))),
-                    visibility: None,
-                    ui_ctx: None,
-                    doc_comment: None,
-                    attributes: None,
-                    content,
-                });
-            }
-
-            // Recurse into nested tables
-            if matches!(val, Value::Table(_)) {
-                extract_toml_chunks(val, &full_path, source, file_id, chunks, depth + 1);
-            }
-
-            // Handle arrays of tables
-            if let Value::Array(arr) = val {
-                for (i, item) in arr.iter().enumerate() {
-                    if matches!(item, Value::Table(_)) {
-                        let item_path = format!("{full_path}[{i}]");
-                        extract_toml_chunks(item, &item_path, source, file_id, chunks, depth + 1);
-                    }
-                }
-            }
+fn toml_val_to_json(val: &toml::Value) -> serde_json::Value {
+    match val {
+        toml::Value::String(s) => serde_json::Value::String(s.clone()),
+        toml::Value::Integer(n) => serde_json::json!(n),
+        toml::Value::Float(f) => serde_json::json!(f),
+        toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
+        toml::Value::Datetime(dt) => serde_json::Value::String(dt.to_string()),
+        toml::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(toml_val_to_json).collect())
         }
+        toml::Value::Table(t) => toml_table_to_json(t),
     }
 }
 
-fn determine_toml_kind(key: &str, value: &Value) -> ChunkKind {
+fn determine_toml_kind(key: &str, value: &serde_json::Value) -> ChunkKind {
     // Special patterns for common TOML file types
     match key.to_lowercase().as_str() {
         // Cargo.toml
@@ -185,13 +105,18 @@ fn determine_toml_kind(key: &str, value: &Value) -> ChunkKind {
         "settings" | "config" | "options" => ChunkKind::Other("config".into()),
         // Default based on value type
         _ => match value {
-            Value::Table(_) => ChunkKind::Other("table".into()),
-            Value::Array(_) => ChunkKind::Other("array".into()),
-            Value::String(_) => ChunkKind::Other("string".into()),
-            Value::Integer(_) => ChunkKind::Other("integer".into()),
-            Value::Float(_) => ChunkKind::Other("float".into()),
-            Value::Boolean(_) => ChunkKind::Other("bool".into()),
-            Value::Datetime(_) => ChunkKind::Other("datetime".into()),
+            serde_json::Value::Object(_) => ChunkKind::Other("table".into()),
+            serde_json::Value::Array(_) => ChunkKind::Other("array".into()),
+            serde_json::Value::String(_) => ChunkKind::Other("string".into()),
+            serde_json::Value::Number(n) => {
+                if n.is_f64() && !n.is_i64() && !n.is_u64() {
+                    ChunkKind::Other("float".into())
+                } else {
+                    ChunkKind::Other("integer".into())
+                }
+            }
+            serde_json::Value::Bool(_) => ChunkKind::Other("bool".into()),
+            serde_json::Value::Null => ChunkKind::Other("string".into()), // datetime -> string in JSON
         },
     }
 }
@@ -271,60 +196,20 @@ fn find_toml_key_lines(source: &str, key: &str, full_path: &str) -> (u32, u32) {
     (start_line, end_line.max(start_line))
 }
 
-fn toml_type_name(value: &Value) -> &'static str {
+fn toml_json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
-        Value::Table(_) => "table",
-        Value::Array(_) => "array",
-        Value::String(_) => "string",
-        Value::Integer(_) => "integer",
-        Value::Float(_) => "float",
-        Value::Boolean(_) => "bool",
-        Value::Datetime(_) => "datetime",
-    }
-}
-
-fn toml_value_to_string(value: &Value, indent: usize) -> String {
-    let prefix = "  ".repeat(indent);
-    match value {
-        Value::String(s) => {
-            if s.len() > MAX_PREVIEW_LENGTH {
-                format!("\"{}...\"", &s[..MAX_PREVIEW_LENGTH - 3])
+        serde_json::Value::Object(_) => "table",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Number(n) => {
+            if n.is_f64() && !n.is_i64() && !n.is_u64() {
+                "float"
             } else {
-                format!("\"{s}\"")
+                "integer"
             }
         }
-        Value::Integer(n) => n.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Boolean(b) => b.to_string(),
-        Value::Datetime(dt) => dt.to_string(),
-        Value::Array(arr) => {
-            if arr.len() > ARRAY_PREVIEW_ITEMS {
-                format!("[...{} items]", arr.len())
-            } else {
-                let items: Vec<String> = arr
-                    .iter()
-                    .map(|v| toml_value_to_string(v, indent + 1))
-                    .collect();
-                format!("[{}]", items.join(", "))
-            }
-        }
-        Value::Table(table) => {
-            if table.len() > OBJECT_PREVIEW_KEYS {
-                format!("{{...{} keys}}", table.len())
-            } else {
-                let items: Vec<String> = table
-                    .iter()
-                    .map(|(k, v)| {
-                        format!("{}{} = {}", prefix, k, toml_value_to_string(v, indent + 1))
-                    })
-                    .collect();
-                format!(
-                    "{{\n{}\n{}}}",
-                    items.join(",\n"),
-                    "  ".repeat(indent.saturating_sub(1))
-                )
-            }
-        }
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Null => "null",
     }
 }
 

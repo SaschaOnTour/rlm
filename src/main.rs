@@ -87,6 +87,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::fmt::Display>> {
 
 type CmdResult = Result<(), Box<dyn std::fmt::Display>>;
 
+fn print_json(json: &str) {
+    println!("{json}");
+}
+
 fn map_err(e: impl std::fmt::Display + 'static) -> Box<dyn std::fmt::Display> {
     Box::new(e.to_string())
 }
@@ -121,7 +125,7 @@ fn cmd_search(query: &str, limit: usize) -> CmdResult {
     let file_count = result.results.len() as u64;
     let alt_tokens = result.tokens.output.max(out_tokens);
     savings::record(&db, "search", out_tokens, alt_tokens, file_count);
-    println!("{json}");
+    print_json(&json);
     Ok(())
 }
 
@@ -162,7 +166,7 @@ fn cmd_read(path: &str, symbol: Option<&str>, section: Option<&str>, metadata: b
             let out_tokens = estimate_tokens(json.len());
             let alt_tokens = savings::alternative_single_file(&db, path).unwrap_or(out_tokens);
             savings::record(&db, "read_symbol", out_tokens, alt_tokens, 1);
-            println!("{json}");
+            print_json(&json);
             return Ok(());
         };
 
@@ -180,7 +184,7 @@ fn cmd_read(path: &str, symbol: Option<&str>, section: Option<&str>, metadata: b
         let out_tokens = estimate_tokens(json.len());
         let alt_tokens = savings::alternative_single_file(&db, path).unwrap_or(out_tokens);
         savings::record(&db, "read_symbol", out_tokens, alt_tokens, 1);
-        println!("{json}");
+        print_json(&json);
     } else if let Some(heading) = section {
         // Read specific markdown section
         let file = db.get_file_by_path(path).map_err(map_err)?;
@@ -193,7 +197,7 @@ fn cmd_read(path: &str, symbol: Option<&str>, section: Option<&str>, metadata: b
                 let out_tokens = estimate_tokens(json.len());
                 let alt_tokens = savings::alternative_single_file(&db, path).unwrap_or(out_tokens);
                 savings::record(&db, "read_section", out_tokens, alt_tokens, 1);
-                println!("{json}");
+                print_json(&json);
             }
             None => return Err(map_err(format!("section not found: {heading}"))),
         }
@@ -213,17 +217,17 @@ fn cmd_overview(detail: &str, path: Option<&str>) -> CmdResult {
         "minimal" => {
             let result = peek::peek(&db, path).map_err(map_err)?;
             let json = savings::record_scoped_op(&db, "overview", &result, path);
-            println!("{json}");
+            print_json(&json);
         }
         "standard" => {
             let entries = operations::build_map(&db, path).map_err(map_err)?;
             let json = savings::record_scoped_op(&db, "overview", &entries, path);
-            println!("{json}");
+            print_json(&json);
         }
         "tree" => {
             let nodes = tree::build_tree(&db, path).map_err(map_err)?;
             let json = savings::record_scoped_op(&db, "overview", &nodes, path);
-            println!("{json}");
+            print_json(&json);
         }
         other => {
             return Err(map_err(format!(
@@ -239,7 +243,7 @@ fn cmd_refs(symbol: &str) -> CmdResult {
     let db = get_db(&config)?;
     let result = operations::analyze_impact(&db, symbol).map_err(map_err)?;
     let json = savings::record_symbol_op(&db, "refs", &result, symbol, result.count as u64);
-    println!("{json}");
+    print_json(&json);
     Ok(())
 }
 
@@ -310,7 +314,7 @@ fn cmd_partition(path: &str, strategy_str: &str) -> CmdResult {
     let result =
         partition::partition_file(&db, path, &strategy, &config.project_root).map_err(map_err)?;
     let json = savings::record_file_op(&db, "partition", &result, path);
-    println!("{json}");
+    print_json(&json);
     Ok(())
 }
 
@@ -329,13 +333,21 @@ fn parse_strategy(s: &str) -> Result<partition::Strategy, Box<dyn std::fmt::Disp
     }
 }
 
-fn cmd_summarize(path: &str) -> CmdResult {
+fn cmd_single_file_op<T: serde::Serialize>(
+    command: &str,
+    path: &str,
+    op: impl FnOnce(&Database, &str) -> rlm::error::Result<T>,
+) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
-    let result = summarize::summarize(&db, path).map_err(map_err)?;
-    let json = savings::record_file_op(&db, "summarize", &result, path);
-    println!("{json}");
+    let result = op(&db, path).map_err(map_err)?;
+    let json = savings::record_file_op(&db, command, &result, path);
+    print_json(&json);
     Ok(())
+}
+
+fn cmd_summarize(path: &str) -> CmdResult {
+    cmd_single_file_op("summarize", path, |db, p| summarize::summarize(db, p))
 }
 
 fn cmd_diff(path: &str, symbol: Option<&str>) -> CmdResult {
@@ -346,11 +358,11 @@ fn cmd_diff(path: &str, symbol: Option<&str>) -> CmdResult {
         let result =
             operations::diff_symbol(&db, path, sym, &config.project_root).map_err(map_err)?;
         let json = savings::record_file_op(&db, "diff", &result, path);
-        println!("{json}");
+        print_json(&json);
     } else {
         let result = operations::diff_file(&db, path, &config.project_root).map_err(map_err)?;
         let json = savings::record_file_op(&db, "diff", &result, path);
-        println!("{json}");
+        print_json(&json);
     }
     Ok(())
 }
@@ -367,30 +379,20 @@ fn cmd_context(symbol: &str, graph: bool) -> CmdResult {
             "callgraph": callgraph,
         });
         let json = savings::record_symbol_op(&db, "context", &combined, symbol, 0);
-        println!("{json}");
+        print_json(&json);
     } else {
         let json = savings::record_symbol_op(&db, "context", &result, symbol, 0);
-        println!("{json}");
+        print_json(&json);
     }
     Ok(())
 }
 
 fn cmd_deps(path: &str) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = operations::get_deps(&db, path).map_err(map_err)?;
-    let json = savings::record_file_op(&db, "deps", &result, path);
-    println!("{json}");
-    Ok(())
+    cmd_single_file_op("deps", path, |db, p| operations::get_deps(db, p))
 }
 
 fn cmd_scope(path: &str, line: u32) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = operations::get_scope(&db, path, line).map_err(map_err)?;
-    let json = savings::record_file_op(&db, "scope", &result, path);
-    println!("{json}");
-    Ok(())
+    cmd_single_file_op("scope", path, |db, p| operations::get_scope(db, p, line))
 }
 
 fn cmd_mcp() -> CmdResult {

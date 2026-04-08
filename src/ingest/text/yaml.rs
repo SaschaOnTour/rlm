@@ -9,7 +9,7 @@
 use serde_yaml::Value;
 
 use crate::error::Result;
-use crate::ingest::text::TextParser;
+use crate::ingest::text::{create_fallback_chunk, TextParser};
 use crate::models::chunk::{Chunk, ChunkKind};
 
 /// Maximum nesting depth for recursive YAML chunk extraction.
@@ -49,7 +49,7 @@ impl TextParser for YamlParser {
             Ok(v) => v,
             Err(_) => {
                 // If parsing fails, create a single chunk for the whole file
-                return Ok(vec![create_fallback_chunk(source, file_id)]);
+                return Ok(vec![create_fallback_chunk(source, file_id, "yaml")]);
             }
         };
 
@@ -58,31 +58,10 @@ impl TextParser for YamlParser {
 
         // If no chunks were created, create a fallback
         if chunks.is_empty() {
-            chunks.push(create_fallback_chunk(source, file_id));
+            chunks.push(create_fallback_chunk(source, file_id, "yaml"));
         }
 
         Ok(chunks)
-    }
-}
-
-fn create_fallback_chunk(source: &str, file_id: i64) -> Chunk {
-    let line_count = source.lines().count() as u32;
-    Chunk {
-        id: 0,
-        file_id,
-        start_line: 1,
-        end_line: line_count.max(1),
-        start_byte: 0,
-        end_byte: source.len() as u32,
-        kind: ChunkKind::Other("yaml".into()),
-        ident: "_root".to_string(),
-        parent: None,
-        signature: None,
-        visibility: None,
-        ui_ctx: None,
-        doc_comment: None,
-        attributes: None,
-        content: source.to_string(),
     }
 }
 

@@ -9,7 +9,9 @@
 
 use tree_sitter::{Language, Query};
 
-use crate::ingest::code::base::{BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{
+    build_language_config, collect_prev_siblings, BaseParser, ChunkCaptureResult, LanguageConfig,
+};
 use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r#"
@@ -84,16 +86,13 @@ pub struct JavaScriptConfig {
 
 impl JavaScriptConfig {
     fn new() -> Self {
-        let language: Language = tree_sitter_javascript::LANGUAGE.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("JavaScript chunk query must compile");
-        let ref_query =
-            Query::new(&language, REF_QUERY_SRC).expect("JavaScript ref query must compile");
-        Self {
-            language,
-            chunk_query,
-            ref_query,
-        }
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_javascript::LANGUAGE.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "JavaScript",
+        );
+        Self { language, chunk_query, ref_query }
     }
 }
 
@@ -128,31 +127,12 @@ impl LanguageConfig for JavaScriptConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" | "gen_fn_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Function,
-                is_definition_node: false,
-            }),
-            "arrow_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Function,
-                is_definition_node: false,
-            }),
-            "class_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Class,
-                is_definition_node: false,
-            }),
-            "method_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Method,
-                is_definition_node: false,
-            }),
-            n if n.ends_with("_def") => Some(ChunkCaptureResult {
-                name: String::new(),
-                kind: ChunkKind::Other("def".into()),
-                is_definition_node: true,
-            }),
+            "fn_name" | "gen_fn_name" | "arrow_name" => {
+                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function))
+            }
+            "class_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class)),
+            "method_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method)),
+            n if n.ends_with("_def") => Some(ChunkCaptureResult::definition()),
             _ => None,
         }
     }
@@ -198,7 +178,7 @@ impl LanguageConfig for JavaScriptConfig {
     }
 
     fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_js_doc_comment(node, source)
+        collect_prev_siblings(node, source, &["comment"], &[], &["/**"], false)
     }
 
     fn collect_attributes(&self, _node: tree_sitter::Node, _source: &[u8]) -> Option<String> {
@@ -278,19 +258,6 @@ fn find_js_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
             }
         }
         current = parent.parent();
-    }
-    None
-}
-
-fn collect_js_doc_comment(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    if let Some(sib) = node.prev_sibling() {
-        if sib.kind() == "comment" {
-            let text = sib.utf8_text(source).unwrap_or("");
-            // JSDoc starts with /**
-            if text.starts_with("/**") {
-                return Some(text.to_string());
-            }
-        }
     }
     None
 }

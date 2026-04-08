@@ -39,6 +39,20 @@ pub struct Partition {
     pub tokens: u64,
 }
 
+impl Partition {
+    /// Create a partition, computing the token estimate from `content`.
+    fn new(index: usize, start_line: u32, end_line: u32, content: String) -> Self {
+        let tokens = estimate_tokens_str(&content);
+        Self {
+            index,
+            start_line,
+            end_line,
+            content,
+            tokens,
+        }
+    }
+}
+
 /// Partition result.
 #[derive(Debug, Clone, Serialize)]
 pub struct PartitionResult {
@@ -86,15 +100,8 @@ fn partition_uniform(source: &str, chunk_size: usize) -> Vec<Partition> {
         let content = chunk.join("\n");
         let start_line = (i * chunk_size) as u32 + 1;
         let end_line = start_line + chunk.len() as u32 - 1;
-        let tokens = estimate_tokens_str(&content);
 
-        partitions.push(Partition {
-            index: i,
-            start_line,
-            end_line,
-            content,
-            tokens,
-        });
+        partitions.push(Partition::new(i, start_line, end_line, content));
     }
 
     partitions
@@ -110,13 +117,7 @@ fn partition_semantic(db: &Database, file_path: &str, source: &str) -> Result<Ve
             return Ok(chunks
                 .iter()
                 .enumerate()
-                .map(|(i, c)| Partition {
-                    index: i,
-                    start_line: c.start_line,
-                    end_line: c.end_line,
-                    content: c.content.clone(),
-                    tokens: estimate_tokens_str(&c.content),
-                })
+                .map(|(i, c)| Partition::new(i, c.start_line, c.end_line, c.content.clone()))
                 .collect());
         }
     }
@@ -140,24 +141,12 @@ fn partition_keyword(source: &str, pattern: &str) -> Result<Vec<Partition>> {
             // Save accumulated non-matching lines as a partition
             if !current_lines.is_empty() {
                 let content = current_lines.join("\n");
-                partitions.push(Partition {
-                    index: partitions.len(),
-                    start_line: start_line + 1,
-                    end_line: i as u32,
-                    content: content.clone(),
-                    tokens: estimate_tokens_str(&content),
-                });
+                partitions.push(Partition::new(partitions.len(), start_line + 1, i as u32, content));
                 current_lines.clear();
             }
             // Add matching line as its own partition
             let content = line.to_string();
-            partitions.push(Partition {
-                index: partitions.len(),
-                start_line: i as u32 + 1,
-                end_line: i as u32 + 1,
-                content: content.clone(),
-                tokens: estimate_tokens_str(&content),
-            });
+            partitions.push(Partition::new(partitions.len(), i as u32 + 1, i as u32 + 1, content));
             start_line = i as u32 + 1;
         } else {
             if current_lines.is_empty() {
@@ -171,13 +160,7 @@ fn partition_keyword(source: &str, pattern: &str) -> Result<Vec<Partition>> {
     if !current_lines.is_empty() {
         let content = current_lines.join("\n");
         let end = start_line + current_lines.len() as u32;
-        partitions.push(Partition {
-            index: partitions.len(),
-            start_line: start_line + 1,
-            end_line: end,
-            content: content.clone(),
-            tokens: estimate_tokens_str(&content),
-        });
+        partitions.push(Partition::new(partitions.len(), start_line + 1, end, content));
     }
 
     Ok(partitions)

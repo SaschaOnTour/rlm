@@ -48,21 +48,13 @@ impl TextParser for MarkdownParser {
             // No headings: treat entire file as one chunk
             if !source.trim().is_empty() {
                 chunks.push(Chunk {
-                    id: 0,
-                    file_id,
                     start_line: 1,
                     end_line: lines.len() as u32,
-                    start_byte: 0,
                     end_byte: source.len() as u32,
                     kind: ChunkKind::Section,
                     ident: "(document)".into(),
-                    parent: None,
-                    signature: None,
-                    visibility: None,
-                    ui_ctx: None,
-                    doc_comment: None,
-                    attributes: None,
                     content: source.to_string(),
+                    ..Chunk::stub(file_id)
                 });
             }
             return Ok(chunks);
@@ -93,8 +85,6 @@ impl TextParser for MarkdownParser {
                 .map(|s| s.heading.clone());
 
             chunks.push(Chunk {
-                id: 0,
-                file_id,
                 start_line: start_line as u32 + 1,
                 end_line: end_line as u32 + 1,
                 start_byte: start_byte as u32,
@@ -102,12 +92,8 @@ impl TextParser for MarkdownParser {
                 kind: ChunkKind::Section,
                 ident: section.heading.clone(),
                 parent,
-                signature: None,
-                visibility: None,
-                ui_ctx: None,
-                doc_comment: None,
-                attributes: None,
                 content,
+                ..Chunk::stub(file_id)
             });
         }
 

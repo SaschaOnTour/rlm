@@ -1,6 +1,9 @@
 use tree_sitter::{Language, Query};
 
-use crate::ingest::code::base::{BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{
+    build_language_config, extract_keyword_visibility, extract_type_signature_to_brace,
+    find_parent_by_kind, BaseParser, ChunkCaptureResult, LanguageConfig,
+};
 use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
@@ -27,15 +30,13 @@ pub struct JavaConfig {
 
 impl JavaConfig {
     fn new() -> Self {
-        let language: Language = tree_sitter_java::LANGUAGE.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("Java chunk query must compile");
-        let ref_query = Query::new(&language, REF_QUERY_SRC).expect("Java ref query must compile");
-        Self {
-            language,
-            chunk_query,
-            ref_query,
-        }
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_java::LANGUAGE.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "Java",
+        );
+        Self { language, chunk_query, ref_query }
     }
 }
 
@@ -66,32 +67,16 @@ impl LanguageConfig for JavaConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "class_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Class,
-                is_definition_node: false,
-            }),
-            "iface_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Interface,
-                is_definition_node: false,
-            }),
-            "enum_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Enum,
-                is_definition_node: false,
-            }),
-            "method_name" | "ctor_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Method,
-                is_definition_node: false,
-            }),
+            "class_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class)),
+            "iface_name" => {
+                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Interface))
+            }
+            "enum_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Enum)),
+            "method_name" | "ctor_name" => {
+                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method))
+            }
             "class_def" | "iface_def" | "enum_def" | "method_def" | "ctor_def" => {
-                Some(ChunkCaptureResult {
-                    name: String::new(),
-                    kind: ChunkKind::Other("def".into()),
-                    is_definition_node: true,
-                })
+                Some(ChunkCaptureResult::definition())
             }
             _ => None,
         }
@@ -107,7 +92,7 @@ impl LanguageConfig for JavaConfig {
     }
 
     fn extract_visibility(&self, content: &str) -> Option<String> {
-        extract_java_visibility(content)
+        extract_keyword_visibility(content, "package", &[])
     }
 
     fn extract_signature(&self, content: &str, kind: &ChunkKind) -> Option<String> {
@@ -116,14 +101,19 @@ impl LanguageConfig for JavaConfig {
                 .find('{')
                 .map(|pos| content[..pos].trim().to_string()),
             ChunkKind::Class | ChunkKind::Interface | ChunkKind::Enum => {
-                extract_java_type_signature(content)
+                extract_type_signature_to_brace(content)
             }
             _ => None,
         }
     }
 
     fn find_parent(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        find_java_parent(node, source)
+        find_parent_by_kind(
+            node,
+            source,
+            &["class_declaration", "interface_declaration"],
+            "identifier",
+        )
     }
 
     fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
@@ -150,49 +140,6 @@ impl JavaParser {
     pub fn create() -> Self {
         Self::new(JavaConfig::new())
     }
-}
-
-fn extract_java_visibility(content: &str) -> Option<String> {
-    let trimmed = content.trim_start();
-    if trimmed.starts_with("public") {
-        Some("public".into())
-    } else if trimmed.starts_with("protected") {
-        Some("protected".into())
-    } else if trimmed.starts_with("private") {
-        Some("private".into())
-    } else {
-        Some("package".into())
-    }
-}
-
-/// Extract signature for Java type declarations (class, interface, enum).
-fn extract_java_type_signature(content: &str) -> Option<String> {
-    if let Some(brace_pos) = content.find('{') {
-        let sig = content[..brace_pos].trim();
-        Some(sig.to_string())
-    } else {
-        content.lines().next().map(|s| s.trim().to_string())
-    }
-}
-
-fn find_java_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if parent.kind() == "class_declaration" || parent.kind() == "interface_declaration" {
-            for i in 0..parent.child_count() {
-                if let Some(child) = parent.child(i as u32) {
-                    if child.kind() == "identifier" {
-                        return child
-                            .utf8_text(source)
-                            .ok()
-                            .map(std::string::ToString::to_string);
-                    }
-                }
-            }
-        }
-        current = parent.parent();
-    }
-    None
 }
 
 fn collect_java_doc_comment(node: tree_sitter::Node, source: &[u8]) -> Option<String> {

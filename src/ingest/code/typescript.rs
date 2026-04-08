@@ -10,7 +10,9 @@
 
 use tree_sitter::{Language, Query};
 
-use crate::ingest::code::base::{BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{
+    build_language_config, collect_prev_siblings, BaseParser, ChunkCaptureResult, LanguageConfig,
+};
 use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
@@ -90,30 +92,25 @@ pub struct TypeScriptConfig {
 
 impl TypeScriptConfig {
     fn new() -> Self {
-        let language: Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("TypeScript chunk query must compile");
-        let ref_query =
-            Query::new(&language, REF_QUERY_SRC).expect("TypeScript ref query must compile");
-        Self {
-            language,
-            chunk_query,
-            ref_query,
-        }
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "TypeScript",
+        );
+        Self { language, chunk_query, ref_query }
     }
 
     fn new_tsx() -> Self {
-        let language: Language = tree_sitter_typescript::LANGUAGE_TSX.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("TSX chunk query must compile");
         // TSX includes JSX elements in refs
         let tsx_ref_query = format!("{REF_QUERY_SRC}\n{TSX_REF_QUERY_ADDITION}");
-        let ref_query = Query::new(&language, &tsx_ref_query).expect("TSX ref query must compile");
-        Self {
-            language,
-            chunk_query,
-            ref_query,
-        }
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_typescript::LANGUAGE_TSX.into(),
+            CHUNK_QUERY_SRC,
+            &tsx_ref_query,
+            "TSX",
+        );
+        Self { language, chunk_query, ref_query }
     }
 }
 
@@ -144,51 +141,25 @@ impl LanguageConfig for TypeScriptConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" | "gen_fn_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Function,
-                is_definition_node: false,
-            }),
-            "arrow_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Function,
-                is_definition_node: false,
-            }),
-            "class_name" | "abs_class_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Class,
-                is_definition_node: false,
-            }),
-            "method_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Method,
-                is_definition_node: false,
-            }),
-            "iface_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Interface,
-                is_definition_node: false,
-            }),
-            "type_alias_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Other("type_alias".into()),
-                is_definition_node: false,
-            }),
-            "enum_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Enum,
-                is_definition_node: false,
-            }),
-            "namespace_name" | "internal_namespace_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Module,
-                is_definition_node: false,
-            }),
-            n if n.ends_with("_def") => Some(ChunkCaptureResult {
-                name: String::new(),
-                kind: ChunkKind::Other("def".into()),
-                is_definition_node: true,
-            }),
+            "fn_name" | "gen_fn_name" | "arrow_name" => {
+                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function))
+            }
+            "class_name" | "abs_class_name" => {
+                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class))
+            }
+            "method_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method)),
+            "iface_name" => {
+                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Interface))
+            }
+            "type_alias_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Other("type_alias".into()),
+            )),
+            "enum_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Enum)),
+            "namespace_name" | "internal_namespace_name" => {
+                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Module))
+            }
+            n if n.ends_with("_def") => Some(ChunkCaptureResult::definition()),
             _ => None,
         }
     }
@@ -234,11 +205,18 @@ impl LanguageConfig for TypeScriptConfig {
     }
 
     fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_ts_doc_comment(node, source)
+        collect_prev_siblings(
+            node,
+            source,
+            &["comment"],
+            &["decorator"],
+            &["/**", "//"],
+            false,
+        )
     }
 
     fn collect_attributes(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_ts_decorators(node, source)
+        collect_prev_siblings(node, source, &["decorator"], &["comment"], &[], true)
     }
 }
 
@@ -348,49 +326,6 @@ fn find_ts_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
         current = parent.parent();
     }
     None
-}
-
-fn collect_ts_doc_comment(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        // Skip decorators when looking for doc comments
-        if sib.kind() == "decorator" {
-            current = sib.prev_sibling();
-            continue;
-        }
-        if sib.kind() == "comment" {
-            let text = sib.utf8_text(source).unwrap_or("");
-            // TSDoc starts with /** or //
-            if text.starts_with("/**") || text.starts_with("//") {
-                return Some(text.to_string());
-            }
-        }
-        break;
-    }
-    None
-}
-
-fn collect_ts_decorators(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut decorators = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == "decorator" {
-            decorators.push(sib.utf8_text(source).unwrap_or("").to_string());
-            current = sib.prev_sibling();
-            continue;
-        }
-        if sib.kind() == "comment" {
-            current = sib.prev_sibling();
-            continue;
-        }
-        break;
-    }
-    decorators.reverse();
-    if decorators.is_empty() {
-        None
-    } else {
-        Some(decorators.join("\n"))
-    }
 }
 
 #[cfg(test)]

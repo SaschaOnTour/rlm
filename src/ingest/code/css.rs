@@ -9,7 +9,7 @@
 
 use tree_sitter::{Language, Query};
 
-use crate::ingest::code::base::{BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig};
 use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
@@ -45,15 +45,13 @@ pub struct CssConfig {
 
 impl CssConfig {
     fn new() -> Self {
-        let language: Language = tree_sitter_css::LANGUAGE.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("CSS chunk query must compile");
-        let ref_query = Query::new(&language, REF_QUERY_SRC).expect("CSS ref query must compile");
-        Self {
-            language,
-            chunk_query,
-            ref_query,
-        }
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_css::LANGUAGE.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "CSS",
+        );
+        Self { language, chunk_query, ref_query }
     }
 }
 
@@ -86,27 +84,17 @@ impl LanguageConfig for CssConfig {
         match capture_name {
             "selector" => {
                 let name = text.split(',').next().unwrap_or(text).trim().to_string();
-                Some(ChunkCaptureResult {
-                    name,
-                    kind: ChunkKind::Other("rule".into()),
-                    is_definition_node: false,
-                })
+                Some(ChunkCaptureResult::name(name, ChunkKind::Other("rule".into())))
             }
-            "rule" => Some(ChunkCaptureResult {
-                name: String::new(),
-                kind: ChunkKind::Other("def".into()),
-                is_definition_node: true,
-            }),
-            "media_query" => Some(ChunkCaptureResult {
-                name: extract_media_name(text),
-                kind: ChunkKind::Other("media".into()),
-                is_definition_node: true,
-            }),
-            "keyframe" => Some(ChunkCaptureResult {
-                name: extract_keyframe_name(text),
-                kind: ChunkKind::Other("keyframes".into()),
-                is_definition_node: true,
-            }),
+            "rule" => Some(ChunkCaptureResult::definition()),
+            "media_query" => Some(ChunkCaptureResult::named_definition(
+                extract_media_name(text),
+                ChunkKind::Other("media".into()),
+            )),
+            "keyframe" => Some(ChunkCaptureResult::named_definition(
+                extract_keyframe_name(text),
+                ChunkKind::Other("keyframes".into()),
+            )),
             _ => None,
         }
     }

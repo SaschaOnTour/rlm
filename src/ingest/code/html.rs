@@ -8,7 +8,7 @@
 
 use tree_sitter::{Language, Query};
 
-use crate::ingest::code::base::{BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig};
 use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r#"
@@ -60,15 +60,13 @@ pub struct HtmlConfig {
 
 impl HtmlConfig {
     fn new() -> Self {
-        let language: Language = tree_sitter_html::LANGUAGE.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("HTML chunk query must compile");
-        let ref_query = Query::new(&language, REF_QUERY_SRC).expect("HTML ref query must compile");
-        Self {
-            language,
-            chunk_query,
-            ref_query,
-        }
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_html::LANGUAGE.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "HTML",
+        );
+        Self { language, chunk_query, ref_query }
     }
 }
 
@@ -100,11 +98,10 @@ impl LanguageConfig for HtmlConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "element_with_id" => Some(ChunkCaptureResult {
-                name: String::new(),
-                kind: ChunkKind::Other("element".into()),
-                is_definition_node: true,
-            }),
+            "element_with_id" => Some(ChunkCaptureResult::named_definition(
+                String::new(),
+                ChunkKind::Other("element".into()),
+            )),
             "tag_name" => {
                 // Tag name is stored but the actual ident comes from id_value
                 // We just note it for signature construction; not the name.
@@ -114,27 +111,20 @@ impl LanguageConfig for HtmlConfig {
             "id_value" => {
                 // Remove quotes from the id value
                 let name = text.trim_matches('"').trim_matches('\'').to_string();
-                Some(ChunkCaptureResult {
-                    name,
-                    kind: ChunkKind::Other("element".into()),
-                    is_definition_node: false,
-                })
+                Some(ChunkCaptureResult::name(name, ChunkKind::Other("element".into())))
             }
-            "script_el" => Some(ChunkCaptureResult {
-                name: "_script".to_string(),
-                kind: ChunkKind::Other("script".into()),
-                is_definition_node: true,
-            }),
-            "style_el" => Some(ChunkCaptureResult {
-                name: "_style".to_string(),
-                kind: ChunkKind::Other("style".into()),
-                is_definition_node: true,
-            }),
-            "doctype_el" => Some(ChunkCaptureResult {
-                name: "_doctype".to_string(),
-                kind: ChunkKind::Other("doctype".into()),
-                is_definition_node: true,
-            }),
+            "script_el" => Some(ChunkCaptureResult::named_definition(
+                "_script".to_string(),
+                ChunkKind::Other("script".into()),
+            )),
+            "style_el" => Some(ChunkCaptureResult::named_definition(
+                "_style".to_string(),
+                ChunkKind::Other("style".into()),
+            )),
+            "doctype_el" => Some(ChunkCaptureResult::named_definition(
+                "_doctype".to_string(),
+                ChunkKind::Other("doctype".into()),
+            )),
             _ => None,
         }
     }

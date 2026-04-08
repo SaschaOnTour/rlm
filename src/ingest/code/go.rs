@@ -1,6 +1,9 @@
 use tree_sitter::{Language, Query};
 
-use crate::ingest::code::base::{BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{
+    build_language_config, collect_prev_siblings, extract_type_signature_to_brace, BaseParser,
+    ChunkCaptureResult, LanguageConfig,
+};
 use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
@@ -26,15 +29,13 @@ pub struct GoConfig {
 
 impl GoConfig {
     fn new() -> Self {
-        let language: Language = tree_sitter_go::LANGUAGE.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("Go chunk query must compile");
-        let ref_query = Query::new(&language, REF_QUERY_SRC).expect("Go ref query must compile");
-        Self {
-            language,
-            chunk_query,
-            ref_query,
-        }
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_go::LANGUAGE.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "Go",
+        );
+        Self { language, chunk_query, ref_query }
     }
 }
 
@@ -61,26 +62,10 @@ impl LanguageConfig for GoConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Function,
-                is_definition_node: false,
-            }),
-            "method_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Method,
-                is_definition_node: false,
-            }),
-            "type_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Struct,
-                is_definition_node: false,
-            }),
-            "fn_def" | "method_def" | "type_def" => Some(ChunkCaptureResult {
-                name: String::new(),
-                kind: ChunkKind::Other("def".into()),
-                is_definition_node: true,
-            }),
+            "fn_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function)),
+            "method_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method)),
+            "type_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Struct)),
+            "fn_def" | "method_def" | "type_def" => Some(ChunkCaptureResult::definition()),
             _ => None,
         }
     }
@@ -111,7 +96,7 @@ impl LanguageConfig for GoConfig {
             ChunkKind::Function | ChunkKind::Method => {
                 content.find('{').map(|pos| content[..pos].trim().to_string())
             }
-            ChunkKind::Struct => extract_go_type_signature(content),
+            ChunkKind::Struct => extract_type_signature_to_brace(content),
             _ => None,
         }
     }
@@ -121,7 +106,7 @@ impl LanguageConfig for GoConfig {
     }
 
     fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_go_doc_comment(node, source)
+        collect_prev_siblings(node, source, &["comment"], &[], &[], true)
     }
 
     fn collect_attributes(&self, _node: tree_sitter::Node, _source: &[u8]) -> Option<String> {
@@ -143,35 +128,6 @@ impl GoParser {
     #[must_use]
     pub fn create() -> Self {
         Self::new(GoConfig::new())
-    }
-}
-
-/// Extract signature for Go type declarations (struct, interface).
-fn extract_go_type_signature(content: &str) -> Option<String> {
-    if let Some(brace_pos) = content.find('{') {
-        let sig = content[..brace_pos].trim();
-        Some(sig.to_string())
-    } else {
-        content.lines().next().map(|s| s.trim().to_string())
-    }
-}
-
-fn collect_go_doc_comment(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut lines = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == "comment" {
-            lines.push(sib.utf8_text(source).unwrap_or("").to_string());
-            current = sib.prev_sibling();
-            continue;
-        }
-        break;
-    }
-    lines.reverse();
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
     }
 }
 

@@ -2,6 +2,28 @@ use crate::db::Database;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::error::{Result, RlmError};
 use crate::ingest::scanner::ext_to_lang;
+use crate::models::chunk::Chunk;
+
+/// Look up a file and its matching chunk by symbol identifier.
+///
+/// Returns the resolved `Chunk` (cloned) so callers can use byte offsets, content, etc.
+fn find_symbol_in_file<'a>(db: &Database, file_path: &str, symbol: &str) -> Result<Chunk> {
+    let file = db
+        .get_file_by_path(file_path)?
+        .ok_or_else(|| RlmError::FileNotFound {
+            path: file_path.into(),
+        })?;
+
+    let chunks = db.get_chunks_for_file(file.id)?;
+    let chunk = chunks
+        .iter()
+        .find(|c| c.ident == symbol)
+        .ok_or_else(|| RlmError::SymbolNotFound {
+            ident: symbol.into(),
+        })?;
+
+    Ok(chunk.clone())
+}
 
 /// Replace an AST node (function, struct, etc.) by identifier.
 pub fn replace_symbol(
@@ -11,22 +33,7 @@ pub fn replace_symbol(
     new_code: &str,
     guard: &SyntaxGuard,
 ) -> Result<String> {
-    // Find the file
-    let file = db
-        .get_file_by_path(file_path)?
-        .ok_or_else(|| RlmError::FileNotFound {
-            path: file_path.into(),
-        })?;
-
-    // Find the chunk for this symbol in this file
-    let chunks = db.get_chunks_for_file(file.id)?;
-    let chunk =
-        chunks
-            .iter()
-            .find(|c| c.ident == symbol)
-            .ok_or_else(|| RlmError::SymbolNotFound {
-                ident: symbol.into(),
-            })?;
+    let chunk = find_symbol_in_file(db, file_path, symbol)?;
 
     // Read the actual file content
     let full_path = std::path::Path::new(file_path);
@@ -68,20 +75,7 @@ pub fn preview_replace(
     symbol: &str,
     new_code: &str,
 ) -> Result<ReplaceDiff> {
-    let file = db
-        .get_file_by_path(file_path)?
-        .ok_or_else(|| RlmError::FileNotFound {
-            path: file_path.into(),
-        })?;
-
-    let chunks = db.get_chunks_for_file(file.id)?;
-    let chunk =
-        chunks
-            .iter()
-            .find(|c| c.ident == symbol)
-            .ok_or_else(|| RlmError::SymbolNotFound {
-                ident: symbol.into(),
-            })?;
+    let chunk = find_symbol_in_file(db, file_path, symbol)?;
 
     Ok(ReplaceDiff {
         file: file_path.to_string(),

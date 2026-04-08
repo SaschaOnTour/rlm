@@ -76,6 +76,23 @@ impl RlmServer {
         CallToolResult::success(vec![Content::text(format!("{{\"error\":\"{msg}\"}}"))])
     }
 
+    /// Helper for tools that run a single file operation: call `op`, record savings, return JSON.
+    fn file_op_result<T: serde::Serialize>(
+        &self,
+        command: &str,
+        path: &str,
+        result: Result<T, impl std::fmt::Display>,
+    ) -> Result<CallToolResult, McpError> {
+        match result {
+            Ok(val) => {
+                let db = self.ensure_db()?;
+                let json = savings::record_file_op(&db, command, &val, path);
+                Ok(Self::success_text(json))
+            }
+            Err(e) => Ok(Self::error_text(e.to_string())),
+        }
+    }
+
     /// Get access to the tool router for testing purposes.
     // qual:api
     pub fn get_tool_router(&self) -> &ToolRouter<Self> {
@@ -398,13 +415,8 @@ impl RlmServer {
     ) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
         let path = &params.0.path;
-        match summarize::summarize(&db, path) {
-            Ok(result) => {
-                let json = savings::record_file_op(&db, "summarize", &result, path);
-                Ok(Self::success_text(json))
-            }
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
+        let result = summarize::summarize(&db, path);
+        self.file_op_result("summarize", path, result)
     }
 
     // --- Diff ---------------------------------------------------------------
@@ -487,14 +499,8 @@ impl RlmServer {
     async fn deps(&self, params: Parameters<DepsParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
         let path = &params.0.path;
-
-        match operations::get_deps(&db, path) {
-            Ok(result) => {
-                let json = savings::record_file_op(&db, "deps", &result, path);
-                Ok(Self::success_text(json))
-            }
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
+        let result = operations::get_deps(&db, path);
+        self.file_op_result("deps", path, result)
     }
 
     // --- Scope --------------------------------------------------------------

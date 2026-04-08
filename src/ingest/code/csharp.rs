@@ -1,6 +1,10 @@
 use tree_sitter::{Language, Query};
 
-use crate::ingest::code::base::{BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{
+    build_language_config, collect_prev_siblings, collect_prev_siblings_filtered_skip,
+    extract_keyword_visibility, extract_type_signature_to_brace, find_parent_by_kind, BaseParser,
+    ChunkCaptureResult, LanguageConfig,
+};
 use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
@@ -31,15 +35,13 @@ pub struct CSharpConfig {
 
 impl CSharpConfig {
     fn new() -> Self {
-        let language: Language = tree_sitter_c_sharp::LANGUAGE.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("C# chunk query must compile");
-        let ref_query = Query::new(&language, REF_QUERY_SRC).expect("C# ref query must compile");
-        Self {
-            language,
-            chunk_query,
-            ref_query,
-        }
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_c_sharp::LANGUAGE.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "C#",
+        );
+        Self { language, chunk_query, ref_query }
     }
 }
 
@@ -70,41 +72,15 @@ impl LanguageConfig for CSharpConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "class_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Class,
-                is_definition_node: false,
-            }),
-            "iface_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Interface,
-                is_definition_node: false,
-            }),
-            "enum_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Enum,
-                is_definition_node: false,
-            }),
-            "struct_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Struct,
-                is_definition_node: false,
-            }),
-            "method_name" | "ctor_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Method,
-                is_definition_node: false,
-            }),
-            "ns_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Module,
-                is_definition_node: false,
-            }),
-            n if n.ends_with("_def") => Some(ChunkCaptureResult {
-                name: String::new(),
-                kind: ChunkKind::Other("def".into()),
-                is_definition_node: true,
-            }),
+            "class_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class)),
+            "iface_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Interface)),
+            "enum_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Enum)),
+            "struct_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Struct)),
+            "method_name" | "ctor_name" => {
+                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method))
+            }
+            "ns_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Module)),
+            n if n.ends_with("_def") => Some(ChunkCaptureResult::definition()),
             _ => None,
         }
     }
@@ -119,7 +95,7 @@ impl LanguageConfig for CSharpConfig {
     }
 
     fn extract_visibility(&self, content: &str) -> Option<String> {
-        extract_cs_visibility(content)
+        extract_keyword_visibility(content, "private", &[("internal", "internal")])
     }
 
     fn extract_signature(&self, content: &str, kind: &ChunkKind) -> Option<String> {
@@ -128,22 +104,45 @@ impl LanguageConfig for CSharpConfig {
                 .find('{')
                 .map(|pos| content[..pos].trim().to_string()),
             ChunkKind::Class | ChunkKind::Interface | ChunkKind::Enum | ChunkKind::Struct => {
-                extract_cs_type_signature(content)
+                extract_type_signature_to_brace(content)
             }
             _ => None,
         }
     }
 
     fn find_parent(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        find_cs_parent(node, source)
+        find_parent_by_kind(
+            node,
+            source,
+            &[
+                "class_declaration",
+                "struct_declaration",
+                "interface_declaration",
+            ],
+            "identifier",
+        )
     }
 
     fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_csharp_doc_comment(node, source)
+        collect_prev_siblings(
+            node,
+            source,
+            &["comment"],
+            &["attribute_list"],
+            &["///"],
+            true,
+        )
     }
 
     fn collect_attributes(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_csharp_attributes(node, source)
+        collect_prev_siblings_filtered_skip(
+            node,
+            source,
+            &["attribute_list"],
+            &["comment"],
+            &["///"],
+            true,
+        )
     }
 }
 
@@ -161,107 +160,6 @@ impl CSharpParser {
     #[must_use]
     pub fn create() -> Self {
         Self::new(CSharpConfig::new())
-    }
-}
-
-fn extract_cs_visibility(content: &str) -> Option<String> {
-    let trimmed = content.trim_start();
-    if trimmed.starts_with("public") {
-        Some("public".into())
-    } else if trimmed.starts_with("protected") {
-        Some("protected".into())
-    } else if trimmed.starts_with("private") {
-        Some("private".into())
-    } else if trimmed.starts_with("internal") {
-        Some("internal".into())
-    } else {
-        Some("private".into())
-    }
-}
-
-/// Extract signature for C# type declarations (class, struct, interface, enum).
-fn extract_cs_type_signature(content: &str) -> Option<String> {
-    if let Some(brace_pos) = content.find('{') {
-        let sig = content[..brace_pos].trim();
-        Some(sig.to_string())
-    } else {
-        content.lines().next().map(|s| s.trim().to_string())
-    }
-}
-
-fn find_cs_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        let kind = parent.kind();
-        if kind == "class_declaration"
-            || kind == "struct_declaration"
-            || kind == "interface_declaration"
-        {
-            for i in 0..parent.child_count() {
-                if let Some(child) = parent.child(i as u32) {
-                    if child.kind() == "identifier" {
-                        return child
-                            .utf8_text(source)
-                            .ok()
-                            .map(std::string::ToString::to_string);
-                    }
-                }
-            }
-        }
-        current = parent.parent();
-    }
-    None
-}
-
-fn collect_csharp_doc_comment(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut lines = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == "attribute_list" {
-            current = sib.prev_sibling();
-            continue;
-        }
-        if sib.kind() == "comment" {
-            let text = sib.utf8_text(source).unwrap_or("");
-            if text.starts_with("///") {
-                lines.push(text.to_string());
-                current = sib.prev_sibling();
-                continue;
-            }
-        }
-        break;
-    }
-    lines.reverse();
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    }
-}
-
-fn collect_csharp_attributes(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut attrs = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == "attribute_list" {
-            attrs.push(sib.utf8_text(source).unwrap_or("").to_string());
-            current = sib.prev_sibling();
-            continue;
-        }
-        if sib.kind() == "comment" {
-            let text = sib.utf8_text(source).unwrap_or("");
-            if text.starts_with("///") {
-                current = sib.prev_sibling();
-                continue;
-            }
-        }
-        break;
-    }
-    attrs.reverse();
-    if attrs.is_empty() {
-        None
-    } else {
-        Some(attrs.join("\n"))
     }
 }
 

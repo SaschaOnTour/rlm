@@ -21,6 +21,19 @@ pub struct TreeNode {
     pub children: Vec<TreeNode>,
 }
 
+impl TreeNode {
+    /// Create a new tree node.
+    fn new(name: String, path: String, is_dir: bool, symbols: Vec<SymbolInfo>) -> Self {
+        Self {
+            name,
+            path,
+            is_dir,
+            symbols,
+            children: Vec::new(),
+        }
+    }
+}
+
 /// Symbol summary for tree display.
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolInfo {
@@ -88,23 +101,13 @@ fn insert_into_tree(
         // Leaf: file node
         children.insert(
             name.clone(),
-            TreeNode {
-                name,
-                path: full_path.to_string(),
-                is_dir: false,
-                symbols,
-                children: Vec::new(),
-            },
+            TreeNode::new(name, full_path.to_string(), false, symbols),
         );
     } else {
         // Directory node
-        let dir = children.entry(name.clone()).or_insert_with(|| TreeNode {
-            name: name.clone(),
-            path: String::new(),
-            is_dir: true,
-            symbols: Vec::new(),
-            children: Vec::new(),
-        });
+        let dir = children
+            .entry(name.clone())
+            .or_insert_with(|| TreeNode::new(name.clone(), String::new(), true, Vec::new()));
 
         let mut child_map: BTreeMap<String, TreeNode> = BTreeMap::new();
         for child in dir.children.drain(..) {

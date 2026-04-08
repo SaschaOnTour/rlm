@@ -1,6 +1,10 @@
 use tree_sitter::{Language, Query};
 
-use crate::ingest::code::base::{BaseParser, ChunkCaptureResult, LanguageConfig};
+use crate::ingest::code::base::{
+    build_language_config, collect_prev_siblings, extract_keyword_visibility,
+    extract_type_signature_to_brace, find_parent_by_kind, BaseParser, ChunkCaptureResult,
+    LanguageConfig,
+};
 use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
@@ -29,15 +33,13 @@ pub struct PhpConfig {
 
 impl PhpConfig {
     fn new() -> Self {
-        let language: Language = tree_sitter_php::LANGUAGE_PHP.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("PHP chunk query must compile");
-        let ref_query = Query::new(&language, REF_QUERY_SRC).expect("PHP ref query must compile");
-        Self {
-            language,
-            chunk_query,
-            ref_query,
-        }
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_php::LANGUAGE_PHP.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "PHP",
+        );
+        Self { language, chunk_query, ref_query }
     }
 }
 
@@ -68,36 +70,14 @@ impl LanguageConfig for PhpConfig {
 
     fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
         match capture_name {
-            "fn_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Function,
-                is_definition_node: false,
-            }),
-            "class_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Class,
-                is_definition_node: false,
-            }),
-            "iface_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Interface,
-                is_definition_node: false,
-            }),
-            "method_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Method,
-                is_definition_node: false,
-            }),
-            "trait_name" => Some(ChunkCaptureResult {
-                name: text.to_string(),
-                kind: ChunkKind::Trait,
-                is_definition_node: false,
-            }),
-            n if n.ends_with("_def") => Some(ChunkCaptureResult {
-                name: String::new(),
-                kind: ChunkKind::Other("def".into()),
-                is_definition_node: true,
-            }),
+            "fn_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Function)),
+            "class_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class)),
+            "iface_name" => {
+                Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Interface))
+            }
+            "method_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Method)),
+            "trait_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Trait)),
+            n if n.ends_with("_def") => Some(ChunkCaptureResult::definition()),
             _ => None,
         }
     }
@@ -112,7 +92,7 @@ impl LanguageConfig for PhpConfig {
     }
 
     fn extract_visibility(&self, content: &str) -> Option<String> {
-        extract_php_visibility(content)
+        extract_keyword_visibility(content, "public", &[])
     }
 
     fn extract_signature(&self, content: &str, kind: &ChunkKind) -> Option<String> {
@@ -121,22 +101,45 @@ impl LanguageConfig for PhpConfig {
                 .find('{')
                 .map(|pos| content[..pos].trim().to_string()),
             ChunkKind::Class | ChunkKind::Interface | ChunkKind::Trait => {
-                extract_php_type_signature(content)
+                extract_type_signature_to_brace(content)
             }
             _ => None,
         }
     }
 
     fn find_parent(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        find_php_parent(node, source)
+        find_parent_by_kind(
+            node,
+            source,
+            &[
+                "class_declaration",
+                "interface_declaration",
+                "trait_declaration",
+            ],
+            "name",
+        )
     }
 
     fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_php_doc_comment(node, source)
+        collect_prev_siblings(
+            node,
+            source,
+            &["comment"],
+            &["attribute_list"],
+            &["/**"],
+            false,
+        )
     }
 
     fn collect_attributes(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-        collect_php_attributes(node, source)
+        collect_prev_siblings(
+            node,
+            source,
+            &["attribute_list", "attribute_group"],
+            &["comment"],
+            &[],
+            true,
+        )
     }
 }
 
@@ -154,94 +157,6 @@ impl PhpParser {
     #[must_use]
     pub fn create() -> Self {
         Self::new(PhpConfig::new())
-    }
-}
-
-fn extract_php_visibility(content: &str) -> Option<String> {
-    let trimmed = content.trim_start();
-    if trimmed.starts_with("public") {
-        Some("public".into())
-    } else if trimmed.starts_with("protected") {
-        Some("protected".into())
-    } else if trimmed.starts_with("private") {
-        Some("private".into())
-    } else {
-        Some("public".into()) // PHP default
-    }
-}
-
-/// Extract signature for PHP type declarations (class, interface, trait).
-fn extract_php_type_signature(content: &str) -> Option<String> {
-    if let Some(brace_pos) = content.find('{') {
-        let sig = content[..brace_pos].trim();
-        Some(sig.to_string())
-    } else {
-        content.lines().next().map(|s| s.trim().to_string())
-    }
-}
-
-fn find_php_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        let kind = parent.kind();
-        if kind == "class_declaration"
-            || kind == "interface_declaration"
-            || kind == "trait_declaration"
-        {
-            for i in 0..parent.child_count() {
-                if let Some(child) = parent.child(i as u32) {
-                    if child.kind() == "name" {
-                        return child
-                            .utf8_text(source)
-                            .ok()
-                            .map(std::string::ToString::to_string);
-                    }
-                }
-            }
-        }
-        current = parent.parent();
-    }
-    None
-}
-
-fn collect_php_doc_comment(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == "attribute_list" {
-            current = sib.prev_sibling();
-            continue;
-        }
-        if sib.kind() == "comment" {
-            let text = sib.utf8_text(source).unwrap_or("");
-            if text.starts_with("/**") {
-                return Some(text.to_string());
-            }
-        }
-        break;
-    }
-    None
-}
-
-fn collect_php_attributes(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut attrs = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == "attribute_list" || sib.kind() == "attribute_group" {
-            attrs.push(sib.utf8_text(source).unwrap_or("").to_string());
-            current = sib.prev_sibling();
-            continue;
-        }
-        if sib.kind() == "comment" {
-            current = sib.prev_sibling();
-            continue;
-        }
-        break;
-    }
-    attrs.reverse();
-    if attrs.is_empty() {
-        None
-    } else {
-        Some(attrs.join("\n"))
     }
 }
 
