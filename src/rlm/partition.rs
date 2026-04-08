@@ -4,6 +4,10 @@ use crate::db::Database;
 use crate::error::{Result, RlmError};
 use crate::models::token_estimate::{estimate_tokens_str, TokenEstimate};
 
+/// Number of lines per chunk when semantic partitioning falls back to uniform splitting
+/// (i.e., when the file has no indexed AST chunks).
+const SEMANTIC_FALLBACK_CHUNK_SIZE: usize = 50;
+
 /// Partitioning strategy.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Strategy {
@@ -33,6 +37,20 @@ pub struct Partition {
     /// Token estimate for this partition.
     #[serde(rename = "t")]
     pub tokens: u64,
+}
+
+impl Partition {
+    /// Create a partition, computing the token estimate from `content`.
+    fn new(index: usize, start_line: u32, end_line: u32, content: String) -> Self {
+        let tokens = estimate_tokens_str(&content);
+        Self {
+            index,
+            start_line,
+            end_line,
+            content,
+            tokens,
+        }
+    }
 }
 
 /// Partition result.
@@ -82,15 +100,8 @@ fn partition_uniform(source: &str, chunk_size: usize) -> Vec<Partition> {
         let content = chunk.join("\n");
         let start_line = (i * chunk_size) as u32 + 1;
         let end_line = start_line + chunk.len() as u32 - 1;
-        let tokens = estimate_tokens_str(&content);
 
-        partitions.push(Partition {
-            index: i,
-            start_line,
-            end_line,
-            content,
-            tokens,
-        });
+        partitions.push(Partition::new(i, start_line, end_line, content));
     }
 
     partitions
@@ -106,54 +117,55 @@ fn partition_semantic(db: &Database, file_path: &str, source: &str) -> Result<Ve
             return Ok(chunks
                 .iter()
                 .enumerate()
-                .map(|(i, c)| Partition {
-                    index: i,
-                    start_line: c.start_line,
-                    end_line: c.end_line,
-                    content: c.content.clone(),
-                    tokens: estimate_tokens_str(&c.content),
-                })
+                .map(|(i, c)| Partition::new(i, c.start_line, c.end_line, c.content.clone()))
                 .collect());
         }
     }
 
     // Fallback to uniform if no chunks found
-    Ok(partition_uniform(source, 50))
+    Ok(partition_uniform(source, SEMANTIC_FALLBACK_CHUNK_SIZE))
 }
 
-/// Keyword partitioning: filter lines by regex, then partition remaining.
-fn partition_keyword(source: &str, pattern: &str) -> Result<Vec<Partition>> {
-    let re =
-        regex::Regex::new(pattern).map_err(|e| RlmError::Other(format!("invalid regex: {e}")))?;
+/// Raw partition data before token estimation.
+struct RawPartition {
+    start_line: u32,
+    end_line: u32,
+    content: String,
+}
 
-    let lines: Vec<&str> = source.lines().collect();
-    let mut partitions = Vec::new();
-    let mut current_lines = Vec::new();
+impl RawPartition {
+    fn new(start_line: u32, end_line: u32, content: String) -> Self {
+        Self {
+            start_line,
+            end_line,
+            content,
+        }
+    }
+}
+
+/// Split source lines by regex matches into raw partitions (operation: logic only).
+///
+/// Matching lines become their own partitions; non-matching lines are grouped
+/// between matches.  No own-crate function calls.
+fn split_by_keyword(lines: &[&str], re: &regex::Regex) -> Vec<RawPartition> {
+    let mut raw = Vec::new();
+    let mut current_lines: Vec<String> = Vec::new();
     let mut start_line = 0u32;
 
     for (i, line) in lines.iter().enumerate() {
         if re.is_match(line) {
-            // Save accumulated non-matching lines as a partition
+            // Save accumulated non-matching lines
             if !current_lines.is_empty() {
                 let content = current_lines.join("\n");
-                partitions.push(Partition {
-                    index: partitions.len(),
-                    start_line: start_line + 1,
-                    end_line: i as u32,
-                    content: content.clone(),
-                    tokens: estimate_tokens_str(&content),
-                });
+                raw.push(RawPartition::new(start_line + 1, i as u32, content));
                 current_lines.clear();
             }
-            // Add matching line as its own partition
-            let content = line.to_string();
-            partitions.push(Partition {
-                index: partitions.len(),
-                start_line: i as u32 + 1,
-                end_line: i as u32 + 1,
-                content: content.clone(),
-                tokens: estimate_tokens_str(&content),
-            });
+            // Matching line as its own partition
+            raw.push(RawPartition::new(
+                i as u32 + 1,
+                i as u32 + 1,
+                line.to_string(),
+            ));
             start_line = i as u32 + 1;
         } else {
             if current_lines.is_empty() {
@@ -167,14 +179,25 @@ fn partition_keyword(source: &str, pattern: &str) -> Result<Vec<Partition>> {
     if !current_lines.is_empty() {
         let content = current_lines.join("\n");
         let end = start_line + current_lines.len() as u32;
-        partitions.push(Partition {
-            index: partitions.len(),
-            start_line: start_line + 1,
-            end_line: end,
-            content: content.clone(),
-            tokens: estimate_tokens_str(&content),
-        });
+        raw.push(RawPartition::new(start_line + 1, end, content));
     }
+
+    raw
+}
+
+/// Keyword partitioning: filter lines by regex, then partition remaining (integration).
+fn partition_keyword(source: &str, pattern: &str) -> Result<Vec<Partition>> {
+    let re =
+        regex::Regex::new(pattern).map_err(|e| RlmError::Other(format!("invalid regex: {e}")))?;
+
+    let lines: Vec<&str> = source.lines().collect();
+    let raw = split_by_keyword(&lines, &re);
+
+    let partitions = raw
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| Partition::new(i, r.start_line, r.end_line, r.content))
+        .collect();
 
     Ok(partitions)
 }

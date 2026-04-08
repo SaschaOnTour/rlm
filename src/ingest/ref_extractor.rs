@@ -1,7 +1,11 @@
+#[cfg(test)]
 use crate::error::Result;
+#[cfg(test)]
 use crate::ingest::dispatcher::Dispatcher;
+#[cfg(test)]
 use crate::models::chunk::{Chunk, Reference};
 
+#[cfg(test)]
 /// High-level reference extraction that delegates to the dispatcher.
 pub fn extract_references(
     dispatcher: &Dispatcher,

@@ -7,6 +7,22 @@ use std::collections::HashSet;
 
 use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
+/// Build the (Language, chunk Query, ref Query) triple shared by every parser config.
+///
+/// Panics with a descriptive message if either query fails to compile.
+pub fn build_language_config(
+    language: Language,
+    chunk_query_src: &str,
+    ref_query_src: &str,
+    lang_name: &str,
+) -> (Language, Query, Query) {
+    let chunk_query = Query::new(&language, chunk_query_src)
+        .unwrap_or_else(|e| panic!("{lang_name} chunk query must compile: {e}"));
+    let ref_query = Query::new(&language, ref_query_src)
+        .unwrap_or_else(|e| panic!("{lang_name} ref query must compile: {e}"));
+    (language, chunk_query, ref_query)
+}
+
 use crate::error::{Result, RlmError};
 use crate::ingest::code::{find_error_lines, CodeParser, ParseQuality, ParseResult};
 use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
@@ -57,9 +73,40 @@ pub trait LanguageConfig: Send + Sync {
     /// Returns the import declaration capture name (e.g., "`use_decl`", "`import_decl`").
     fn import_capture_name(&self) -> &'static str;
 
+    /// Check if a capture name represents an import declaration.
+    /// Override this for languages with multiple import capture names (e.g., JS `require_decl`).
+    fn is_import_capture(&self, capture_name: &str) -> bool {
+        capture_name == self.import_capture_name()
+    }
+
+    /// Filter a ref capture based on the capture text. Return `false` to skip this reference.
+    /// Default: accept all captures.
+    fn filter_ref_capture(&self, _capture_name: &str, _text: &str) -> bool {
+        true
+    }
+
+    /// Transform the reference target text before storing it.
+    /// Default: return text as-is.
+    fn transform_ref_text(&self, _capture_name: &str, text: &str) -> String {
+        text.to_string()
+    }
+
     /// Returns true if this language uses deduplication (some languages emit duplicate matches).
     fn needs_deduplication(&self) -> bool {
         false
+    }
+
+    /// Optional: adjust chunk kind and visibility after parent is found.
+    /// For example, Python promotes Function to Method when inside a class,
+    /// and derives visibility from the identifier name rather than content.
+    fn adjust_chunk_metadata(
+        &self,
+        _kind: &mut ChunkKind,
+        _name: &str,
+        _parent: &Option<String>,
+        _visibility: &mut Option<String>,
+    ) {
+        // Default: no adjustment
     }
 
     /// Optional: post-process chunks after initial extraction (e.g., extract impl methods).
@@ -77,6 +124,28 @@ pub trait LanguageConfig: Send + Sync {
     fn should_skip_function(&self, _kind: &ChunkKind, _parent: &Option<String>) -> bool {
         false
     }
+
+    /// Optional: return a UI context hint for chunks (e.g., "ui" for CSS/HTML).
+    fn ui_ctx(&self) -> Option<String> {
+        None
+    }
+
+    /// Expand a ref capture into one or more (target, RefKind) pairs.
+    /// Override this when a single capture may produce multiple references
+    /// (e.g., HTML class attributes with space-separated values).
+    /// Default: delegates to `map_ref_capture` + `transform_ref_text`.
+    fn expand_ref_capture(&self, capture_name: &str, text: &str) -> Vec<(String, RefKind)> {
+        match self.map_ref_capture(capture_name) {
+            Some(kind) => {
+                if !self.filter_ref_capture(capture_name, text) {
+                    return Vec::new();
+                }
+                let target = self.transform_ref_text(capture_name, text);
+                vec![(target, kind)]
+            }
+            None => Vec::new(),
+        }
+    }
 }
 
 /// Result from mapping a chunk capture.
@@ -87,6 +156,35 @@ pub struct ChunkCaptureResult {
     pub kind: ChunkKind,
     /// If true, this capture represents the definition node (full content).
     pub is_definition_node: bool,
+}
+
+impl ChunkCaptureResult {
+    /// Create a named capture result (not a definition node).
+    pub fn name(name: String, kind: ChunkKind) -> Self {
+        Self {
+            name,
+            kind,
+            is_definition_node: false,
+        }
+    }
+
+    /// Create a definition-node capture result (no name, `ChunkKind::Other("def")`).
+    pub fn definition() -> Self {
+        Self {
+            name: String::new(),
+            kind: ChunkKind::Other("def".into()),
+            is_definition_node: true,
+        }
+    }
+
+    /// Create a named definition-node capture result.
+    pub fn named_definition(name: String, kind: ChunkKind) -> Self {
+        Self {
+            name,
+            kind,
+            is_definition_node: true,
+        }
+    }
 }
 
 /// Generic base parser that uses a `LanguageConfig` to handle parsing.
@@ -115,21 +213,24 @@ impl<C: LanguageConfig> BaseParser<C> {
         Ok(parser)
     }
 
-    /// Extract chunks from a parsed tree.
+    /// Extract chunks from a parsed tree (integration function).
+    ///
+    /// Orchestrates match processing, deduplication, post-processing, and
+    /// import-chunk creation by delegating to operation helpers in `base_ops`.
     fn extract_chunks_from_tree(
         &self,
         tree: &Tree,
         source_bytes: &[u8],
         file_id: i64,
     ) -> Vec<Chunk> {
+        use super::base_ops::{
+            build_chunk_from_match_data, build_import_chunk, process_query_match, QueryMatchResult,
+        };
+
         let mut chunks = Vec::new();
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(self.config.chunk_query(), tree.root_node(), source_bytes);
-
-        // Collect import declarations for an imports chunk
         let mut import_decls: Vec<tree_sitter::Node> = Vec::new();
-
-        // Track seen chunks to avoid duplicates (name + start_line)
         let mut seen: HashSet<(String, u32)> = if self.config.needs_deduplication() {
             HashSet::new()
         } else {
@@ -137,143 +238,36 @@ impl<C: LanguageConfig> BaseParser<C> {
         };
 
         while let Some(m) = matches.next() {
-            let mut name = String::new();
-            let mut kind = ChunkKind::Other("unknown".into());
-            let mut node = tree.root_node();
-            let mut is_import_decl = false;
-
-            for cap in m.captures {
-                let cap_name = &self.config.chunk_query().capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("");
-
-                // Check for import declarations
-                if *cap_name == self.config.import_capture_name() {
-                    is_import_decl = true;
-                    import_decls.push(cap.node);
-                    continue;
+            let match_result = process_query_match(m, source_bytes, &self.config, tree.root_node());
+            match match_result {
+                QueryMatchResult::Import(node) => {
+                    import_decls.push(node);
                 }
-
-                // Map the capture to chunk info
-                if let Some(result) = self.config.map_chunk_capture(cap_name, text) {
-                    if result.is_definition_node {
-                        node = cap.node;
-                    } else {
-                        name = result.name;
-                        kind = result.kind;
-                    }
+                QueryMatchResult::Chunk(data) => {
+                    let built = build_chunk_from_match_data(
+                        &data,
+                        source_bytes,
+                        file_id,
+                        &self.config,
+                        &mut seen,
+                    );
+                    chunks.extend(built);
                 }
+                QueryMatchResult::Skip => {}
             }
-
-            // Skip import declarations - we'll create a single imports chunk
-            if is_import_decl {
-                continue;
-            }
-
-            if name.is_empty() {
-                continue;
-            }
-
-            let start = node.start_position();
-            let start_line = start.row as u32 + 1;
-
-            // Skip duplicates if needed
-            if self.config.needs_deduplication() {
-                let key = (name.clone(), start_line);
-                if seen.contains(&key) {
-                    continue;
-                }
-                seen.insert(key);
-            }
-
-            let content = node.utf8_text(source_bytes).unwrap_or("").to_string();
-            let end = node.end_position();
-
-            let parent = self.config.find_parent(node, source_bytes);
-
-            // Skip functions that should be handled differently (e.g., methods in impl blocks)
-            if self.config.should_skip_function(&kind, &parent) {
-                continue;
-            }
-
-            let visibility = self.config.extract_visibility(&content);
-            let signature = self.config.extract_signature(&content, &kind);
-            let doc_comment = self.config.collect_doc_comment(node, source_bytes);
-            let attributes = self.config.collect_attributes(node, source_bytes);
-
-            chunks.push(Chunk {
-                id: 0,
-                file_id,
-                start_line,
-                end_line: end.row as u32 + 1,
-                start_byte: node.start_byte() as u32,
-                end_byte: node.end_byte() as u32,
-                kind,
-                ident: name,
-                parent,
-                signature,
-                visibility,
-                ui_ctx: None,
-                doc_comment,
-                attributes,
-                content,
-            });
         }
 
-        // Post-process chunks (e.g., extract impl methods)
         self.config
             .post_process_chunks(&mut chunks, tree, source_bytes, file_id);
 
-        // Create an imports chunk if there are import declarations
-        if !import_decls.is_empty() {
-            let start_line = import_decls
-                .iter()
-                .map(|n| n.start_position().row)
-                .min()
-                .unwrap_or(0);
-            let end_line = import_decls
-                .iter()
-                .map(|n| n.end_position().row)
-                .max()
-                .unwrap_or(0);
-            let start_byte = import_decls
-                .iter()
-                .map(tree_sitter::Node::start_byte)
-                .min()
-                .unwrap_or(0);
-            let end_byte = import_decls
-                .iter()
-                .map(tree_sitter::Node::end_byte)
-                .max()
-                .unwrap_or(0);
-
-            let content: String = import_decls
-                .iter()
-                .filter_map(|n| n.utf8_text(source_bytes).ok())
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            chunks.push(Chunk {
-                id: 0,
-                file_id,
-                start_line: start_line as u32 + 1,
-                end_line: end_line as u32 + 1,
-                start_byte: start_byte as u32,
-                end_byte: end_byte as u32,
-                kind: ChunkKind::Other("imports".into()),
-                ident: "_imports".to_string(),
-                parent: None,
-                signature: None,
-                visibility: None,
-                ui_ctx: None,
-                doc_comment: None,
-                attributes: None,
-                content,
-            });
-        }
+        let import_chunk = build_import_chunk(&import_decls, source_bytes, file_id);
+        chunks.extend(import_chunk);
 
         chunks
     }
+}
 
+impl<C: LanguageConfig> BaseParser<C> {
     /// Extract references from a parsed tree.
     fn extract_refs_from_tree(
         &self,
@@ -291,10 +285,10 @@ impl<C: LanguageConfig> BaseParser<C> {
                 let text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
                 let pos = cap.node.start_position();
 
-                let ref_kind = match self.config.map_ref_capture(cap_name) {
-                    Some(kind) => kind,
-                    None => continue,
-                };
+                let expanded = self.config.expand_ref_capture(cap_name, &text);
+                if expanded.is_empty() {
+                    continue;
+                }
 
                 let line = pos.row as u32 + 1;
                 let chunk_id = chunks
@@ -302,14 +296,16 @@ impl<C: LanguageConfig> BaseParser<C> {
                     .find(|c| line >= c.start_line && line <= c.end_line)
                     .map_or(0, |c| c.id);
 
-                refs.push(Reference {
-                    id: 0,
-                    chunk_id,
-                    target_ident: text,
-                    ref_kind,
-                    line,
-                    col: pos.column as u32,
-                });
+                for (target, ref_kind) in expanded {
+                    refs.push(Reference {
+                        id: 0,
+                        chunk_id,
+                        target_ident: target,
+                        ref_kind,
+                        line,
+                        col: pos.column as u32,
+                    });
+                }
             }
         }
 
@@ -395,189 +391,13 @@ impl<C: LanguageConfig> CodeParser for BaseParser<C> {
     }
 }
 
-// =============================================================================
-// Helper functions for common parsing patterns
-// =============================================================================
-
-/// Extract signature up to the opening brace.
-#[must_use]
-pub fn extract_signature_to_brace(content: &str) -> Option<String> {
-    content
-        .find('{')
-        .map(|pos| content[..pos].trim().to_string())
-}
-
-/// Extract signature up to the opening brace or semicolon.
-#[must_use]
-pub fn extract_signature_to_brace_or_semi(content: &str) -> Option<String> {
-    if let Some(brace_pos) = content.find('{') {
-        Some(content[..brace_pos].trim().to_string())
-    } else {
-        content
-            .find(';')
-            .map(|semi_pos| content[..semi_pos].trim().to_string())
-    }
-}
-
-/// Extract type signature (first line or up to brace).
-#[must_use]
-pub fn extract_type_signature(content: &str) -> Option<String> {
-    if let Some(brace_pos) = content.find('{') {
-        let sig = content[..brace_pos].trim();
-        // Remove trailing where clauses if too long
-        let sig = if let Some(where_pos) = sig.find("\nwhere") {
-            sig[..where_pos].trim()
-        } else {
-            sig
-        };
-        Some(sig.to_string())
-    } else if let Some(semi_pos) = content.find(';') {
-        // Unit struct: `pub struct Foo;`
-        Some(content[..=semi_pos].trim().to_string())
-    } else {
-        // Fallback: first line
-        content.lines().next().map(|s| s.trim().to_string())
-    }
-}
-
-/// Extract Python-style signature (up to colon).
-#[must_use]
-pub fn extract_signature_to_colon(content: &str) -> Option<String> {
-    content
-        .find(':')
-        .map(|pos| content[..pos].trim().to_string())
-}
-
-/// Find parent by walking up the tree looking for specific node kinds.
-#[must_use]
-pub fn find_parent_by_kinds(
-    node: tree_sitter::Node,
-    source: &[u8],
-    parent_kinds: &[&str],
-    identifier_kind: &str,
-) -> Option<String> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if parent_kinds.contains(&parent.kind()) {
-            for i in 0..parent.child_count() {
-                if let Some(child) = parent.child(i as u32) {
-                    if child.kind() == identifier_kind {
-                        return child
-                            .utf8_text(source)
-                            .ok()
-                            .map(std::string::ToString::to_string);
-                    }
-                }
-            }
-        }
-        current = parent.parent();
-    }
-    None
-}
-
-/// Collect doc comments by walking previous siblings.
-#[must_use]
-pub fn collect_doc_comments_by_prefix(
-    node: tree_sitter::Node,
-    source: &[u8],
-    comment_kind: &str,
-    prefixes: &[&str],
-    skip_kind: Option<&str>,
-) -> Option<String> {
-    let mut lines = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        // Skip specific node kinds (like attribute lists)
-        if let Some(skip) = skip_kind {
-            if sib.kind() == skip {
-                current = sib.prev_sibling();
-                continue;
-            }
-        }
-        if sib.kind() == comment_kind {
-            let text = sib.utf8_text(source).unwrap_or("");
-            if prefixes.iter().any(|p| text.starts_with(p)) {
-                lines.push(text.to_string());
-                current = sib.prev_sibling();
-                continue;
-            }
-        }
-        break;
-    }
-    lines.reverse();
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    }
-}
-
-/// Collect attributes/annotations by walking previous siblings.
-#[must_use]
-pub fn collect_attributes_by_kind(
-    node: tree_sitter::Node,
-    source: &[u8],
-    attr_kind: &str,
-    skip_comment_prefixes: Option<&[&str]>,
-) -> Option<String> {
-    let mut attrs = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == attr_kind {
-            attrs.push(sib.utf8_text(source).unwrap_or("").to_string());
-            current = sib.prev_sibling();
-            continue;
-        }
-        // Skip doc comments when collecting attributes
-        if sib.kind() == "line_comment" || sib.kind() == "comment" {
-            if let Some(prefixes) = skip_comment_prefixes {
-                let text = sib.utf8_text(source).unwrap_or("");
-                if prefixes.iter().any(|p| text.starts_with(p)) {
-                    current = sib.prev_sibling();
-                    continue;
-                }
-            }
-        }
-        break;
-    }
-    attrs.reverse();
-    if attrs.is_empty() {
-        None
-    } else {
-        Some(attrs.join("\n"))
-    }
-}
+// Re-export all helpers from the dedicated helpers module for backward compatibility.
+pub use super::helpers::{
+    collect_prev_siblings, collect_prev_siblings_filtered_skip, extract_keyword_visibility,
+    extract_type_signature, extract_type_signature_to, extract_type_signature_to_brace,
+    extract_type_signature_to_colon, find_parent_by_kind, first_child_text_by_kind,
+    SiblingCollectConfig,
+};
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_extract_signature_to_brace() {
-        assert_eq!(
-            extract_signature_to_brace("fn main() { }"),
-            Some("fn main()".to_string())
-        );
-        assert_eq!(extract_signature_to_brace("fn main()"), None);
-    }
-
-    #[test]
-    fn test_extract_type_signature() {
-        assert_eq!(
-            extract_type_signature("pub struct Foo { }"),
-            Some("pub struct Foo".to_string())
-        );
-        assert_eq!(
-            extract_type_signature("pub struct Foo;"),
-            Some("pub struct Foo;".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_signature_to_colon() {
-        assert_eq!(
-            extract_signature_to_colon("def foo(x):\n    pass"),
-            Some("def foo(x)".to_string())
-        );
-    }
-}
+pub use super::helpers::{extract_signature_to_brace, extract_signature_to_colon};

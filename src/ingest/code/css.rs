@@ -7,13 +7,12 @@
 //! - @import statements
 //! - Keyframe animations
 
-use std::collections::HashSet;
+use tree_sitter::{Language, Query};
 
-use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator, Tree};
-
-use crate::error::{Result, RlmError};
-use crate::ingest::code::CodeParser;
-use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
+use crate::ingest::code::base::{
+    build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig,
+};
+use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
     ; Rule sets (selectors with declarations)
@@ -40,235 +39,127 @@ const REF_QUERY_SRC: &str = r"
         (id_name) @id_ref)
 ";
 
-pub struct CssParser {
+pub struct CssConfig {
     language: Language,
     chunk_query: Query,
     ref_query: Query,
 }
 
-impl Default for CssParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CssParser {
-    #[must_use]
-    pub fn new() -> Self {
-        let language: Language = tree_sitter_css::LANGUAGE.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("CSS chunk query must compile");
-        let ref_query = Query::new(&language, REF_QUERY_SRC).expect("CSS ref query must compile");
+impl CssConfig {
+    fn new() -> Self {
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_css::LANGUAGE.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "CSS",
+        );
         Self {
             language,
             chunk_query,
             ref_query,
         }
     }
+}
 
-    fn make_parser(&self) -> Result<Parser> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&self.language)
-            .map_err(|e| RlmError::Parse {
-                path: String::new(),
-                detail: format!("failed to set CSS language: {e}"),
-            })?;
-        Ok(parser)
+impl LanguageConfig for CssConfig {
+    fn language(&self) -> &Language {
+        &self.language
     }
 
-    fn extract_chunks_from_tree(
-        &self,
-        tree: &Tree,
-        source_bytes: &[u8],
-        file_id: i64,
-    ) -> Vec<Chunk> {
-        let mut chunks = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&self.chunk_query, tree.root_node(), source_bytes);
-
-        // Collect imports for an imports chunk
-        let mut import_stmts: Vec<tree_sitter::Node> = Vec::new();
-        // Track seen to avoid duplicates
-        let mut seen: HashSet<(String, u32)> = HashSet::new();
-
-        while let Some(m) = matches.next() {
-            let mut name = String::new();
-            let mut kind = ChunkKind::Other("rule".into());
-            let mut node = tree.root_node();
-            let mut is_import = false;
-
-            for cap in m.captures {
-                let cap_name = &self.chunk_query.capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("");
-
-                match *cap_name {
-                    "rule" => {
-                        node = cap.node;
-                    }
-                    "selector" => {
-                        // Extract the first selector as the name
-                        name = text.split(',').next().unwrap_or(text).trim().to_string();
-                        kind = ChunkKind::Other("rule".into());
-                    }
-                    "media_query" => {
-                        node = cap.node;
-                        // Extract @media query condition
-                        name = extract_media_name(text);
-                        kind = ChunkKind::Other("media".into());
-                    }
-                    "keyframe" => {
-                        node = cap.node;
-                        // Extract keyframe name from content
-                        name = extract_keyframe_name(text);
-                        kind = ChunkKind::Other("keyframes".into());
-                    }
-                    "import_stmt" => {
-                        is_import = true;
-                        import_stmts.push(cap.node);
-                    }
-                    _ => {}
-                }
-            }
-
-            if is_import {
-                continue;
-            }
-
-            if name.is_empty() {
-                continue;
-            }
-
-            let start = node.start_position();
-            let start_line = start.row as u32 + 1;
-
-            // Skip duplicates
-            let key = (name.clone(), start_line);
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.insert(key);
-
-            let content = node.utf8_text(source_bytes).unwrap_or("").to_string();
-            let end = node.end_position();
-
-            // Signature is the selector or @-rule header
-            let signature = content
-                .find('{')
-                .map(|pos| content[..pos].trim().to_string());
-
-            chunks.push(Chunk {
-                id: 0,
-                file_id,
-                start_line,
-                end_line: end.row as u32 + 1,
-                start_byte: node.start_byte() as u32,
-                end_byte: node.end_byte() as u32,
-                kind,
-                ident: name,
-                parent: None,
-                signature,
-                visibility: None,
-                ui_ctx: Some("ui".into()),
-                doc_comment: None,
-                attributes: None,
-                content,
-            });
-        }
-
-        // Create imports chunk
-        if !import_stmts.is_empty() {
-            let start_line = import_stmts
-                .iter()
-                .map(|n| n.start_position().row)
-                .min()
-                .unwrap_or(0);
-            let end_line = import_stmts
-                .iter()
-                .map(|n| n.end_position().row)
-                .max()
-                .unwrap_or(0);
-            let start_byte = import_stmts
-                .iter()
-                .map(tree_sitter::Node::start_byte)
-                .min()
-                .unwrap_or(0);
-            let end_byte = import_stmts
-                .iter()
-                .map(tree_sitter::Node::end_byte)
-                .max()
-                .unwrap_or(0);
-
-            let content: String = import_stmts
-                .iter()
-                .filter_map(|n| n.utf8_text(source_bytes).ok())
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            chunks.push(Chunk {
-                id: 0,
-                file_id,
-                start_line: start_line as u32 + 1,
-                end_line: end_line as u32 + 1,
-                start_byte: start_byte as u32,
-                end_byte: end_byte as u32,
-                kind: ChunkKind::Other("imports".into()),
-                ident: "_imports".to_string(),
-                parent: None,
-                signature: None,
-                visibility: None,
-                ui_ctx: None,
-                doc_comment: None,
-                attributes: None,
-                content,
-            });
-        }
-
-        chunks
+    fn chunk_query(&self) -> &Query {
+        &self.chunk_query
     }
 
-    fn extract_refs_from_tree(
-        &self,
-        tree: &Tree,
-        source_bytes: &[u8],
-        chunks: &[Chunk],
-    ) -> Vec<Reference> {
-        let mut refs = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&self.ref_query, tree.root_node(), source_bytes);
+    fn ref_query(&self) -> &Query {
+        &self.ref_query
+    }
 
-        while let Some(m) = matches.next() {
-            for cap in m.captures {
-                let cap_name = &self.ref_query.capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
-                let pos = cap.node.start_position();
+    fn language_name(&self) -> &'static str {
+        "css"
+    }
 
-                let ref_kind = match *cap_name {
-                    "class_ref" | "id_ref" => RefKind::TypeUse,
-                    _ => continue,
-                };
+    fn import_capture_name(&self) -> &'static str {
+        "import_stmt"
+    }
 
-                // Clean up the text
-                let target = text.trim_matches('"').trim_matches('\'').to_string();
+    fn needs_deduplication(&self) -> bool {
+        true
+    }
 
-                let line = pos.row as u32 + 1;
-                let chunk_id = chunks
-                    .iter()
-                    .find(|c| line >= c.start_line && line <= c.end_line)
-                    .map_or(0, |c| c.id);
-
-                refs.push(Reference {
-                    id: 0,
-                    chunk_id,
-                    target_ident: target,
-                    ref_kind,
-                    line,
-                    col: pos.column as u32,
-                });
+    fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
+        match capture_name {
+            "selector" => {
+                let name = text.split(',').next().unwrap_or(text).trim().to_string();
+                Some(ChunkCaptureResult::name(
+                    name,
+                    ChunkKind::Other("rule".into()),
+                ))
             }
+            "rule" => Some(ChunkCaptureResult::definition()),
+            "media_query" => Some(ChunkCaptureResult::named_definition(
+                extract_media_name(text),
+                ChunkKind::Other("media".into()),
+            )),
+            "keyframe" => Some(ChunkCaptureResult::named_definition(
+                extract_keyframe_name(text),
+                ChunkKind::Other("keyframes".into()),
+            )),
+            _ => None,
         }
+    }
 
-        refs
+    fn map_ref_capture(&self, capture_name: &str) -> Option<RefKind> {
+        match capture_name {
+            "class_ref" | "id_ref" => Some(RefKind::TypeUse),
+            _ => None,
+        }
+    }
+
+    fn transform_ref_text(&self, _capture_name: &str, text: &str) -> String {
+        text.trim_matches('"').trim_matches('\'').to_string()
+    }
+
+    fn extract_visibility(&self, _content: &str) -> Option<String> {
+        None // CSS has no visibility modifiers
+    }
+
+    fn extract_signature(&self, content: &str, _kind: &ChunkKind) -> Option<String> {
+        content
+            .find('{')
+            .map(|pos| content[..pos].trim().to_string())
+    }
+
+    fn find_parent(&self, _node: tree_sitter::Node, _source: &[u8]) -> Option<String> {
+        None
+    }
+
+    fn collect_doc_comment(&self, _node: tree_sitter::Node, _source: &[u8]) -> Option<String> {
+        None
+    }
+
+    fn collect_attributes(&self, _node: tree_sitter::Node, _source: &[u8]) -> Option<String> {
+        None
+    }
+
+    fn ui_ctx(&self) -> Option<String> {
+        Some("ui".into())
+    }
+}
+
+/// Public type alias for the CSS parser.
+pub type CssParser = BaseParser<CssConfig>;
+
+impl Default for CssParser {
+    fn default() -> Self {
+        Self::new(CssConfig::new())
+    }
+}
+
+impl CssParser {
+    /// Create a new CSS parser.
+    #[must_use]
+    pub fn create() -> Self {
+        Self::new(CssConfig::new())
     }
 }
 
@@ -294,96 +185,14 @@ fn extract_keyframe_name(content: &str) -> String {
     "_keyframes".to_string()
 }
 
-impl CodeParser for CssParser {
-    fn language(&self) -> &'static str {
-        "css"
-    }
-
-    fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        Ok(self.extract_chunks_from_tree(&tree, source.as_bytes(), file_id))
-    }
-
-    fn extract_refs(&self, source: &str, chunks: &[Chunk]) -> Result<Vec<Reference>> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        Ok(self.extract_refs_from_tree(&tree, source.as_bytes(), chunks))
-    }
-
-    fn parse_chunks_and_refs(
-        &self,
-        source: &str,
-        file_id: i64,
-    ) -> Result<(Vec<Chunk>, Vec<Reference>)> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        let source_bytes = source.as_bytes();
-        let chunks = self.extract_chunks_from_tree(&tree, source_bytes, file_id);
-        let refs = self.extract_refs_from_tree(&tree, source_bytes, &chunks);
-        Ok((chunks, refs))
-    }
-
-    fn validate_syntax(&self, source: &str) -> bool {
-        let mut parser = match self.make_parser() {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-        match parser.parse(source, None) {
-            Some(tree) => !tree.root_node().has_error(),
-            None => false,
-        }
-    }
-
-    fn parse_with_quality(
-        &self,
-        source: &str,
-        file_id: i64,
-    ) -> Result<crate::ingest::code::ParseResult> {
-        use crate::ingest::code::{find_error_lines, ParseQuality, ParseResult};
-
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        let source_bytes = source.as_bytes();
-        let chunks = self.extract_chunks_from_tree(&tree, source_bytes, file_id);
-        let refs = self.extract_refs_from_tree(&tree, source_bytes, &chunks);
-
-        let quality = if tree.root_node().has_error() {
-            let error_lines = find_error_lines(tree.root_node());
-            ParseQuality::Partial {
-                error_count: error_lines.len(),
-                error_lines,
-            }
-        } else {
-            ParseQuality::Complete
-        };
-
-        Ok(ParseResult {
-            chunks,
-            refs,
-            quality,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::code::CodeParser;
+    use crate::models::chunk::ChunkKind;
 
     fn parser() -> CssParser {
-        CssParser::new()
+        CssParser::create()
     }
 
     #[test]

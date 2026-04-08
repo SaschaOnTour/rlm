@@ -41,6 +41,16 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
     use crate::models::file::FileRecord;
 
+    const TEST_FILE_BYTES: u64 = 100;
+    const TEST_START_LINE: u32 = 1;
+    const TEST_END_LINE: u32 = 5;
+    const TEST_END_LINE_SHORT: u32 = 3;
+    const TEST_START_BYTE: u32 = 0;
+    const TEST_END_BYTE: u32 = 50;
+    const TEST_END_BYTE_SMALL: u32 = 30;
+    const TEST_REF_LINE: u32 = 10;
+    const TEST_REF_COL: u32 = 4;
+
     fn test_db() -> Database {
         Database::open_in_memory().unwrap()
     }
@@ -49,16 +59,21 @@ mod tests {
     fn get_signature_basic() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new(
+            "src/lib.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Function,
             ident: "foo".into(),
             parent: None,
@@ -77,8 +92,8 @@ mod tests {
             chunk_id,
             target_ident: "foo".into(),
             ref_kind: RefKind::Call,
-            line: 10,
-            col: 4,
+            line: TEST_REF_LINE,
+            col: TEST_REF_COL,
         };
         db.insert_ref(&reference).unwrap();
 
@@ -92,16 +107,21 @@ mod tests {
     fn get_signature_no_signature() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new(
+            "src/lib.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 3,
-            start_byte: 0,
-            end_byte: 30,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE_SHORT,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE_SMALL,
             kind: ChunkKind::Module,
             ident: "mymod".into(),
             parent: None,

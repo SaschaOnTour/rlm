@@ -149,15 +149,6 @@ impl Config {
         toml::from_str(&content).ok()
     }
 
-    /// Save current settings to config.toml.
-    pub fn save_settings(&self) -> Result<()> {
-        self.ensure_rlm_dir()?;
-        let content = toml::to_string_pretty(&self.settings)
-            .map_err(|e| RlmError::Config(format!("failed to serialize settings: {e}")))?;
-        std::fs::write(&self.config_path, content)?;
-        Ok(())
-    }
-
     /// Ensure the `.rlm/` directory exists.
     pub fn ensure_rlm_dir(&self) -> Result<()> {
         std::fs::create_dir_all(&self.rlm_dir)?;
@@ -170,36 +161,6 @@ impl Config {
         self.db_path.exists()
     }
 
-    /// Convert an absolute path to a project-relative path string.
-    #[must_use]
-    pub fn relative_path(&self, abs: &Path) -> String {
-        abs.strip_prefix(&self.project_root)
-            .unwrap_or(abs)
-            .to_string_lossy()
-            .replace('\\', "/")
-    }
-
-    /// Check if a path should be excluded based on settings.
-    #[must_use]
-    pub fn should_exclude(&self, path: &Path) -> bool {
-        let path_str = path.to_string_lossy();
-        for pattern in &self.settings.indexing.exclude_patterns {
-            // Simple glob matching for common patterns
-            let pattern = pattern.trim_end_matches('/');
-            if path_str.contains(pattern) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Check if a file is too large to index based on settings.
-    #[must_use]
-    pub fn is_file_too_large(&self, size_bytes: u64) -> bool {
-        let max_bytes = u64::from(self.settings.indexing.max_file_size_mb) * 1024 * 1024;
-        size_bytes > max_bytes
-    }
-
     /// Get the effective quality log path.
     #[must_use]
     pub fn get_quality_log_path(&self) -> PathBuf {
@@ -208,6 +169,55 @@ impl Config {
         } else {
             self.quality_log_path.clone()
         }
+    }
+}
+
+#[cfg(test)]
+/// Maximum file size in MB used in test assertions.
+const TEST_MAX_FILE_SIZE_MB: u32 = 25;
+
+#[cfg(test)]
+/// Default maximum file size in MB from `IndexingSettings::default()`.
+const DEFAULT_MAX_FILE_SIZE_MB: u32 = 10;
+
+#[cfg(test)]
+/// Bytes per megabyte (1024 * 1024).
+const BYTES_PER_MB: u64 = 1024 * 1024;
+
+#[cfg(test)]
+impl Config {
+    fn save_settings(&self) -> Result<()> {
+        self.ensure_rlm_dir()?;
+        let content = toml::to_string_pretty(&self.settings)
+            .map_err(|e| RlmError::Config(format!("failed to serialize settings: {e}")))?;
+        std::fs::write(&self.config_path, content)?;
+        Ok(())
+    }
+
+    #[must_use]
+    fn relative_path(&self, abs: &Path) -> String {
+        abs.strip_prefix(&self.project_root)
+            .unwrap_or(abs)
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
+    #[must_use]
+    fn should_exclude(&self, path: &Path) -> bool {
+        let path_str = path.to_string_lossy();
+        for pattern in &self.settings.indexing.exclude_patterns {
+            let pattern = pattern.trim_end_matches('/');
+            if path_str.contains(pattern) {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[must_use]
+    fn is_file_too_large(&self, size_bytes: u64) -> bool {
+        let max_bytes = u64::from(self.settings.indexing.max_file_size_mb) * BYTES_PER_MB;
+        size_bytes > max_bytes
     }
 }
 
@@ -253,7 +263,7 @@ mod tests {
         let mut cfg = Config::new(tmp.path());
 
         // Modify settings
-        cfg.settings.indexing.max_file_size_mb = 25;
+        cfg.settings.indexing.max_file_size_mb = TEST_MAX_FILE_SIZE_MB;
         cfg.settings.output.format = "pretty".to_string();
         cfg.settings.quality.log_all_issues = true;
 
@@ -263,7 +273,10 @@ mod tests {
 
         // Create new config from same path (should load saved settings)
         let cfg2 = Config::new(tmp.path());
-        assert_eq!(cfg2.settings.indexing.max_file_size_mb, 25);
+        assert_eq!(
+            cfg2.settings.indexing.max_file_size_mb,
+            TEST_MAX_FILE_SIZE_MB
+        );
         assert_eq!(cfg2.settings.output.format, "pretty");
         assert!(cfg2.settings.quality.log_all_issues);
     }
@@ -274,7 +287,7 @@ mod tests {
 
         // Check indexing defaults
         assert!(settings.indexing.incremental);
-        assert_eq!(settings.indexing.max_file_size_mb, 10);
+        assert_eq!(settings.indexing.max_file_size_mb, DEFAULT_MAX_FILE_SIZE_MB);
         assert!(settings
             .indexing
             .exclude_patterns
@@ -320,13 +333,13 @@ mod tests {
     fn is_file_too_large() {
         let cfg = Config::new("/tmp/project");
 
-        // Default max is 10 MB
-        let max_bytes = 10 * 1024 * 1024;
+        // Default max is DEFAULT_MAX_FILE_SIZE_MB
+        let max_bytes = u64::from(DEFAULT_MAX_FILE_SIZE_MB) * BYTES_PER_MB;
 
         assert!(!cfg.is_file_too_large(max_bytes - 1));
         assert!(!cfg.is_file_too_large(max_bytes));
         assert!(cfg.is_file_too_large(max_bytes + 1));
-        assert!(cfg.is_file_too_large(100 * 1024 * 1024)); // 100 MB
+        assert!(cfg.is_file_too_large(100 * BYTES_PER_MB)); // 100 MB
     }
 
     #[test]
@@ -364,7 +377,10 @@ mod tests {
 
         // Should fall back to defaults
         let cfg = Config::new(tmp.path());
-        assert_eq!(cfg.settings.indexing.max_file_size_mb, 10);
+        assert_eq!(
+            cfg.settings.indexing.max_file_size_mb,
+            DEFAULT_MAX_FILE_SIZE_MB
+        );
         assert!(cfg.settings.indexing.incremental);
     }
 }

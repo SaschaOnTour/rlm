@@ -8,7 +8,7 @@ pub enum RlmError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("index not found: run `rlm index` first")]
+    #[error("index not found: project must be indexed first")]
     IndexNotFound,
 
     #[error("file not found: {path}")]

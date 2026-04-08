@@ -1,8 +1,11 @@
-use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{Language, Query};
 
-use crate::error::{Result, RlmError};
-use crate::ingest::code::CodeParser;
-use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
+use crate::ingest::code::base::{
+    build_language_config, collect_prev_siblings, extract_keyword_visibility,
+    extract_type_signature_to_brace, find_parent_by_kind, BaseParser, ChunkCaptureResult,
+    LanguageConfig, SiblingCollectConfig,
+};
+use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = r"
     (function_definition name: (name) @fn_name) @fn_def
@@ -22,427 +25,164 @@ const REF_QUERY_SRC: &str = r"
     (named_type (qualified_name) @type_ref_qualified)
 ";
 
-pub struct PhpParser {
+pub struct PhpConfig {
     language: Language,
     chunk_query: Query,
     ref_query: Query,
 }
 
-impl Default for PhpParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PhpParser {
-    #[must_use]
-    pub fn new() -> Self {
-        let language: Language = tree_sitter_php::LANGUAGE_PHP.into();
-        let chunk_query =
-            Query::new(&language, CHUNK_QUERY_SRC).expect("PHP chunk query must compile");
-        let ref_query = Query::new(&language, REF_QUERY_SRC).expect("PHP ref query must compile");
+impl PhpConfig {
+    fn new() -> Self {
+        let (language, chunk_query, ref_query) = build_language_config(
+            tree_sitter_php::LANGUAGE_PHP.into(),
+            CHUNK_QUERY_SRC,
+            REF_QUERY_SRC,
+            "PHP",
+        );
         Self {
             language,
             chunk_query,
             ref_query,
         }
     }
-
-    fn make_parser(&self) -> Result<Parser> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&self.language)
-            .map_err(|e| RlmError::Parse {
-                path: String::new(),
-                detail: format!("failed to set PHP language: {e}"),
-            })?;
-        Ok(parser)
-    }
-
-    fn extract_chunks_from_tree(
-        &self,
-        tree: &Tree,
-        source_bytes: &[u8],
-        file_id: i64,
-    ) -> Vec<Chunk> {
-        let mut chunks = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&self.chunk_query, tree.root_node(), source_bytes);
-
-        // Collect use declarations for an imports chunk
-        let mut use_decls: Vec<tree_sitter::Node> = Vec::new();
-        // Track seen chunks to avoid duplicates (name + start_line)
-        let mut seen: std::collections::HashSet<(String, u32)> = std::collections::HashSet::new();
-
-        while let Some(m) = matches.next() {
-            let mut name = String::new();
-            let mut kind = ChunkKind::Other("unknown".into());
-            let mut node = tree.root_node();
-            let mut is_use_decl = false;
-
-            for cap in m.captures {
-                let cap_name = &self.chunk_query.capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("");
-
-                match *cap_name {
-                    "fn_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Function;
-                    }
-                    "class_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Class;
-                    }
-                    "iface_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Interface;
-                    }
-                    "method_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Method;
-                    }
-                    "trait_name" => {
-                        name = text.to_string();
-                        kind = ChunkKind::Trait;
-                    }
-                    n if n.ends_with("_def") => {
-                        node = cap.node;
-                    }
-                    "use_decl" => {
-                        is_use_decl = true;
-                        use_decls.push(cap.node);
-                    }
-                    _ => {}
-                }
-            }
-
-            // Skip use declarations - we'll create a single imports chunk
-            if is_use_decl {
-                continue;
-            }
-
-            if name.is_empty() {
-                continue;
-            }
-
-            let start = node.start_position();
-            let start_line = start.row as u32 + 1;
-
-            // Skip duplicates
-            let key = (name.clone(), start_line);
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.insert(key);
-
-            let content = node.utf8_text(source_bytes).unwrap_or("").to_string();
-            let end = node.end_position();
-
-            let visibility = extract_php_visibility(&content);
-            let signature = match kind {
-                ChunkKind::Function | ChunkKind::Method => content
-                    .find('{')
-                    .map(|pos| content[..pos].trim().to_string()),
-                ChunkKind::Class | ChunkKind::Interface | ChunkKind::Trait => {
-                    extract_php_type_signature(&content)
-                }
-                _ => None,
-            };
-
-            let parent = find_php_parent(node, source_bytes);
-
-            chunks.push(Chunk {
-                id: 0,
-                file_id,
-                start_line,
-                end_line: end.row as u32 + 1,
-                start_byte: node.start_byte() as u32,
-                end_byte: node.end_byte() as u32,
-                kind,
-                ident: name,
-                parent,
-                signature,
-                visibility,
-                ui_ctx: None,
-                doc_comment: collect_php_doc_comment(node, source_bytes),
-                attributes: collect_php_attributes(node, source_bytes),
-                content,
-            });
-        }
-
-        // Create an imports chunk if there are use declarations
-        if !use_decls.is_empty() {
-            let start_line = use_decls
-                .iter()
-                .map(|n| n.start_position().row)
-                .min()
-                .unwrap_or(0);
-            let end_line = use_decls
-                .iter()
-                .map(|n| n.end_position().row)
-                .max()
-                .unwrap_or(0);
-            let start_byte = use_decls
-                .iter()
-                .map(tree_sitter::Node::start_byte)
-                .min()
-                .unwrap_or(0);
-            let end_byte = use_decls
-                .iter()
-                .map(tree_sitter::Node::end_byte)
-                .max()
-                .unwrap_or(0);
-
-            let content: String = use_decls
-                .iter()
-                .filter_map(|n| n.utf8_text(source_bytes).ok())
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            chunks.push(Chunk {
-                id: 0,
-                file_id,
-                start_line: start_line as u32 + 1,
-                end_line: end_line as u32 + 1,
-                start_byte: start_byte as u32,
-                end_byte: end_byte as u32,
-                kind: ChunkKind::Other("imports".into()),
-                ident: "_imports".to_string(),
-                parent: None,
-                signature: None,
-                visibility: None,
-                ui_ctx: None,
-                doc_comment: None,
-                attributes: None,
-                content,
-            });
-        }
-
-        chunks
-    }
-
-    fn extract_refs_from_tree(
-        &self,
-        tree: &Tree,
-        source_bytes: &[u8],
-        chunks: &[Chunk],
-    ) -> Vec<Reference> {
-        let mut refs = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&self.ref_query, tree.root_node(), source_bytes);
-
-        while let Some(m) = matches.next() {
-            for cap in m.captures {
-                let cap_name = &self.ref_query.capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
-                let pos = cap.node.start_position();
-
-                let ref_kind = match *cap_name {
-                    "call_name" | "method_call" => RefKind::Call,
-                    "use_path" | "use_simple" => RefKind::Import,
-                    "type_ref" | "type_ref_qualified" => RefKind::TypeUse,
-                    _ => continue,
-                };
-
-                let line = pos.row as u32 + 1;
-                let chunk_id = chunks
-                    .iter()
-                    .find(|c| line >= c.start_line && line <= c.end_line)
-                    .map_or(0, |c| c.id);
-
-                refs.push(Reference {
-                    id: 0,
-                    chunk_id,
-                    target_ident: text,
-                    ref_kind,
-                    line,
-                    col: pos.column as u32,
-                });
-            }
-        }
-
-        refs
-    }
 }
 
-impl CodeParser for PhpParser {
-    fn language(&self) -> &'static str {
+impl LanguageConfig for PhpConfig {
+    fn language(&self) -> &Language {
+        &self.language
+    }
+
+    fn chunk_query(&self) -> &Query {
+        &self.chunk_query
+    }
+
+    fn ref_query(&self) -> &Query {
+        &self.ref_query
+    }
+
+    fn language_name(&self) -> &'static str {
         "php"
     }
 
-    fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        Ok(self.extract_chunks_from_tree(&tree, source.as_bytes(), file_id))
+    fn import_capture_name(&self) -> &'static str {
+        "use_decl"
     }
 
-    fn extract_refs(&self, source: &str, chunks: &[Chunk]) -> Result<Vec<Reference>> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        Ok(self.extract_refs_from_tree(&tree, source.as_bytes(), chunks))
+    fn needs_deduplication(&self) -> bool {
+        true
     }
 
-    fn parse_chunks_and_refs(
-        &self,
-        source: &str,
-        file_id: i64,
-    ) -> Result<(Vec<Chunk>, Vec<Reference>)> {
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        let source_bytes = source.as_bytes();
-        let chunks = self.extract_chunks_from_tree(&tree, source_bytes, file_id);
-        let refs = self.extract_refs_from_tree(&tree, source_bytes, &chunks);
-        Ok((chunks, refs))
-    }
-
-    fn validate_syntax(&self, source: &str) -> bool {
-        let mut parser = match self.make_parser() {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-        match parser.parse(source, None) {
-            Some(tree) => !tree.root_node().has_error(),
-            None => false,
+    fn map_chunk_capture(&self, capture_name: &str, text: &str) -> Option<ChunkCaptureResult> {
+        match capture_name {
+            "fn_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Function,
+            )),
+            "class_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Class)),
+            "iface_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Interface,
+            )),
+            "method_name" => Some(ChunkCaptureResult::name(
+                text.to_string(),
+                ChunkKind::Method,
+            )),
+            "trait_name" => Some(ChunkCaptureResult::name(text.to_string(), ChunkKind::Trait)),
+            n if n.ends_with("_def") => Some(ChunkCaptureResult::definition()),
+            _ => None,
         }
     }
 
-    fn parse_with_quality(
-        &self,
-        source: &str,
-        file_id: i64,
-    ) -> Result<crate::ingest::code::ParseResult> {
-        use crate::ingest::code::{find_error_lines, ParseQuality, ParseResult};
+    fn map_ref_capture(&self, capture_name: &str) -> Option<RefKind> {
+        match capture_name {
+            "call_name" | "method_call" => Some(RefKind::Call),
+            "use_path" | "use_simple" => Some(RefKind::Import),
+            "type_ref" | "type_ref_qualified" => Some(RefKind::TypeUse),
+            _ => None,
+        }
+    }
 
-        let mut parser = self.make_parser()?;
-        let tree = parser.parse(source, None).ok_or_else(|| RlmError::Parse {
-            path: String::new(),
-            detail: "tree-sitter parse returned None".into(),
-        })?;
-        let source_bytes = source.as_bytes();
-        let chunks = self.extract_chunks_from_tree(&tree, source_bytes, file_id);
-        let refs = self.extract_refs_from_tree(&tree, source_bytes, &chunks);
+    fn extract_visibility(&self, content: &str) -> Option<String> {
+        extract_keyword_visibility(content, "public", &[])
+    }
 
-        let quality = if tree.root_node().has_error() {
-            let error_lines = find_error_lines(tree.root_node());
-            ParseQuality::Partial {
-                error_count: error_lines.len(),
-                error_lines,
+    fn extract_signature(&self, content: &str, kind: &ChunkKind) -> Option<String> {
+        match kind {
+            ChunkKind::Function | ChunkKind::Method => content
+                .find('{')
+                .map(|pos| content[..pos].trim().to_string()),
+            ChunkKind::Class | ChunkKind::Interface | ChunkKind::Trait => {
+                extract_type_signature_to_brace(content)
             }
-        } else {
-            ParseQuality::Complete
-        };
+            _ => None,
+        }
+    }
 
-        Ok(ParseResult {
-            chunks,
-            refs,
-            quality,
-        })
+    fn find_parent(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        find_parent_by_kind(
+            node,
+            source,
+            &[
+                "class_declaration",
+                "interface_declaration",
+                "trait_declaration",
+            ],
+            "name",
+        )
+    }
+
+    fn collect_doc_comment(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        collect_prev_siblings(
+            node,
+            source,
+            &SiblingCollectConfig {
+                kinds: &["comment"],
+                skip_kinds: &["attribute_list"],
+                prefixes: &["/**"],
+                multi: false,
+            },
+        )
+    }
+
+    fn collect_attributes(&self, node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+        collect_prev_siblings(
+            node,
+            source,
+            &SiblingCollectConfig {
+                kinds: &["attribute_list", "attribute_group"],
+                skip_kinds: &["comment"],
+                prefixes: &[],
+                multi: true,
+            },
+        )
     }
 }
 
-fn extract_php_visibility(content: &str) -> Option<String> {
-    let trimmed = content.trim_start();
-    if trimmed.starts_with("public") {
-        Some("public".into())
-    } else if trimmed.starts_with("protected") {
-        Some("protected".into())
-    } else if trimmed.starts_with("private") {
-        Some("private".into())
-    } else {
-        Some("public".into()) // PHP default
+/// Public type alias for the PHP parser.
+pub type PhpParser = BaseParser<PhpConfig>;
+
+impl Default for PhpParser {
+    fn default() -> Self {
+        Self::new(PhpConfig::new())
     }
 }
 
-/// Extract signature for PHP type declarations (class, interface, trait).
-fn extract_php_type_signature(content: &str) -> Option<String> {
-    if let Some(brace_pos) = content.find('{') {
-        let sig = content[..brace_pos].trim();
-        Some(sig.to_string())
-    } else {
-        content.lines().next().map(|s| s.trim().to_string())
-    }
-}
-
-fn find_php_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        let kind = parent.kind();
-        if kind == "class_declaration"
-            || kind == "interface_declaration"
-            || kind == "trait_declaration"
-        {
-            for i in 0..parent.child_count() {
-                if let Some(child) = parent.child(i as u32) {
-                    if child.kind() == "name" {
-                        return child
-                            .utf8_text(source)
-                            .ok()
-                            .map(std::string::ToString::to_string);
-                    }
-                }
-            }
-        }
-        current = parent.parent();
-    }
-    None
-}
-
-fn collect_php_doc_comment(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == "attribute_list" {
-            current = sib.prev_sibling();
-            continue;
-        }
-        if sib.kind() == "comment" {
-            let text = sib.utf8_text(source).unwrap_or("");
-            if text.starts_with("/**") {
-                return Some(text.to_string());
-            }
-        }
-        break;
-    }
-    None
-}
-
-fn collect_php_attributes(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
-    let mut attrs = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == "attribute_list" || sib.kind() == "attribute_group" {
-            attrs.push(sib.utf8_text(source).unwrap_or("").to_string());
-            current = sib.prev_sibling();
-            continue;
-        }
-        if sib.kind() == "comment" {
-            current = sib.prev_sibling();
-            continue;
-        }
-        break;
-    }
-    attrs.reverse();
-    if attrs.is_empty() {
-        None
-    } else {
-        Some(attrs.join("\n"))
+impl PhpParser {
+    /// Create a new PHP parser.
+    #[must_use]
+    pub fn create() -> Self {
+        Self::new(PhpConfig::new())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::code::CodeParser;
+    use crate::models::chunk::{ChunkKind, RefKind};
 
     fn parser() -> PhpParser {
-        PhpParser::new()
+        PhpParser::create()
     }
 
     #[test]

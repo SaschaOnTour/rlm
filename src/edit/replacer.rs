@@ -1,7 +1,30 @@
 use crate::db::Database;
-use crate::edit::syntax_guard::SyntaxGuard;
+use crate::edit::syntax_guard::{validate_and_write, SyntaxGuard};
 use crate::error::{Result, RlmError};
 use crate::ingest::scanner::ext_to_lang;
+use crate::models::chunk::Chunk;
+
+/// Look up a file and its matching chunk by symbol identifier.
+///
+/// Returns the resolved `Chunk` (cloned) so callers can use byte offsets, content, etc.
+fn find_symbol_in_file(db: &Database, file_path: &str, symbol: &str) -> Result<Chunk> {
+    let file = db
+        .get_file_by_path(file_path)?
+        .ok_or_else(|| RlmError::FileNotFound {
+            path: file_path.into(),
+        })?;
+
+    let chunks = db.get_chunks_for_file(file.id)?;
+    let chunk =
+        chunks
+            .iter()
+            .find(|c| c.ident == symbol)
+            .ok_or_else(|| RlmError::SymbolNotFound {
+                ident: symbol.into(),
+            })?;
+
+    Ok(chunk.clone())
+}
 
 /// Replace an AST node (function, struct, etc.) by identifier.
 pub fn replace_symbol(
@@ -11,22 +34,7 @@ pub fn replace_symbol(
     new_code: &str,
     guard: &SyntaxGuard,
 ) -> Result<String> {
-    // Find the file
-    let file = db
-        .get_file_by_path(file_path)?
-        .ok_or_else(|| RlmError::FileNotFound {
-            path: file_path.into(),
-        })?;
-
-    // Find the chunk for this symbol in this file
-    let chunks = db.get_chunks_for_file(file.id)?;
-    let chunk =
-        chunks
-            .iter()
-            .find(|c| c.ident == symbol)
-            .ok_or_else(|| RlmError::SymbolNotFound {
-                ident: symbol.into(),
-            })?;
+    let chunk = find_symbol_in_file(db, file_path, symbol)?;
 
     // Read the actual file content
     let full_path = std::path::Path::new(file_path);
@@ -56,7 +64,7 @@ pub fn replace_symbol(
     let lang = ext_to_lang(ext);
 
     // Validate and write
-    guard.validate_and_write(lang, &modified, full_path)?;
+    validate_and_write(guard, lang, &modified, full_path)?;
 
     Ok(modified)
 }
@@ -68,20 +76,7 @@ pub fn preview_replace(
     symbol: &str,
     new_code: &str,
 ) -> Result<ReplaceDiff> {
-    let file = db
-        .get_file_by_path(file_path)?
-        .ok_or_else(|| RlmError::FileNotFound {
-            path: file_path.into(),
-        })?;
-
-    let chunks = db.get_chunks_for_file(file.id)?;
-    let chunk =
-        chunks
-            .iter()
-            .find(|c| c.ident == symbol)
-            .ok_or_else(|| RlmError::SymbolNotFound {
-                ident: symbol.into(),
-            })?;
+    let chunk = find_symbol_in_file(db, file_path, symbol)?;
 
     Ok(ReplaceDiff {
         file: file_path.to_string(),
@@ -110,18 +105,25 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind};
     use crate::models::file::FileRecord;
 
+    /// File size in bytes for the test file record.
+    const TEST_FILE_SIZE: u64 = 100;
+    /// End line of the test chunk (3 lines of code).
+    const CHUNK_END_LINE: u32 = 3;
+    /// End byte offset of the test chunk content "fn main() {\n}".
+    const CHUNK_END_BYTE: u32 = 14;
+
     #[test]
     fn preview_replace_works() {
         let db = Database::open_in_memory().unwrap();
-        let f = FileRecord::new("test.rs".into(), "h".into(), "rust".into(), 100);
+        let f = FileRecord::new("test.rs".into(), "h".into(), "rust".into(), TEST_FILE_SIZE);
         let fid = db.upsert_file(&f).unwrap();
         let c = Chunk {
             id: 0,
             file_id: fid,
             start_line: 1,
-            end_line: 3,
+            end_line: CHUNK_END_LINE,
             start_byte: 0,
-            end_byte: 14,
+            end_byte: CHUNK_END_BYTE,
             kind: ChunkKind::Function,
             ident: "main".into(),
             parent: None,

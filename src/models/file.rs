@@ -34,10 +34,17 @@ mod tests {
 
     #[test]
     fn file_record_new_sets_zero_id() {
-        let f = FileRecord::new("src/main.rs".into(), "abc123".into(), "rust".into(), 1024);
+        const FILE_SIZE: u64 = 1024;
+
+        let f = FileRecord::new(
+            "src/main.rs".into(),
+            "abc123".into(),
+            "rust".into(),
+            FILE_SIZE,
+        );
         assert_eq!(f.id, 0);
         assert_eq!(f.path, "src/main.rs");
         assert_eq!(f.lang, "rust");
-        assert_eq!(f.size_bytes, 1024);
+        assert_eq!(f.size_bytes, FILE_SIZE);
     }
 }

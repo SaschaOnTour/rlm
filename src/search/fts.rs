@@ -33,6 +33,9 @@ fn sanitize_fts_query(query: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Search result limit for the empty-DB test.
+    const TEST_SEARCH_LIMIT: usize = 10;
+
     #[test]
     fn sanitize_fts_query_basic() {
         let result = sanitize_fts_query("hello world");
@@ -56,7 +59,7 @@ mod tests {
     #[test]
     fn search_empty_db_returns_empty() {
         let db = Database::open_in_memory().unwrap();
-        let results = search(&db, "hello", 10).unwrap();
+        let results = search(&db, "hello", TEST_SEARCH_LIMIT).unwrap();
         assert!(results.is_empty());
     }
 }

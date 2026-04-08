@@ -5,13 +5,16 @@ use std::path::Path;
 
 use crate::error::Result;
 
+/// Size of the I/O buffer used for streaming file hashing (8 KB).
+const HASH_BUFFER_SIZE: usize = 8192;
+
 /// Compute SHA-256 hash of a file's contents using streaming.
 /// PERF: Uses 8KB buffer instead of reading entire file into memory.
 pub fn hash_file(path: &Path) -> Result<String> {
     let file = File::open(path)?;
-    let mut reader = BufReader::with_capacity(8192, file);
+    let mut reader = BufReader::with_capacity(HASH_BUFFER_SIZE, file);
     let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 8192];
+    let mut buffer = [0u8; HASH_BUFFER_SIZE];
 
     loop {
         let bytes_read = reader.read(&mut buffer)?;

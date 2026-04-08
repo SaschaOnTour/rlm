@@ -9,7 +9,10 @@
 use serde_json::Value;
 
 use crate::error::Result;
-use crate::ingest::text::TextParser;
+use crate::ingest::text::{
+    create_fallback_chunk, extract_structured_chunks, value_preview_string, StructuredChunkConfig,
+    TextParser,
+};
 use crate::models::chunk::{Chunk, ChunkKind};
 
 pub struct JsonSemanticParser;
@@ -32,6 +35,7 @@ impl TextParser for JsonSemanticParser {
         "json"
     }
 
+    // qual:allow(iosp) reason: "if-dispatch: parse valid JSON or return fallback chunk"
     fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
         let mut chunks = Vec::new();
 
@@ -39,118 +43,26 @@ impl TextParser for JsonSemanticParser {
         let value: Value = match serde_json::from_str(source) {
             Ok(v) => v,
             Err(_) => {
-                // If parsing fails, create a single chunk for the whole file
-                return Ok(vec![create_fallback_chunk(source, file_id)]);
+                return Ok(vec![create_fallback_chunk(source, file_id, "json")]);
             }
         };
 
-        // Extract chunks from the parsed JSON
-        extract_json_chunks(&value, "", source, file_id, &mut chunks, 0);
+        let cfg = StructuredChunkConfig {
+            source,
+            file_id,
+            determine_kind: determine_json_kind,
+            format_signature: |key, val| format!("\"{}\": {}", key, json_type_name(val)),
+            find_lines: |src, key, _full_path| find_json_key_lines(src, key),
+            value_to_string: |v, indent| value_preview_string(v, indent, true, ": "),
+            is_important_key: is_important_json_key,
+        };
+        extract_structured_chunks(&value, "", &mut chunks, 0, &cfg);
 
-        // If no chunks were created, create a fallback
         if chunks.is_empty() {
-            chunks.push(create_fallback_chunk(source, file_id));
+            chunks.push(create_fallback_chunk(source, file_id, "json"));
         }
 
         Ok(chunks)
-    }
-}
-
-fn create_fallback_chunk(source: &str, file_id: i64) -> Chunk {
-    let line_count = source.lines().count() as u32;
-    Chunk {
-        id: 0,
-        file_id,
-        start_line: 1,
-        end_line: line_count.max(1),
-        start_byte: 0,
-        end_byte: source.len() as u32,
-        kind: ChunkKind::Other("json".into()),
-        ident: "_root".to_string(),
-        parent: None,
-        signature: None,
-        visibility: None,
-        ui_ctx: None,
-        doc_comment: None,
-        attributes: None,
-        content: source.to_string(),
-    }
-}
-
-fn extract_json_chunks(
-    value: &Value,
-    path: &str,
-    source: &str,
-    file_id: i64,
-    chunks: &mut Vec<Chunk>,
-    depth: usize,
-) {
-    // Limit depth to avoid excessive chunking
-    if depth > 3 {
-        return;
-    }
-
-    if let Value::Object(obj) = value {
-        for (key, val) in obj {
-            let full_path = if path.is_empty() {
-                key.clone()
-            } else {
-                format!("{path}.{key}")
-            };
-
-            // Determine chunk kind based on key name
-            let kind = determine_json_kind(key, val);
-
-            // Find approximate line range
-            let (start_line, end_line) = find_json_key_lines(source, key);
-
-            // Create content representation
-            let content = json_value_to_string(val, 0);
-
-            // Create chunk for objects, arrays, and important keys
-            let should_chunk = matches!(val, Value::Object(_) | Value::Array(_))
-                || depth < 2
-                || is_important_json_key(key);
-
-            if should_chunk {
-                chunks.push(Chunk {
-                    id: 0,
-                    file_id,
-                    start_line,
-                    end_line,
-                    start_byte: 0,
-                    end_byte: 0,
-                    kind: kind.clone(),
-                    ident: full_path.clone(),
-                    parent: if path.is_empty() {
-                        None
-                    } else {
-                        Some(path.to_string())
-                    },
-                    signature: Some(format!("\"{}\": {}", key, json_type_name(val))),
-                    visibility: None,
-                    ui_ctx: None,
-                    doc_comment: None,
-                    attributes: None,
-                    content,
-                });
-            }
-
-            // Recurse into nested objects
-            if matches!(val, Value::Object(_)) {
-                extract_json_chunks(val, &full_path, source, file_id, chunks, depth + 1);
-            }
-
-            // Handle arrays of objects
-            if let Value::Array(arr) = val {
-                for (i, item) in arr.iter().enumerate() {
-                    if matches!(item, Value::Object(_)) {
-                        let item_path = format!("{full_path}[{i}]");
-                        extract_json_chunks(item, &item_path, source, file_id, chunks, depth + 1);
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -209,6 +121,22 @@ fn is_important_json_key(key: &str) -> bool {
     )
 }
 
+/// Count brace/bracket balance deltas on a single line.
+fn count_delimiters(line: &str) -> (i32, i32) {
+    let mut braces = 0i32;
+    let mut brackets = 0i32;
+    for ch in line.chars() {
+        match ch {
+            '{' => braces += 1,
+            '}' => braces -= 1,
+            '[' => brackets += 1,
+            ']' => brackets -= 1,
+            _ => {}
+        }
+    }
+    (braces, brackets)
+}
+
 fn find_json_key_lines(source: &str, key: &str) -> (u32, u32) {
     let lines: Vec<&str> = source.lines().collect();
     let search_pattern = format!("\"{key}\"");
@@ -223,37 +151,20 @@ fn find_json_key_lines(source: &str, key: &str) -> (u32, u32) {
         if !found && line.contains(&search_pattern) {
             start_line = (i + 1) as u32;
             found = true;
+        }
 
-            // Count opening braces/brackets on this line
-            for ch in line.chars() {
-                match ch {
-                    '{' => brace_count += 1,
-                    '}' => brace_count -= 1,
-                    '[' => bracket_count += 1,
-                    ']' => bracket_count -= 1,
-                    _ => {}
-                }
-            }
+        if !found {
             continue;
         }
 
-        if found {
-            // Track braces/brackets to find matching close
-            for ch in line.chars() {
-                match ch {
-                    '{' => brace_count += 1,
-                    '}' => brace_count -= 1,
-                    '[' => bracket_count += 1,
-                    ']' => bracket_count -= 1,
-                    _ => {}
-                }
-            }
+        let (bd, kd) = count_delimiters(line);
+        brace_count += bd;
+        bracket_count += kd;
 
-            // When we're back to balanced, we've found the end
-            if brace_count <= 0 && bracket_count <= 0 {
-                end_line = (i + 1) as u32;
-                break;
-            }
+        // When we're back to balanced, we've found the end
+        if brace_count <= 0 && bracket_count <= 0 {
+            end_line = (i + 1) as u32;
+            break;
         }
     }
 
@@ -268,55 +179,6 @@ fn json_type_name(value: &Value) -> &'static str {
         Value::Number(_) => "number",
         Value::Bool(_) => "bool",
         Value::Null => "null",
-    }
-}
-
-fn json_value_to_string(value: &Value, indent: usize) -> String {
-    let prefix = "  ".repeat(indent);
-    match value {
-        Value::Null => "null".to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => n.to_string(),
-        Value::String(s) => {
-            if s.len() > 100 {
-                format!("\"{}...\"", &s[..97])
-            } else {
-                format!("\"{s}\"")
-            }
-        }
-        Value::Array(arr) => {
-            if arr.len() > 5 {
-                format!("[...{} items]", arr.len())
-            } else {
-                let items: Vec<String> = arr
-                    .iter()
-                    .map(|v| json_value_to_string(v, indent + 1))
-                    .collect();
-                format!("[{}]", items.join(", "))
-            }
-        }
-        Value::Object(obj) => {
-            if obj.len() > 5 {
-                format!("{{...{} keys}}", obj.len())
-            } else {
-                let items: Vec<String> = obj
-                    .iter()
-                    .map(|(k, v)| {
-                        format!(
-                            "{}\"{}\": {}",
-                            prefix,
-                            k,
-                            json_value_to_string(v, indent + 1)
-                        )
-                    })
-                    .collect();
-                format!(
-                    "{{\n{}\n{}}}",
-                    items.join(",\n"),
-                    "  ".repeat(indent.saturating_sub(1))
-                )
-            }
-        }
     }
 }
 
@@ -424,5 +286,25 @@ mod tests {
 }"#;
         let chunks = parser().parse_chunks(source, 1).unwrap();
         assert!(chunks.iter().any(|c| c.ident == "items"));
+    }
+
+    #[test]
+    fn test_json_type_name() {
+        assert_eq!(json_type_name(&serde_json::Value::Null), "null");
+        assert_eq!(json_type_name(&serde_json::Value::Bool(true)), "bool");
+        assert_eq!(json_type_name(&serde_json::Value::Bool(false)), "bool");
+        assert_eq!(
+            json_type_name(&serde_json::Value::Number(serde_json::Number::from(42))),
+            "number"
+        );
+        assert_eq!(
+            json_type_name(&serde_json::Value::String("hello".into())),
+            "string"
+        );
+        assert_eq!(json_type_name(&serde_json::Value::Array(vec![])), "array");
+        assert_eq!(
+            json_type_name(&serde_json::Value::Object(serde_json::Map::new())),
+            "object"
+        );
     }
 }

@@ -2,3 +2,4 @@
 .rlm/
 *.db
 /work
+/docs

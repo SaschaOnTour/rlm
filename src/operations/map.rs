@@ -86,6 +86,28 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind};
     use crate::models::file::FileRecord;
 
+    const TEST_FILE_BYTES: u64 = 500;
+    const TEST_FILE_BYTES_SMALL: u64 = 100;
+    const TEST_FILE_BYTES_MEDIUM: u64 = 200;
+    const TEST_START_LINE: u32 = 1;
+    const TEST_END_LINE: u32 = 10;
+    const TEST_END_LINE_SHORT: u32 = 5;
+    const TEST_START_BYTE: u32 = 0;
+    const TEST_END_BYTE: u32 = 100;
+    const TEST_END_BYTE_SMALL: u32 = 50;
+    const PRIV_FN_START_LINE: u32 = 15;
+    const PRIV_FN_END_LINE: u32 = 20;
+    const PRIV_FN_START_BYTE: u32 = 150;
+    const PRIV_FN_END_BYTE: u32 = 200;
+    const STRUCT_START_LINE: u32 = 25;
+    const STRUCT_END_LINE: u32 = 30;
+    const STRUCT_START_BYTE: u32 = 250;
+    const STRUCT_END_BYTE: u32 = 300;
+    const PUB_METHOD_START_BYTE: u32 = 50;
+    const PUB_METHOD_END_BYTE: u32 = 150;
+    const PRIV_METHOD_START_BYTE: u32 = 200;
+    const PRIV_METHOD_END_BYTE: u32 = 300;
+
     fn setup_test_db() -> Database {
         Database::open_in_memory().unwrap()
     }
@@ -106,17 +128,17 @@ mod tests {
             "src/lib.rs".to_string(),
             "abc123".to_string(),
             "rust".to_string(),
-            500,
+            TEST_FILE_BYTES,
         );
         let file_id = db.upsert_file(&file).unwrap();
 
         let pub_fn = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 10,
-            start_byte: 0,
-            end_byte: 100,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Function,
             ident: "process".to_string(),
             parent: None,
@@ -132,10 +154,10 @@ mod tests {
         let priv_fn = Chunk {
             id: 0,
             file_id,
-            start_line: 15,
-            end_line: 20,
-            start_byte: 150,
-            end_byte: 200,
+            start_line: PRIV_FN_START_LINE,
+            end_line: PRIV_FN_END_LINE,
+            start_byte: PRIV_FN_START_BYTE,
+            end_byte: PRIV_FN_END_BYTE,
             kind: ChunkKind::Function,
             ident: "helper".to_string(),
             parent: None,
@@ -151,10 +173,10 @@ mod tests {
         let pub_struct = Chunk {
             id: 0,
             file_id,
-            start_line: 25,
-            end_line: 30,
-            start_byte: 250,
-            end_byte: 300,
+            start_line: STRUCT_START_LINE,
+            end_line: STRUCT_END_LINE,
+            start_byte: STRUCT_START_BYTE,
+            end_byte: STRUCT_END_BYTE,
             kind: ChunkKind::Struct,
             ident: "Config".to_string(),
             parent: None,
@@ -173,7 +195,7 @@ mod tests {
         let entry = &result[0];
         assert_eq!(entry.file, "src/lib.rs");
         assert_eq!(entry.lang, "rust");
-        assert_eq!(entry.line_count, 30);
+        assert_eq!(entry.line_count, STRUCT_END_LINE);
         assert_eq!(entry.symbols.len(), 2);
         assert!(entry.symbols.contains(&"fn:process".to_string()));
         assert!(entry.symbols.contains(&"struct:Config".to_string()));
@@ -189,7 +211,7 @@ mod tests {
             "src/lib.rs".to_string(),
             "aaa".to_string(),
             "rust".to_string(),
-            100,
+            TEST_FILE_BYTES_SMALL,
         );
         let file1_id = db.upsert_file(&file1).unwrap();
 
@@ -197,17 +219,17 @@ mod tests {
             "tests/test.rs".to_string(),
             "bbb".to_string(),
             "rust".to_string(),
-            100,
+            TEST_FILE_BYTES_SMALL,
         );
         let file2_id = db.upsert_file(&file2).unwrap();
 
         let chunk1 = Chunk {
             id: 0,
             file_id: file1_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE_SHORT,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE_SMALL,
             kind: ChunkKind::Function,
             ident: "main".to_string(),
             parent: None,
@@ -223,10 +245,10 @@ mod tests {
         let chunk2 = Chunk {
             id: 0,
             file_id: file2_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE_SHORT,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE_SMALL,
             kind: ChunkKind::Function,
             ident: "test_fn".to_string(),
             parent: None,
@@ -253,7 +275,7 @@ mod tests {
             "src/a.rs".to_string(),
             "aaa".to_string(),
             "rust".to_string(),
-            100,
+            TEST_FILE_BYTES_SMALL,
         );
         db.upsert_file(&file1).unwrap();
 
@@ -261,7 +283,7 @@ mod tests {
             "src/b.rs".to_string(),
             "bbb".to_string(),
             "rust".to_string(),
-            100,
+            TEST_FILE_BYTES_SMALL,
         );
         db.upsert_file(&file2).unwrap();
 
@@ -281,17 +303,17 @@ mod tests {
             "src/lib.rs".to_string(),
             "xyz".to_string(),
             "java".to_string(),
-            200,
+            TEST_FILE_BYTES_MEDIUM,
         );
         let file_id = db.upsert_file(&file).unwrap();
 
         let pub_method = Chunk {
             id: 0,
             file_id,
-            start_line: 5,
-            end_line: 10,
-            start_byte: 50,
-            end_byte: 150,
+            start_line: TEST_END_LINE_SHORT,
+            end_line: TEST_END_LINE,
+            start_byte: PUB_METHOD_START_BYTE,
+            end_byte: PUB_METHOD_END_BYTE,
             kind: ChunkKind::Method,
             ident: "process".to_string(),
             parent: Some("MyClass".to_string()),
@@ -307,10 +329,10 @@ mod tests {
         let priv_method = Chunk {
             id: 0,
             file_id,
-            start_line: 15,
-            end_line: 20,
-            start_byte: 200,
-            end_byte: 300,
+            start_line: PRIV_FN_START_LINE,
+            end_line: PRIV_FN_END_LINE,
+            start_byte: PRIV_METHOD_START_BYTE,
+            end_byte: PRIV_METHOD_END_BYTE,
             kind: ChunkKind::Method,
             ident: "helper".to_string(),
             parent: Some("MyClass".to_string()),

@@ -102,6 +102,12 @@ mod tests {
     use std::io::Write;
     use tempfile::TempDir;
 
+    const TEST_FILE_BYTES: u64 = 100;
+    const TEST_START_LINE: u32 = 1;
+    const TEST_END_LINE: u32 = 3;
+    const TEST_START_BYTE: u32 = 0;
+    const TEST_END_BYTE: u32 = 50;
+
     fn setup_test_db_and_dir() -> (Database, TempDir) {
         let db = Database::open_in_memory().unwrap();
         let tmp = TempDir::new().unwrap();
@@ -135,7 +141,12 @@ mod tests {
         std::fs::write(&file_path, "fn main() { new code }").unwrap();
 
         // Index with different hash
-        let file = FileRecord::new("test.rs".into(), "oldhash".into(), "rust".into(), 100);
+        let file = FileRecord::new(
+            "test.rs".into(),
+            "oldhash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         db.upsert_file(&file).unwrap();
 
         let result = diff_file(&db, "test.rs", tmp.path()).unwrap();
@@ -166,16 +177,21 @@ mod tests {
         writeln!(file, "}}").unwrap();
 
         // Index the file and chunk
-        let file_rec = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), 100);
+        let file_rec = FileRecord::new(
+            "test.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file_rec).unwrap();
 
         let chunk = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 3,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Function,
             ident: "main".into(),
             parent: None,

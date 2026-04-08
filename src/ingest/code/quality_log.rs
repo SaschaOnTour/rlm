@@ -3,13 +3,11 @@
 //! Logs parse quality issues to `.rlm/quality-issues.log` in JSONL format.
 //! This helps track tree-sitter grammar limitations and detect regressions.
 
-use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-
-use super::ParseQuality;
 
 /// A single quality issue entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,66 +34,11 @@ pub struct QualityIssue {
     pub test: Option<String>,
 }
 
-impl QualityIssue {
-    /// Create a new issue from parse quality information.
-    #[must_use]
-    pub fn from_parse_quality(
-        file: &str,
-        lang: &str,
-        quality: &ParseQuality,
-        source: Option<&str>,
-    ) -> Vec<Self> {
-        let ts = chrono_timestamp();
-        match quality {
-            ParseQuality::Complete => vec![],
-            ParseQuality::Partial { error_lines, .. } => {
-                if error_lines.is_empty() {
-                    vec![Self {
-                        ts,
-                        file: file.to_string(),
-                        lang: lang.to_string(),
-                        issue: "incomplete_parse".to_string(),
-                        line: None,
-                        context: None,
-                        known: false,
-                        test: None,
-                    }]
-                } else {
-                    error_lines
-                        .iter()
-                        .map(|&line| {
-                            let context = source.and_then(|s| extract_context(s, line));
-                            Self {
-                                ts: chrono_timestamp(),
-                                file: file.to_string(),
-                                lang: lang.to_string(),
-                                issue: "error_node".to_string(),
-                                line: Some(line),
-                                context,
-                                known: false,
-                                test: None,
-                            }
-                        })
-                        .collect()
-                }
-            }
-            ParseQuality::Failed { reason } => vec![Self {
-                ts,
-                file: file.to_string(),
-                lang: lang.to_string(),
-                issue: "parse_failed".to_string(),
-                line: None,
-                context: Some(reason.chars().take(50).collect()),
-                known: false,
-                test: None,
-            }],
-        }
-    }
-}
-
 /// Quality log writer that appends issues to a JSONL file.
 pub struct QualityLogger {
     log_path: std::path::PathBuf,
+    /// Only read by `log()` which is `#[cfg(test)]`.
+    #[cfg_attr(not(test), allow(dead_code))]
     log_all: bool,
 }
 
@@ -106,36 +49,6 @@ impl QualityLogger {
             log_path: log_path.into(),
             log_all,
         }
-    }
-
-    /// Log an issue to the JSONL file.
-    pub fn log(&self, issue: &QualityIssue) -> std::io::Result<()> {
-        // Skip known issues unless log_all is enabled
-        if issue.known && !self.log_all {
-            return Ok(());
-        }
-
-        // Ensure parent directory exists
-        if let Some(parent) = self.log_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_path)?;
-
-        let json = serde_json::to_string(issue).unwrap_or_default();
-        writeln!(file, "{json}")?;
-        Ok(())
-    }
-
-    /// Log multiple issues.
-    pub fn log_all_issues(&self, issues: &[QualityIssue]) -> std::io::Result<()> {
-        for issue in issues {
-            self.log(issue)?;
-        }
-        Ok(())
     }
 
     /// Clear the log file.
@@ -210,71 +123,6 @@ pub struct IssueSummary {
     pub by_type: std::collections::HashMap<String, usize>,
 }
 
-/// Generate an ISO 8601 timestamp.
-fn chrono_timestamp() -> String {
-    // Simple timestamp without chrono dependency
-    use std::time::SystemTime;
-    let duration = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = duration.as_secs();
-
-    // Convert to basic ISO format (not perfect but good enough)
-    let days_since_epoch = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
-
-    // Approximate year/month/day calculation
-    let mut days = days_since_epoch as i64;
-    let mut year = 1970;
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if days < days_in_year {
-            break;
-        }
-        days -= days_in_year;
-        year += 1;
-    }
-
-    let months_days: [i64; 12] = if is_leap_year(year) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 1;
-    for &m_days in &months_days {
-        if days < m_days {
-            break;
-        }
-        days -= m_days;
-        month += 1;
-    }
-    let day = days + 1;
-
-    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
-}
-
-fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
-/// Extract ~50 characters of context around a line.
-fn extract_context(source: &str, line: u32) -> Option<String> {
-    let lines: Vec<&str> = source.lines().collect();
-    let idx = (line as usize).saturating_sub(1);
-    lines.get(idx).map(|l| {
-        let trimmed = l.trim();
-        if trimmed.len() > 50 {
-            format!("{}...", &trimmed[..47])
-        } else {
-            trimmed.to_string()
-        }
-    })
-}
-
 /// Known issues registry.
 /// These patterns match issues that are expected due to tree-sitter grammar limitations.
 pub static KNOWN_ISSUES: &[KnownIssuePattern] = &[
@@ -347,9 +195,269 @@ pub fn annotate_known_issues(issues: &mut [QualityIssue]) {
 }
 
 #[cfg(test)]
+use super::ParseQuality;
+#[cfg(test)]
+use std::fs::OpenOptions;
+#[cfg(test)]
+use std::io::Write;
+
+#[cfg(test)]
+impl QualityIssue {
+    /// Create a new issue from parse quality information.
+    #[must_use]
+    fn from_parse_quality(
+        file: &str,
+        lang: &str,
+        quality: &ParseQuality,
+        source: Option<&str>,
+    ) -> Vec<Self> {
+        let ts = chrono_timestamp();
+        match quality {
+            ParseQuality::Complete => vec![],
+            ParseQuality::Partial { error_lines, .. } => {
+                if error_lines.is_empty() {
+                    vec![Self {
+                        ts,
+                        file: file.to_string(),
+                        lang: lang.to_string(),
+                        issue: "incomplete_parse".to_string(),
+                        line: None,
+                        context: None,
+                        known: false,
+                        test: None,
+                    }]
+                } else {
+                    error_lines
+                        .iter()
+                        .map(|&line| {
+                            let context = source.and_then(|s| extract_context(s, line));
+                            Self {
+                                ts: chrono_timestamp(),
+                                file: file.to_string(),
+                                lang: lang.to_string(),
+                                issue: "error_node".to_string(),
+                                line: Some(line),
+                                context,
+                                known: false,
+                                test: None,
+                            }
+                        })
+                        .collect()
+                }
+            }
+            ParseQuality::Failed { reason } => vec![Self {
+                ts,
+                file: file.to_string(),
+                lang: lang.to_string(),
+                issue: "parse_failed".to_string(),
+                line: None,
+                context: Some(reason.chars().take(50).collect()),
+                known: false,
+                test: None,
+            }],
+        }
+    }
+}
+
+#[cfg(test)]
+impl QualityLogger {
+    /// Log an issue to the JSONL file.
+    fn log(&self, issue: &QualityIssue) -> std::io::Result<()> {
+        // Skip known issues unless log_all is enabled
+        if issue.known && !self.log_all {
+            return Ok(());
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = self.log_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)?;
+
+        let json = serde_json::to_string(issue).unwrap_or_default();
+        writeln!(file, "{json}")?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+const SECONDS_PER_DAY: u64 = 86400;
+#[cfg(test)]
+const SECONDS_PER_HOUR: u64 = 3600;
+#[cfg(test)]
+const SECONDS_PER_MINUTE: u64 = 60;
+#[cfg(test)]
+const EPOCH_YEAR: i64 = 1970;
+#[cfg(test)]
+const DAYS_IN_LEAP_YEAR: i64 = 366;
+#[cfg(test)]
+const DAYS_IN_YEAR: i64 = 365;
+#[cfg(test)]
+const DAYS_IN_JAN: i64 = 31;
+#[cfg(test)]
+const DAYS_IN_FEB: i64 = 28;
+#[cfg(test)]
+const DAYS_IN_FEB_LEAP: i64 = 29;
+#[cfg(test)]
+const DAYS_IN_MAR: i64 = 31;
+#[cfg(test)]
+const DAYS_IN_APR: i64 = 30;
+#[cfg(test)]
+const DAYS_IN_MAY: i64 = 31;
+#[cfg(test)]
+const DAYS_IN_JUN: i64 = 30;
+#[cfg(test)]
+const DAYS_IN_JUL: i64 = 31;
+#[cfg(test)]
+const DAYS_IN_AUG: i64 = 31;
+#[cfg(test)]
+const DAYS_IN_SEP: i64 = 30;
+#[cfg(test)]
+const DAYS_IN_OCT: i64 = 31;
+#[cfg(test)]
+const DAYS_IN_NOV: i64 = 30;
+#[cfg(test)]
+const DAYS_IN_DEC: i64 = 31;
+#[cfg(test)]
+const LEAP_YEAR_DIVISOR: i64 = 4;
+#[cfg(test)]
+const CENTURY_DIVISOR: i64 = 100;
+#[cfg(test)]
+const QUAD_CENTURY_DIVISOR: i64 = 400;
+
+/// Date components extracted from epoch seconds.
+#[cfg(test)]
+struct DateComponents {
+    year: i64,
+    month: i64,
+    day: i64,
+    hours: u64,
+    minutes: u64,
+    seconds: u64,
+}
+
+/// Check if a year is a leap year.
+#[cfg(test)]
+fn is_leap_year(year: i64) -> bool {
+    (year % LEAP_YEAR_DIVISOR == 0 && year % CENTURY_DIVISOR != 0)
+        || (year % QUAD_CENTURY_DIVISOR == 0)
+}
+
+/// Convert a day-of-year count to (year, remaining_days).
+#[cfg(test)]
+fn days_to_year(total_days: u64) -> (i64, i64) {
+    let mut days = total_days as i64;
+    let mut year = EPOCH_YEAR;
+    loop {
+        let dy = if is_leap_year(year) {
+            DAYS_IN_LEAP_YEAR
+        } else {
+            DAYS_IN_YEAR
+        };
+        if days < dy {
+            break;
+        }
+        days -= dy;
+        year += 1;
+    }
+    (year, days)
+}
+
+/// Index of December (0-based) used as fallback when day count exceeds all months.
+#[cfg(test)]
+const DECEMBER_INDEX: usize = 11;
+
+/// Convert remaining days within a year to (month, day), both 1-based.
+#[cfg(test)]
+fn days_to_month_day(mut days: i64, leap: bool) -> (i64, i64) {
+    let feb = if leap { DAYS_IN_FEB_LEAP } else { DAYS_IN_FEB };
+    let md = [
+        DAYS_IN_JAN,
+        feb,
+        DAYS_IN_MAR,
+        DAYS_IN_APR,
+        DAYS_IN_MAY,
+        DAYS_IN_JUN,
+        DAYS_IN_JUL,
+        DAYS_IN_AUG,
+        DAYS_IN_SEP,
+        DAYS_IN_OCT,
+        DAYS_IN_NOV,
+        DAYS_IN_DEC,
+    ];
+    let mi = md
+        .iter()
+        .scan(0i64, |a, &m| {
+            *a += m;
+            Some(*a)
+        })
+        .position(|c| days < c)
+        .unwrap_or(DECEMBER_INDEX);
+    days -= md[..mi].iter().sum::<i64>();
+    ((mi as i64) + 1, days + 1)
+}
+
+/// Convert epoch seconds to date components.
+#[cfg(test)]
+fn epoch_secs_to_date(secs: u64) -> DateComponents {
+    let days_since_epoch = secs / SECONDS_PER_DAY;
+    let time_of_day = secs % SECONDS_PER_DAY;
+    let hours = time_of_day / SECONDS_PER_HOUR;
+    let minutes = (time_of_day % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
+    let seconds = time_of_day % SECONDS_PER_MINUTE;
+
+    let (year, remaining_days) = days_to_year(days_since_epoch);
+    let (month, day) = days_to_month_day(remaining_days, is_leap_year(year));
+
+    DateComponents {
+        year,
+        month,
+        day,
+        hours,
+        minutes,
+        seconds,
+    }
+}
+
+/// Format date components as an ISO 8601 timestamp (integration: calls only).
+#[cfg(test)]
+fn chrono_timestamp() -> String {
+    use std::time::SystemTime;
+    let duration = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    let d = epoch_secs_to_date(duration.as_secs());
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        d.year, d.month, d.day, d.hours, d.minutes, d.seconds
+    )
+}
+
+#[cfg(test)]
+fn extract_context(source: &str, line: u32) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let idx = (line as usize).saturating_sub(1);
+    lines.get(idx).map(|l| {
+        let trimmed = l.trim();
+        if trimmed.len() > 50 {
+            format!("{}...", &trimmed[..47])
+        } else {
+            trimmed.to_string()
+        }
+    })
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Number of issues to log in the read_and_summarize test.
+    const ISSUES_TO_LOG: u32 = 3;
 
     #[test]
     fn quality_issue_from_complete() {
@@ -373,6 +481,8 @@ mod tests {
 
     #[test]
     fn logger_writes_jsonl() {
+        const ERROR_LINE: u32 = 5;
+
         let tmp = TempDir::new().unwrap();
         let log_path = tmp.path().join("quality.log");
         let logger = QualityLogger::new(&log_path, true);
@@ -382,7 +492,7 @@ mod tests {
             file: "test.rs".to_string(),
             lang: "rust".to_string(),
             issue: "error_node".to_string(),
-            line: Some(5),
+            line: Some(ERROR_LINE),
             context: Some("bad syntax".to_string()),
             known: false,
             test: None,
@@ -402,13 +512,13 @@ mod tests {
         let logger = QualityLogger::new(&log_path, true);
 
         // Log a few issues
-        for i in 0..3 {
+        for i in 0..ISSUES_TO_LOG {
             let issue = QualityIssue {
                 ts: "2026-01-28T12:00:00Z".to_string(),
                 file: format!("test{}.rs", i),
                 lang: "rust".to_string(),
                 issue: "error_node".to_string(),
-                line: Some(i as u32 + 1),
+                line: Some(i + 1),
                 context: None,
                 known: i == 0, // First one is known
                 test: if i == 0 {
@@ -421,10 +531,10 @@ mod tests {
         }
 
         let issues = read_quality_log(&log_path).unwrap();
-        assert_eq!(issues.len(), 3);
+        assert_eq!(issues.len(), ISSUES_TO_LOG as usize);
 
         let summary = summarize_issues(&issues);
-        assert_eq!(summary.total, 3);
+        assert_eq!(summary.total, ISSUES_TO_LOG as usize);
         assert_eq!(summary.known, 1);
         assert_eq!(summary.unknown, 2);
     }

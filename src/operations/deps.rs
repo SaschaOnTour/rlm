@@ -57,6 +57,17 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind, Reference};
     use crate::models::file::FileRecord;
 
+    const TEST_FILE_BYTES: u64 = 100;
+    const TEST_START_LINE: u32 = 1;
+    const TEST_END_LINE: u32 = 10;
+    const TEST_END_LINE_SHORT: u32 = 5;
+    const TEST_START_BYTE: u32 = 0;
+    const TEST_END_BYTE: u32 = 100;
+    const TEST_END_BYTE_SMALL: u32 = 50;
+    const TEST_END_BYTE_TINY: u32 = 10;
+    const TEST_IMPORT_COL: u32 = 4;
+    const TEST_CALL_COL: u32 = 12;
+
     fn test_db() -> Database {
         Database::open_in_memory().unwrap()
     }
@@ -66,16 +77,21 @@ mod tests {
         let db = test_db();
 
         // Insert a file and chunk
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new(
+            "src/lib.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 10,
-            start_byte: 0,
-            end_byte: 100,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Module,
             ident: "lib".into(),
             parent: None,
@@ -95,7 +111,7 @@ mod tests {
             target_ident: "std::io".into(),
             ref_kind: RefKind::Import,
             line: 1,
-            col: 4,
+            col: TEST_IMPORT_COL,
         };
         db.insert_ref(&import1).unwrap();
 
@@ -105,7 +121,7 @@ mod tests {
             target_ident: "crate::config".into(),
             ref_kind: RefKind::Import,
             line: 2,
-            col: 4,
+            col: TEST_IMPORT_COL,
         };
         db.insert_ref(&import2).unwrap();
 
@@ -120,16 +136,21 @@ mod tests {
     fn get_deps_excludes_calls() {
         let db = test_db();
 
-        let file = FileRecord::new("src/main.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new(
+            "src/main.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE_SHORT,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE_SMALL,
             kind: ChunkKind::Function,
             ident: "main".into(),
             parent: None,
@@ -149,7 +170,7 @@ mod tests {
             target_ident: "foo".into(),
             ref_kind: RefKind::Call,
             line: 1,
-            col: 12,
+            col: TEST_CALL_COL,
         };
         db.insert_ref(&call_ref).unwrap();
 
@@ -160,7 +181,7 @@ mod tests {
             target_ident: "std::io".into(),
             ref_kind: RefKind::Import,
             line: 1,
-            col: 4,
+            col: TEST_IMPORT_COL,
         };
         db.insert_ref(&import_ref).unwrap();
 
@@ -182,16 +203,21 @@ mod tests {
     fn get_deps_empty() {
         let db = test_db();
 
-        let file = FileRecord::new("src/empty.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new(
+            "src/empty.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 1,
-            start_byte: 0,
-            end_byte: 10,
+            start_line: TEST_START_LINE,
+            end_line: TEST_START_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE_TINY,
             kind: ChunkKind::Function,
             ident: "f".into(),
             parent: None,

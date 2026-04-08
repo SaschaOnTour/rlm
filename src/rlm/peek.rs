@@ -44,39 +44,48 @@ pub struct PeekSymbol {
     pub line: u32,
 }
 
-/// Peek at the project structure: symbols and line counts, NO content.
+/// Check if a file passes the path filter (operation: logic only).
+fn matches_path_filter(file_path: &str, path_filter: Option<&str>) -> bool {
+    match path_filter {
+        Some(filter) => file_path.starts_with(filter),
+        None => true,
+    }
+}
+
+/// Build a `PeekFile` from chunks (operation: logic only, uses only std methods).
+fn build_peek_file(path: &str, lang: &str, chunks: &[crate::models::chunk::Chunk]) -> PeekFile {
+    let max_line = chunks.iter().map(|c| c.end_line).max().unwrap_or(0);
+
+    let symbols: Vec<PeekSymbol> = chunks
+        .iter()
+        .map(|c| PeekSymbol {
+            kind: c.kind.as_str().to_string(),
+            name: c.ident.clone(),
+            line: c.start_line,
+        })
+        .collect();
+
+    PeekFile {
+        path: path.to_string(),
+        lang: lang.to_string(),
+        line_count: max_line,
+        symbols,
+    }
+}
+
+/// Peek at the project structure: symbols and line counts, NO content (integration: calls only).
 /// This is the cheapest operation (~50 tokens per file).
 pub fn peek(db: &Database, path_filter: Option<&str>) -> Result<PeekResult> {
     let files = db.get_all_files()?;
     let mut peek_files = Vec::new();
 
     for file in &files {
-        // Apply path filter if specified
-        if let Some(filter) = path_filter {
-            if !file.path.starts_with(filter) {
-                continue;
-            }
+        if !matches_path_filter(&file.path, path_filter) {
+            continue;
         }
 
         let chunks = db.get_chunks_for_file(file.id)?;
-
-        let max_line = chunks.iter().map(|c| c.end_line).max().unwrap_or(0);
-
-        let symbols: Vec<PeekSymbol> = chunks
-            .iter()
-            .map(|c| PeekSymbol {
-                kind: c.kind.as_str().to_string(),
-                name: c.ident.clone(),
-                line: c.start_line,
-            })
-            .collect();
-
-        peek_files.push(PeekFile {
-            path: file.path.clone(),
-            lang: file.lang.clone(),
-            line_count: max_line,
-            symbols,
-        });
+        peek_files.push(build_peek_file(&file.path, &file.lang, &chunks));
     }
 
     // Estimate output tokens
@@ -95,18 +104,30 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind};
     use crate::models::file::FileRecord;
 
+    /// File size in bytes for test file records.
+    const TEST_FILE_SIZE: u64 = 100;
+    /// End line of the test chunk.
+    const CHUNK_END_LINE: u32 = 5;
+    /// End byte offset of the test chunk.
+    const CHUNK_END_BYTE: u32 = 50;
+
     #[test]
     fn peek_returns_structure_no_content() {
         let db = Database::open_in_memory().unwrap();
-        let f = FileRecord::new("src/main.rs".into(), "h".into(), "rust".into(), 100);
+        let f = FileRecord::new(
+            "src/main.rs".into(),
+            "h".into(),
+            "rust".into(),
+            TEST_FILE_SIZE,
+        );
         let fid = db.upsert_file(&f).unwrap();
         let c = Chunk {
             id: 0,
             file_id: fid,
             start_line: 1,
-            end_line: 5,
+            end_line: CHUNK_END_LINE,
             start_byte: 0,
-            end_byte: 50,
+            end_byte: CHUNK_END_BYTE,
             kind: ChunkKind::Function,
             ident: "main".into(),
             parent: None,
@@ -136,14 +157,14 @@ mod tests {
             "src/a.rs".into(),
             "h1".into(),
             "rust".into(),
-            50,
+            TEST_FILE_SIZE,
         ))
         .unwrap();
         db.upsert_file(&FileRecord::new(
             "lib/b.rs".into(),
             "h2".into(),
             "rust".into(),
-            50,
+            TEST_FILE_SIZE,
         ))
         .unwrap();
 

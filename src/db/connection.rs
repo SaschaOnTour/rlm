@@ -12,6 +12,7 @@ pub struct Database {
 
 impl Database {
     /// Open (or create) a database at the given path and apply schema.
+    // qual:allow(iosp) reason: "check-then-act: migration check before schema setup"
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch(
@@ -64,11 +65,6 @@ impl Database {
     /// Access the underlying connection.
     pub fn conn(&self) -> &Connection {
         &self.conn
-    }
-
-    /// Access the underlying connection mutably.
-    pub fn conn_mut(&mut self) -> &mut Connection {
-        &mut self.conn
     }
 }
 

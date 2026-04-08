@@ -21,6 +21,19 @@ pub struct TreeNode {
     pub children: Vec<TreeNode>,
 }
 
+impl TreeNode {
+    /// Create a new tree node.
+    fn new(name: String, path: String, is_dir: bool, symbols: Vec<SymbolInfo>) -> Self {
+        Self {
+            name,
+            path,
+            is_dir,
+            symbols,
+            children: Vec::new(),
+        }
+    }
+}
+
 /// Symbol summary for tree display.
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolInfo {
@@ -33,8 +46,13 @@ pub struct SymbolInfo {
 }
 
 /// Build a tree view of the indexed codebase with symbol annotations.
-pub fn build_tree(db: &Database) -> Result<Vec<TreeNode>> {
-    let files = db.get_all_files()?;
+/// When `path_filter` is set, only files whose path starts with the prefix are included.
+// qual:allow(iosp) reason: "minimal orchestration: fetch data then build tree"
+pub fn build_tree(db: &Database, path_filter: Option<&str>) -> Result<Vec<TreeNode>> {
+    let mut files = db.get_all_files()?;
+    if let Some(prefix) = path_filter {
+        files.retain(|f| f.path.starts_with(prefix));
+    }
     let all_chunks = db.get_all_chunks()?;
 
     // Group chunks by file_id
@@ -68,6 +86,8 @@ pub fn build_tree(db: &Database) -> Result<Vec<TreeNode>> {
     Ok(root_children.into_values().collect())
 }
 
+// qual:recursive
+// qual:allow(iosp) reason: "recursive tree construction inherently mixes branching with delegation"
 fn insert_into_tree(
     children: &mut BTreeMap<String, TreeNode>,
     parts: &[&str],
@@ -84,23 +104,13 @@ fn insert_into_tree(
         // Leaf: file node
         children.insert(
             name.clone(),
-            TreeNode {
-                name,
-                path: full_path.to_string(),
-                is_dir: false,
-                symbols,
-                children: Vec::new(),
-            },
+            TreeNode::new(name, full_path.to_string(), false, symbols),
         );
     } else {
         // Directory node
-        let dir = children.entry(name.clone()).or_insert_with(|| TreeNode {
-            name: name.clone(),
-            path: String::new(),
-            is_dir: true,
-            symbols: Vec::new(),
-            children: Vec::new(),
-        });
+        let dir = children
+            .entry(name.clone())
+            .or_insert_with(|| TreeNode::new(name.clone(), String::new(), true, Vec::new()));
 
         let mut child_map: BTreeMap<String, TreeNode> = BTreeMap::new();
         for child in dir.children.drain(..) {
@@ -112,6 +122,7 @@ fn insert_into_tree(
 }
 
 /// Format a tree as a string with indentation and symbol annotations.
+// qual:recursive
 #[must_use]
 pub fn format_tree(nodes: &[TreeNode], indent: usize) -> String {
     use std::fmt::Write;
@@ -143,18 +154,30 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind};
     use crate::models::file::FileRecord;
 
+    /// File size in bytes for the test file record.
+    const TEST_FILE_SIZE: u64 = 100;
+    /// End line of the test chunk.
+    const CHUNK_END_LINE: u32 = 3;
+    /// End byte offset of the test chunk content "fn main() {}".
+    const CHUNK_END_BYTE: u32 = 30;
+
     #[test]
     fn build_tree_from_db() {
         let db = Database::open_in_memory().unwrap();
-        let f1 = FileRecord::new("src/main.rs".into(), "h1".into(), "rust".into(), 100);
+        let f1 = FileRecord::new(
+            "src/main.rs".into(),
+            "h1".into(),
+            "rust".into(),
+            TEST_FILE_SIZE,
+        );
         let fid = db.upsert_file(&f1).unwrap();
         let c = Chunk {
             id: 0,
             file_id: fid,
             start_line: 1,
-            end_line: 3,
+            end_line: CHUNK_END_LINE,
             start_byte: 0,
-            end_byte: 30,
+            end_byte: CHUNK_END_BYTE,
             kind: ChunkKind::Function,
             ident: "main".into(),
             parent: None,
@@ -167,7 +190,7 @@ mod tests {
         };
         db.insert_chunk(&c).unwrap();
 
-        let tree = build_tree(&db).unwrap();
+        let tree = build_tree(&db, None).unwrap();
         assert!(!tree.is_empty());
         let formatted = format_tree(&tree, 0);
         assert!(formatted.contains("src/"));

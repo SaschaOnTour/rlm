@@ -10,6 +10,11 @@ use crate::error::Result;
 use crate::ingest::scanner::{DiscoveredFile, Scanner};
 use crate::models::token_estimate::TokenEstimate;
 
+/// Estimated number of tokens consumed per file entry in the output.
+const TOKENS_PER_FILE_ENTRY: usize = 10;
+/// Base token overhead for the wrapping JSON structure of the files result.
+const TOKEN_ESTIMATE_BASE_OVERHEAD: usize = 20;
+
 /// Result of listing files.
 #[derive(Debug, Clone, Serialize)]
 pub struct FilesResult {
@@ -71,7 +76,7 @@ pub fn list_files(project_root: &Path, filter: FilesFilter) -> Result<FilesResul
     let skipped_count = files.iter().filter(|f| !f.supported).count();
 
     // Estimate output tokens (rough: ~10 tokens per file entry)
-    let out_tokens = (files.len() * 10 + 20) as u64;
+    let out_tokens = (files.len() * TOKENS_PER_FILE_ENTRY + TOKEN_ESTIMATE_BASE_OVERHEAD) as u64;
 
     Ok(FilesResult {
         results: files,

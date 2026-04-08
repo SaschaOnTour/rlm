@@ -57,8 +57,8 @@ rlm treats your codebase like a database, not a pile of files.
 
 ```
 Agent: "I need to understand this codebase"
-→ rlm map (~200 tokens) — sees project structure and purpose of each file
-→ rlm refs Config (~50 tokens) — finds all usages of Config
+→ rlm overview (~200 tokens) — sees project structure and purpose of each file
+→ rlm refs Config (~50 tokens) — finds all usages and impact
 → rlm read src/config.rs --symbol load (~100 tokens) — reads only the relevant function
 → Done. Total: ~350 tokens instead of thousands.
 ```
@@ -75,8 +75,8 @@ Instead of reading entire files, rlm lets you zoom in progressively:
 
 ```mermaid
 graph LR
-    A[peek: ~50 tok] --> B[map: ~200 tok]
-    B --> C[grep / search]
+    A[overview minimal: ~50 tok] --> B[overview standard: ~200 tok]
+    B --> C[search]
     C --> D[read symbol]
     D --> E[read file: Last Resort]
     
@@ -216,7 +216,17 @@ claude mcp list
 
 That's it. The agent now has direct access to all rlm commands as native tools.
 
-**What the agent sees:** All rlm tools with descriptions and parameters are automatically exposed via MCP. The agent can discover available tools and understands the minified JSON output format (r=results, k=kind, n=name, etc.) through tool descriptions.
+**What the agent sees:** 18 MCP tools organized in 4 tiers:
+
+| Tier | Tools | Purpose |
+|------|-------|---------|
+| **Orient** | `overview` (minimal/standard/tree) | Project structure at 3 zoom levels |
+| **Search** | `search`, `read` (symbol/section + metadata) | Find and read code |
+| **Analyze** | `refs` (with impact), `context` (with callgraph), `deps`, `scope` | Understand code |
+| **Edit** | `replace`, `insert` | Modify code with Syntax Guard |
+| **Utility** | `diff`, `partition`, `summarize`, `files`, `stats`, `savings`, `verify`, `supported`, `index` | Maintenance |
+
+> **Note:** Both MCP and CLI offer the same 18-tool surface. Key consolidations: `peek`/`map`/`tree` → `overview`, `type_info`/`signature` → `read --metadata`, `callgraph` → `context --graph`, `impact` → `refs`.
 
 ### Option B: CLI via CLAUDE.md
 
@@ -232,11 +242,11 @@ This project is indexed with rlm. Use Bash commands for efficient code explorati
 - `rlm help <command>` — detailed help for a command
 
 ### Workflow: Start Cheap, Zoom In
-1. `rlm peek` — structure only (~50 tokens)
-2. `rlm map` — project overview (~200 tokens)
-3. `rlm refs <symbol>` — find usages
+1. `rlm overview --detail minimal` — structure only (~50 tokens)
+2. `rlm overview` — project overview (~200 tokens)
+3. `rlm refs <symbol>` — find usages + impact analysis
 4. `rlm read <path> --symbol <n>` — read one function
-5. `rlm read <path>` — full file (last resort)
+5. Use Claude Code's Read for full files (last resort)
 
 ### Editing
 - `rlm replace <path> --symbol <n> --code "<new>" --preview` — preview
@@ -253,7 +263,7 @@ This project is indexed with rlm. Use Bash commands for efficient code explorati
 | `s` | symbol name |
 | `f` | file path |
 | `t` | token estimate `{"in": N, "out": N}` |
-| `q` | quality warning — if `fallback_recommended: true`, use `read --lines` or `grep` |
+| `q` | quality warning — if `fallback_recommended: true`, use Claude Code's Read for affected lines |
 ```
 
 ### Which to Choose?
@@ -269,59 +279,55 @@ For Claude Code, MCP is recommended. For other agents or simpler setups, CLI wor
 
 ## Commands
 
-> **Important:** Most commands (`tree`, `map`, `search`, `refs`, etc.) only operate on
+> **Important:** Most commands (`overview`, `search`, `refs`, etc.) only operate on
 > **indexed files**. If a file wasn't indexed (unsupported extension, excluded by gitignore),
 > it won't appear in results. Use `rlm files` to see all files regardless of index status.
 
-### Project Overview
+### Orient
 
 | Command | Use When |
 |---------|----------|
-| `rlm peek` | Quick structure check (~50 tokens) |
-| `rlm map` | Full overview with descriptions (~200 tokens) |
-| `rlm tree` | File tree with symbol counts |
+| `rlm overview` | Project overview with descriptions (~200 tokens) |
+| `rlm overview --detail minimal` | Quick structure check (~50 tokens) |
+| `rlm overview --detail tree` | Directory hierarchy with symbol annotations |
 | `rlm files` | See ALL files including those with unsupported extensions |
-| `rlm files --skipped-only` | Find files that were skipped during indexing |
-| `rlm peek` / `rlm map` | See indexed files with their symbols |
 
-### Search
+### Search & Read
 
 | Command | Use When |
 |---------|----------|
-| `rlm grep <pattern>` | Find exact text matches (regex supported) |
 | `rlm search <query>` | Full-text semantic search |
-| `rlm refs <symbol>` | Find all references to a symbol |
-
-### Reading Code
-
-| Command | Use When |
-|---------|----------|
 | `rlm read <path> --symbol <n>` | Read one function/struct/class |
-| `rlm read <path> --lines 10-50` | Read specific line range |
-| `rlm read <path>` | Read entire file (use sparingly) |
+| `rlm read <path> --symbol <n> --metadata` | Read with type info + signature |
+| `rlm read <path> --section <heading>` | Read a markdown section |
 
-### Code Intelligence
+### Analyze
 
 | Command | Use When |
 |---------|----------|
-| `rlm callgraph <symbol>` | See what a function calls |
-| `rlm impact <symbol>` | See what would break if you change something |
+| `rlm refs <symbol>` | Find all usages + impact analysis |
+| `rlm context <symbol>` | Full understanding: body + callers + callees |
+| `rlm context <symbol> --graph` | Include full callgraph |
 | `rlm deps <path>` | See file dependencies |
+| `rlm scope <path> --line N` | What's visible at a location |
 
-### Editing
+### Edit
 
 | Command | Use When |
 |---------|----------|
 | `rlm replace <path> --symbol <n> --code "<new>"` | Replace a function/struct |
 | `rlm replace ... --preview` | Preview the change first |
+| `rlm insert <path> --code "<new>" --position top` | Insert code at a position |
 
-### Maintenance
+### Utility
 
 | Command | Use When |
 |---------|----------|
 | `rlm index .` | Initial indexing or full re-index |
-| `rlm reindex` | Update index after changes |
 | `rlm stats` | See index statistics |
+| `rlm stats --savings` | Token savings report (vs Claude Code tools) |
+| `rlm diff <path>` | Compare indexed vs current content |
+| `rlm verify` | Check index integrity |
 | `rlm quality` | Check for parse quality issues |
 
 ---
@@ -382,10 +388,29 @@ Response received
 └── "q" field present
     ├── fallback_recommended: false → Minor issues, AST data mostly reliable
     └── fallback_recommended: true
-        ├── For reading code → use `rlm read <path> --lines X-Y`
-        ├── For searching → use `rlm grep <pattern>`
-        └── For refs/callgraph/impact → results may be incomplete
+        ├── For reading code → use Claude Code's Read tool
+        ├── For searching → use `rlm search <query>`
+        └── For refs/context → results may be incomplete
 ```
+
+### Token Savings Tracking
+
+rlm silently tracks how many tokens each operation saves compared to what Claude Code's native tools (Read/Grep/Glob) would have consumed for the same result.
+
+```bash
+# See cumulative savings report
+rlm stats --savings
+
+# Filter by date
+rlm stats --savings --since "2026-03-01"
+```
+
+Example output:
+```json
+{"ops":42,"output":3200,"alternative":48000,"saved":44800,"pct":93.3,"by_cmd":[{"cmd":"overview","ops":12,...}]}
+```
+
+The `savings` MCP tool provides the same report for AI agents.
 
 ### Checking Quality via CLI
 
@@ -437,8 +462,8 @@ rlm can complement your IDE's built-in features:
 
 ```bash
 # Use rlm for cross-file analysis that IDEs struggle with
-rlm impact Config    # What breaks if I change this?
-rlm callgraph main   # Full call tree across modules
+rlm refs Config           # What breaks if I change this?
+rlm context main --graph  # Full call tree across modules
 ```
 
 ### CI/CD Pipelines
@@ -448,7 +473,7 @@ rlm callgraph main   # Full call tree across modules
 rlm quality --summary --exit-code
 
 # Generate codebase overview for documentation
-rlm map > docs/architecture.json
+rlm overview > docs/architecture.json
 ```
 
 ---
@@ -476,7 +501,7 @@ We've adapted these principles into a practical tool for everyday use with AI co
 ## Roadmap
 
 - [x] Core indexing and search
-- [x] AST-based code intelligence (refs, callgraph, impact)
+- [x] AST-based code intelligence (refs with impact, context with callgraph)
 - [x] Surgical editing with Syntax Guard
 - [x] MCP server integration
 - [x] Parse quality detection and fallback recommendations

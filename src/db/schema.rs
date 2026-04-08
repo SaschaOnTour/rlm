@@ -68,6 +68,18 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
     INSERT INTO chunks_fts(rowid, ident, signature, doc_comment, content)
     VALUES (new.id, new.ident, COALESCE(new.signature, ''), COALESCE(new.doc_comment, ''), new.content);
 END;
+
+-- Token savings tracking
+CREATE TABLE IF NOT EXISTS savings (
+    id INTEGER PRIMARY KEY,
+    command TEXT NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    alternative_tokens INTEGER NOT NULL,
+    files_touched INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_savings_command ON savings(command);
+CREATE INDEX IF NOT EXISTS idx_savings_created ON savings(created_at);
 ";
 
 #[cfg(test)]

@@ -6,6 +6,8 @@
 use rmcp::schemars;
 use serde::Deserialize;
 
+use crate::edit::inserter::InsertPosition;
+
 // ── Index ───────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -34,35 +36,41 @@ pub struct ReadParams {
     /// Relative path to the file.
     #[schemars(description = "Relative path to the file")]
     pub path: String,
-    /// Optional symbol name to read (instead of full file).
+    /// Symbol name to read (function, class, struct, etc.)
     #[schemars(description = "Symbol name to read (e.g. function/class name)")]
     pub symbol: Option<String>,
-    /// Optional markdown section heading to read.
+    /// Markdown section heading to read.
     #[schemars(description = "Markdown section heading to read")]
     pub section: Option<String>,
-    /// Optional line range in format 'START-END'.
-    #[schemars(description = "Line range to read (format: 'START-END')")]
-    pub lines: Option<String>,
+    /// When true and symbol is set, include enriched metadata: kind, signature, visibility, call count.
+    #[schemars(
+        description = "When true with symbol, include kind/signature/visibility/call-count (default: false)"
+    )]
+    pub metadata: Option<bool>,
 }
 
-// ── Tree ────────────────────────────────────────────────────────
-// No parameters needed.
+// ── Overview ───────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OverviewParams {
+    /// Detail level: 'minimal' (symbol names/kinds/lines only, ~50 tokens),
+    /// 'standard' (file map: language, line count, public symbols, descriptions),
+    /// 'tree' (directory hierarchy with symbol annotations). Default: 'standard'.
+    #[schemars(
+        description = "Detail level: 'minimal', 'standard', or 'tree' (default: 'standard')"
+    )]
+    pub detail: Option<String>,
+    /// Optional path prefix filter.
+    #[schemars(description = "Optional path prefix filter")]
+    pub path: Option<String>,
+}
 
 // ── Refs ────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RefsParams {
     /// Symbol name to find references for.
-    #[schemars(description = "Symbol name to find all usages/call sites for")]
-    pub symbol: String,
-}
-
-// ── Signature ───────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct SignatureParams {
-    /// Symbol name to get signature for.
-    #[schemars(description = "Symbol name to get signature and call sites for")]
+    #[schemars(description = "Symbol name to find all usages and impact analysis for")]
     pub symbol: String,
 }
 
@@ -95,36 +103,15 @@ pub struct InsertParams {
     #[schemars(description = "Code to insert")]
     pub code: String,
     /// Position: 'top', 'bottom', 'before:N', or 'after:N'.
-    #[schemars(description = "Insert position: 'top', 'bottom', 'before:N', or 'after:N'")]
-    pub position: String,
+    #[schemars(
+        with = "String",
+        description = "Insert position: 'top', 'bottom', 'before:N', or 'after:N'"
+    )]
+    pub position: InsertPosition,
 }
 
 // ── Stats ───────────────────────────────────────────────────────
 // No parameters needed.
-
-// ── Peek ────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct PeekParams {
-    /// Optional path filter (only show files under this path).
-    #[schemars(description = "Optional path prefix filter")]
-    pub path: Option<String>,
-}
-
-// ── Grep ────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct GrepParams {
-    /// Regex pattern to search for.
-    #[schemars(description = "Regex pattern to search for in file contents")]
-    pub pattern: String,
-    /// Number of context lines around matches.
-    #[schemars(description = "Number of context lines around matches (default: 0)")]
-    pub context: Option<usize>,
-    /// Optional path filter.
-    #[schemars(description = "Optional path prefix filter")]
-    pub path: Option<String>,
-}
 
 // ── Partition ───────────────────────────────────────────────────
 
@@ -147,18 +134,6 @@ pub struct SummarizeParams {
     pub path: String,
 }
 
-// ── Batch ───────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct BatchParams {
-    /// Search query to run across all files.
-    #[schemars(description = "Search query to run across all indexed files")]
-    pub query: String,
-    /// Maximum results per file.
-    #[schemars(description = "Maximum results to return (default: 20)")]
-    pub limit: Option<usize>,
-}
-
 // ── Diff ────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -171,33 +146,6 @@ pub struct DiffParams {
     pub symbol: Option<String>,
 }
 
-// ── Map ─────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct MapParams {
-    /// Optional path filter.
-    #[schemars(description = "Optional path prefix filter")]
-    pub path: Option<String>,
-}
-
-// ── Callgraph ───────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct CallgraphParams {
-    /// Symbol to build call graph for.
-    #[schemars(description = "Symbol name to build call graph for (callers + callees)")]
-    pub symbol: String,
-}
-
-// ── Impact ──────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ImpactParams {
-    /// Symbol to analyze impact for.
-    #[schemars(description = "Symbol name - shows what breaks if this symbol changes")]
-    pub symbol: String,
-}
-
 // ── Context ─────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -207,6 +155,9 @@ pub struct ContextParams {
         description = "Symbol name to get complete understanding (body + callers + callees + types)"
     )]
     pub symbol: String,
+    /// When true, include full callgraph: caller names + callee names (not just counts).
+    #[schemars(description = "Include full callgraph with caller names (default: false)")]
+    pub graph: Option<bool>,
 }
 
 // ── Deps ────────────────────────────────────────────────────────
@@ -230,24 +181,6 @@ pub struct ScopeParams {
     pub line: u32,
 }
 
-// ── Type ────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct TypeParams {
-    /// Symbol to get type info for.
-    #[schemars(description = "Symbol name to get type info for (return type, fields, signature)")]
-    pub symbol: String,
-}
-
-// ── Patterns ────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct PatternsParams {
-    /// Query to find similar implementations.
-    #[schemars(description = "Query to find similar implementations in the codebase")]
-    pub query: String,
-}
-
 // ── Files ───────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -261,6 +194,15 @@ pub struct FilesParams {
     /// Show only indexed files.
     #[schemars(description = "Only show files that were indexed")]
     pub indexed_only: Option<bool>,
+}
+
+// ── Savings ─────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SavingsParams {
+    /// Filter savings since date (ISO 8601, e.g. "2026-03-14").
+    #[schemars(description = "Filter savings since date (ISO 8601, e.g. '2026-03-14')")]
+    pub since: Option<String>,
 }
 
 // ── Verify ──────────────────────────────────────────────────────
