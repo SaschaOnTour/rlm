@@ -12,6 +12,15 @@ use crate::error::Result;
 use crate::ingest::text::TextParser;
 use crate::models::chunk::{Chunk, ChunkKind};
 
+/// Maximum nesting depth for recursive TOML chunk extraction.
+const MAX_NESTING_DEPTH: usize = 3;
+/// Maximum string length before truncation in TOML value previews.
+const MAX_PREVIEW_LENGTH: usize = 100;
+/// Maximum number of array items shown in a TOML value preview.
+const ARRAY_PREVIEW_ITEMS: usize = 5;
+/// Maximum number of table keys shown in a TOML value preview.
+const OBJECT_PREVIEW_KEYS: usize = 5;
+
 pub struct TomlParser;
 
 impl TomlParser {
@@ -89,7 +98,7 @@ fn extract_toml_chunks(
     depth: usize,
 ) {
     // Limit depth to avoid excessive chunking
-    if depth > 3 {
+    if depth > MAX_NESTING_DEPTH {
         return;
     }
 
@@ -278,8 +287,8 @@ fn toml_value_to_string(value: &Value, indent: usize) -> String {
     let prefix = "  ".repeat(indent);
     match value {
         Value::String(s) => {
-            if s.len() > 100 {
-                format!("\"{}...\"", &s[..97])
+            if s.len() > MAX_PREVIEW_LENGTH {
+                format!("\"{}...\"", &s[..MAX_PREVIEW_LENGTH - 3])
             } else {
                 format!("\"{s}\"")
             }
@@ -289,7 +298,7 @@ fn toml_value_to_string(value: &Value, indent: usize) -> String {
         Value::Boolean(b) => b.to_string(),
         Value::Datetime(dt) => dt.to_string(),
         Value::Array(arr) => {
-            if arr.len() > 5 {
+            if arr.len() > ARRAY_PREVIEW_ITEMS {
                 format!("[...{} items]", arr.len())
             } else {
                 let items: Vec<String> = arr
@@ -300,7 +309,7 @@ fn toml_value_to_string(value: &Value, indent: usize) -> String {
             }
         }
         Value::Table(table) => {
-            if table.len() > 5 {
+            if table.len() > OBJECT_PREVIEW_KEYS {
                 format!("{{...{} keys}}", table.len())
             } else {
                 let items: Vec<String> = table

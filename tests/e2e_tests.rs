@@ -1,4 +1,4 @@
-//! End-to-end tests for all 24 CLI commands.
+//! End-to-end tests for CLI commands.
 //!
 //! Each test:
 //! 1. Creates a temp directory
@@ -61,7 +61,7 @@ fn rlm(dir: &TempDir) -> Command {
     cmd
 }
 
-// ─── 1. rlm index ───────────────────────────────────────────────────────────
+// ─── rlm index ──────────────────────────────────────────────────────────────
 
 #[test]
 fn e2e_index_creates_db() {
@@ -79,7 +79,7 @@ fn e2e_index_creates_db() {
     assert!(dir.path().join(".rlm/index.db").exists());
 }
 
-// ─── 2. rlm search ──────────────────────────────────────────────────────────
+// ─── rlm search ─────────────────────────────────────────────────────────────
 
 #[test]
 fn e2e_search_finds_config() {
@@ -92,20 +92,31 @@ fn e2e_search_finds_config() {
         .stdout(predicate::str::contains("Config"));
 }
 
-// ─── 3. rlm read <path> ─────────────────────────────────────────────────────
+#[test]
+fn e2e_search_with_limit() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("search")
+        .arg("fn")
+        .arg("--limit")
+        .arg("2")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not());
+}
+
+// ─── rlm read ───────────────────────────────────────────────────────────────
 
 #[test]
-fn e2e_read_file() {
+fn e2e_read_requires_symbol_or_section() {
     let dir = setup_rust_project();
     rlm(&dir)
         .arg("read")
         .arg("sample.rs")
         .assert()
-        .success()
-        .stdout(predicate::str::contains("pub struct Config"));
+        .failure()
+        .stderr(predicate::str::contains("symbol").or(predicate::str::contains("section")));
 }
-
-// ─── 4. rlm read <path> --symbol <name> ─────────────────────────────────────
 
 #[test]
 fn e2e_read_symbol() {
@@ -120,19 +131,90 @@ fn e2e_read_symbol() {
         .stdout(predicate::str::contains("helper"));
 }
 
-// ─── 5. rlm tree ────────────────────────────────────────────────────────────
-
 #[test]
-fn e2e_tree() {
+fn e2e_read_metadata() {
     let dir = setup_rust_project();
-    rlm(&dir).arg("tree").assert().success().stdout(
-        predicate::str::contains("\"n\":\"sample.rs\"")
-            .and(predicate::str::contains("\"dir\":false"))
-            .and(predicate::str::contains("\"k\":\"fn\"")),
-    );
+    rlm(&dir)
+        .arg("read")
+        .arg("sample.rs")
+        .arg("--symbol")
+        .arg("Config")
+        .arg("--metadata")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("chunks").and(
+                predicate::str::contains("type_info").or(predicate::str::contains("signature")),
+            ),
+        );
 }
 
-// ─── 6. rlm refs <symbol> ───────────────────────────────────────────────────
+#[test]
+fn e2e_read_markdown_section() {
+    let dir = setup_markdown_project();
+    rlm(&dir)
+        .arg("read")
+        .arg("sample.md")
+        .arg("--section")
+        .arg("Installation")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("install"));
+}
+
+// ─── rlm overview ───────────────────────────────────────────────────────────
+
+#[test]
+fn e2e_overview_standard() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("overview")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sample.rs"));
+}
+
+#[test]
+fn e2e_overview_minimal() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("overview")
+        .arg("--detail")
+        .arg("minimal")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sample.rs"));
+}
+
+#[test]
+fn e2e_overview_tree() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("overview")
+        .arg("--detail")
+        .arg("tree")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"n\":\"sample.rs\"")
+                .and(predicate::str::contains("\"dir\":false"))
+                .and(predicate::str::contains("\"k\":\"fn\"")),
+        );
+}
+
+#[test]
+fn e2e_overview_with_path_filter() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("overview")
+        .arg("--path")
+        .arg("sample")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sample.rs"));
+}
+
+// ─── rlm refs ───────────────────────────────────────────────────────────────
 
 #[test]
 fn e2e_refs() {
@@ -145,20 +227,7 @@ fn e2e_refs() {
         .stdout(predicate::str::contains("\"s\":\"helper\""));
 }
 
-// ─── 7. rlm signature <symbol> ──────────────────────────────────────────────
-
-#[test]
-fn e2e_signature() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("signature")
-        .arg("helper")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"s\":\"helper\""));
-}
-
-// ─── 8. rlm replace --preview ───────────────────────────────────────────────
+// ─── rlm replace ────────────────────────────────────────────────────────────
 
 #[test]
 fn e2e_replace_preview() {
@@ -183,7 +252,7 @@ fn e2e_replace_preview() {
     );
 }
 
-// ─── 9. rlm insert ──────────────────────────────────────────────────────────
+// ─── rlm insert ─────────────────────────────────────────────────────────────
 
 #[test]
 fn e2e_insert_top() {
@@ -203,7 +272,7 @@ fn e2e_insert_top() {
     assert!(content.starts_with("// inserted at top"));
 }
 
-// ─── 10. rlm stats ──────────────────────────────────────────────────────────
+// ─── rlm stats ──────────────────────────────────────────────────────────────
 
 #[test]
 fn e2e_stats() {
@@ -215,32 +284,7 @@ fn e2e_stats() {
     );
 }
 
-// ─── 11. rlm peek ───────────────────────────────────────────────────────────
-
-#[test]
-fn e2e_peek() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("peek")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("sample.rs"));
-}
-
-// ─── 12. rlm grep ───────────────────────────────────────────────────────────
-
-#[test]
-fn e2e_grep() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("grep")
-        .arg("helper")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("helper"));
-}
-
-// ─── 13. rlm partition ──────────────────────────────────────────────────────
+// ─── rlm partition ──────────────────────────────────────────────────────────
 
 #[test]
 fn e2e_partition_uniform() {
@@ -255,182 +299,6 @@ fn e2e_partition_uniform() {
         .stdout(predicate::str::is_empty().not());
 }
 
-// ─── 14. rlm summarize ──────────────────────────────────────────────────────
-
-#[test]
-fn e2e_summarize() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("summarize")
-        .arg("sample.rs")
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty().not());
-}
-
-// ─── 15. rlm batch ──────────────────────────────────────────────────────────
-
-#[test]
-fn e2e_batch() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("batch")
-        .arg("Config")
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty().not());
-}
-
-// ─── 16. rlm diff ───────────────────────────────────────────────────────────
-
-#[test]
-fn e2e_diff_unchanged() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("diff")
-        .arg("sample.rs")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"changed\":false"));
-}
-
-// ─── 17. rlm map ────────────────────────────────────────────────────────────
-
-#[test]
-fn e2e_map() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("map")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("sample.rs"));
-}
-
-// ─── 18. rlm callgraph ──────────────────────────────────────────────────────
-
-#[test]
-fn e2e_callgraph() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("callgraph")
-        .arg("helper")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"s\":\"helper\""));
-}
-
-// ─── 19. rlm impact ─────────────────────────────────────────────────────────
-
-#[test]
-fn e2e_impact() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("impact")
-        .arg("helper")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"s\":\"helper\""));
-}
-
-// ─── 20. rlm context ────────────────────────────────────────────────────────
-
-#[test]
-fn e2e_context() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("context")
-        .arg("helper")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"s\":\"helper\"").and(predicate::str::contains("body")));
-}
-
-// ─── 21. rlm deps ───────────────────────────────────────────────────────────
-
-#[test]
-fn e2e_deps() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("deps")
-        .arg("sample.rs")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"f\":\"sample.rs\""));
-}
-
-// ─── 22. rlm scope ──────────────────────────────────────────────────────────
-
-#[test]
-fn e2e_scope() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("scope")
-        .arg("sample.rs")
-        .arg("--line")
-        .arg("10")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"f\":\"sample.rs\""));
-}
-
-// ─── 23. rlm type ───────────────────────────────────────────────────────────
-
-#[test]
-fn e2e_type() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("type")
-        .arg("Config")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"s\":\"Config\""));
-}
-
-// ─── 24. rlm patterns ───────────────────────────────────────────────────────
-
-#[test]
-fn e2e_patterns() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("patterns")
-        .arg("Config")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"q\":\"Config\""));
-}
-
-// ─── Markdown-specific tests ─────────────────────────────────────────────────
-
-#[test]
-fn e2e_read_markdown_section() {
-    let dir = setup_markdown_project();
-    rlm(&dir)
-        .arg("read")
-        .arg("sample.md")
-        .arg("--section")
-        .arg("Installation")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("install"));
-}
-
-// ─── Read with line range ────────────────────────────────────────────────────
-
-#[test]
-fn e2e_read_line_range() {
-    let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("read")
-        .arg("sample.rs")
-        .arg("--lines")
-        .arg("1-5")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("struct Config"));
-}
-
-// ─── Partition semantic strategy ─────────────────────────────────────────────
-
 #[test]
 fn e2e_partition_semantic() {
     let dir = setup_rust_project();
@@ -444,7 +312,31 @@ fn e2e_partition_semantic() {
         .stdout(predicate::str::is_empty().not());
 }
 
-// ─── Diff with symbol ───────────────────────────────────────────────────────
+// ─── rlm summarize ──────────────────────────────────────────────────────────
+
+#[test]
+fn e2e_summarize() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("summarize")
+        .arg("sample.rs")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not());
+}
+
+// ─── rlm diff ───────────────────────────────────────────────────────────────
+
+#[test]
+fn e2e_diff_unchanged() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("diff")
+        .arg("sample.rs")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"changed\":false"));
+}
 
 #[test]
 fn e2e_diff_symbol() {
@@ -459,70 +351,66 @@ fn e2e_diff_symbol() {
         .stdout(predicate::str::contains("\"changed\":false"));
 }
 
-// ─── Grep with context lines ────────────────────────────────────────────────
+// ─── rlm context ────────────────────────────────────────────────────────────
 
 #[test]
-fn e2e_grep_with_context() {
+fn e2e_context() {
     let dir = setup_rust_project();
     rlm(&dir)
-        .arg("grep")
-        .arg("Config")
-        .arg("--context")
-        .arg("2")
+        .arg("context")
+        .arg("helper")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Config"));
+        .stdout(predicate::str::contains("\"s\":\"helper\"").and(predicate::str::contains("body")));
 }
-
-// ─── Search with limit ──────────────────────────────────────────────────────
 
 #[test]
-fn e2e_search_with_limit() {
+fn e2e_context_graph() {
     let dir = setup_rust_project();
     rlm(&dir)
-        .arg("search")
-        .arg("fn")
-        .arg("--limit")
-        .arg("2")
+        .arg("context")
+        .arg("helper")
+        .arg("--graph")
         .assert()
         .success()
-        .stdout(predicate::str::is_empty().not());
+        .stdout(predicate::str::contains("context").and(predicate::str::contains("callgraph")));
 }
 
-// ─── Map with path filter ───────────────────────────────────────────────────
+// ─── rlm deps ───────────────────────────────────────────────────────────────
 
 #[test]
-fn e2e_map_with_path_filter() {
+fn e2e_deps() {
     let dir = setup_rust_project();
     rlm(&dir)
-        .arg("map")
-        .arg("sample")
+        .arg("deps")
+        .arg("sample.rs")
         .assert()
         .success()
-        .stdout(predicate::str::contains("sample.rs"));
+        .stdout(predicate::str::contains("\"f\":\"sample.rs\""));
 }
 
-// ─── Peek with path filter ──────────────────────────────────────────────────
+// ─── rlm scope ──────────────────────────────────────────────────────────────
 
 #[test]
-fn e2e_peek_with_path_filter() {
+fn e2e_scope() {
     let dir = setup_rust_project();
     rlm(&dir)
-        .arg("peek")
-        .arg("sample")
+        .arg("scope")
+        .arg("sample.rs")
+        .arg("--line")
+        .arg("10")
         .assert()
         .success()
-        .stdout(predicate::str::contains("sample.rs"));
+        .stdout(predicate::str::contains("\"f\":\"sample.rs\""));
 }
 
-// ─── Multi-language indexing ─────────────────────────────────────────────────
+// ─── Multi-language indexing ────────────────────────────────────────────────
 
 #[test]
 fn e2e_index_multiple_languages() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let mdir = manifest_dir();
 
-    // Copy fixtures for multiple languages
     fs::copy(
         format!("{mdir}/fixtures/code_samples/rust/sample.rs"),
         dir.path().join("sample.rs"),
@@ -546,7 +434,6 @@ fn e2e_index_multiple_languages() {
         .success()
         .stdout(predicate::str::contains("files_indexed"));
 
-    // Verify stats shows multiple languages
     rlm(&dir)
         .arg("stats")
         .assert()
@@ -554,9 +441,8 @@ fn e2e_index_multiple_languages() {
         .stdout(predicate::str::contains("rust").and(predicate::str::contains("go")));
 }
 
-// ─── rlm files ─────────────────────────────────────────────────────────────
+// ─── rlm files ──────────────────────────────────────────────────────────────
 
-/// Setup with mixed file types (supported + unsupported)
 fn setup_mixed_project() -> TempDir {
     let dir = tempfile::tempdir().expect("create tempdir");
 
@@ -602,7 +488,6 @@ fn e2e_files_skipped_only() {
         .success()
         .stdout(predicate::str::contains("cshtml"))
         .stdout(predicate::str::contains("kt"))
-        // Should show i:false for skipped files
         .stdout(predicate::str::contains("\"i\":false"));
 }
 
@@ -615,7 +500,6 @@ fn e2e_files_indexed_only() {
         .assert()
         .success()
         .stdout(predicate::str::contains(".rs"))
-        // Should NOT contain the unsupported files
         .stdout(predicate::str::contains("cshtml").not());
 }
 
@@ -623,7 +507,6 @@ fn e2e_files_indexed_only() {
 fn e2e_files_path_filter() {
     let dir = setup_mixed_project();
 
-    // Create subdirectory with files
     fs::create_dir(dir.path().join("views")).unwrap();
     fs::write(dir.path().join("views/page.cshtml"), "@model Page").unwrap();
 
@@ -644,22 +527,87 @@ fn e2e_files_summary_counts() {
         .arg("files")
         .assert()
         .success()
-        // Should have summary with total count
         .stdout(predicate::str::contains("\"total\":4"));
 }
 
 #[test]
 fn e2e_files_no_index_required() {
-    // files command should work even without prior indexing
     let dir = tempfile::tempdir().expect("create tempdir");
     fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
     fs::write(dir.path().join("view.cshtml"), "@model Foo").unwrap();
 
-    // Don't run index!
     rlm(&dir)
         .arg("files")
         .assert()
         .success()
         .stdout(predicate::str::contains("main.rs"))
         .stdout(predicate::str::contains("view.cshtml"));
+}
+
+// ─── rlm stats --savings ───────────────────────────────────────────────────
+
+#[test]
+fn e2e_stats_savings_empty() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("stats")
+        .arg("--savings")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"ops\":0"))
+        .stdout(predicate::str::contains("\"saved\":0"));
+}
+
+#[test]
+fn e2e_stats_savings_after_operations() {
+    let dir = setup_rust_project();
+
+    // Run operations that record savings
+    rlm(&dir)
+        .arg("overview")
+        .arg("--detail")
+        .arg("minimal")
+        .assert()
+        .success();
+    rlm(&dir).arg("search").arg("Config").assert().success();
+
+    // Savings report should show 2 operations
+    rlm(&dir)
+        .arg("stats")
+        .arg("--savings")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"ops\":2"))
+        .stdout(predicate::str::contains("\"by_cmd\""));
+}
+
+#[test]
+fn e2e_stats_savings_with_since_filter() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("overview")
+        .arg("--detail")
+        .arg("minimal")
+        .assert()
+        .success();
+
+    // Future date -> no results
+    rlm(&dir)
+        .arg("stats")
+        .arg("--savings")
+        .arg("--since")
+        .arg("2099-01-01")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"ops\":0"));
+
+    // Past date -> all results
+    rlm(&dir)
+        .arg("stats")
+        .arg("--savings")
+        .arg("--since")
+        .arg("2000-01-01")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"ops\":1"));
 }

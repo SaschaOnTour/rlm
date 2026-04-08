@@ -1,11 +1,13 @@
 use clap::{Parser, Subcommand};
 
+use crate::edit::inserter::InsertPosition;
+
 #[derive(Parser)]
 #[command(
     name = "rlm",
     version,
     about = "The Context Broker - semantic code exploration for AI agents",
-    after_help = "NOTE: Most commands (tree, map, search, refs, etc.) only show files with \
+    after_help = "NOTE: Most commands (overview, search, refs, etc.) only show files with \
                   supported extensions. To see ALL files including skipped ones (.cshtml, .kt, etc.), \
                   use 'rlm files'. To see only skipped files: 'rlm files --skipped-only'."
 )]
@@ -38,7 +40,11 @@ pub enum Command {
         limit: usize,
     },
 
-    /// Read file content, optionally a specific symbol or section
+    /// Read a specific symbol or markdown section from a file.
+    ///
+    /// Requires --symbol or --section. For full-file or line-range reads,
+    /// use Claude Code's native Read tool.
+    /// Use --metadata with --symbol to include type info, signature, visibility, and call count.
     Read {
         /// File path (project-relative)
         path: String,
@@ -48,23 +54,31 @@ pub enum Command {
         /// Read a specific markdown section (heading text)
         #[arg(long)]
         section: Option<String>,
-        /// Read specific line range (e.g. "10-20")
+        /// Include enriched metadata (kind, signature, visibility, call count)
         #[arg(long)]
-        lines: Option<String>,
+        metadata: bool,
     },
 
-    /// Display folder structure with symbol annotations
-    Tree,
+    /// Project structure overview at three detail levels.
+    ///
+    /// 'minimal': symbol names/kinds/lines only (~50 tokens).
+    /// 'standard' (default): file map with language, line count, public symbols, descriptions.
+    /// 'tree': directory hierarchy with symbol annotations.
+    Overview {
+        /// Detail level: minimal, standard, tree
+        #[arg(long, default_value = "standard")]
+        detail: String,
+        /// Optional path prefix filter (e.g. "src/")
+        #[arg(long)]
+        path: Option<String>,
+    },
 
-    /// Find all usages/call sites of a symbol
+    /// Find all usages of a symbol and analyze impact.
+    ///
+    /// Shows every location that would need updating if the symbol changes.
+    /// Returns file, containing symbol, line, and reference kind.
     Refs {
         /// Symbol name to find references for
-        symbol: String,
-    },
-
-    /// Get symbol signature and all call sites
-    Signature {
-        /// Symbol name
         symbol: String,
     },
 
@@ -92,28 +106,17 @@ pub enum Command {
         code: String,
         /// Position: top, bottom, before:N, after:N
         #[arg(short, long, default_value = "bottom")]
-        position: String,
+        position: InsertPosition,
     },
 
     /// Show indexing statistics (files, chunks, refs, languages, parse quality warnings)
-    Stats,
-
-    /// Quick structure preview (symbols, line counts, NO content)
-    Peek {
-        /// Path filter (e.g. "src/")
-        path: Option<String>,
-    },
-
-    /// Pattern match across indexed files
-    Grep {
-        /// Regex pattern
-        pattern: String,
-        /// Context lines before/after match
-        #[arg(short, long, default_value = "0")]
-        context: usize,
-        /// Path filter
-        #[arg(short, long)]
-        path: Option<String>,
+    Stats {
+        /// Show token savings report
+        #[arg(long)]
+        savings: bool,
+        /// Filter savings since date (ISO 8601, e.g. "2026-03-14")
+        #[arg(long)]
+        since: Option<String>,
     },
 
     /// Partition a file into chunks
@@ -131,15 +134,6 @@ pub enum Command {
         path: String,
     },
 
-    /// Parallel search across files
-    Batch {
-        /// Search query
-        query: String,
-        /// Limit per file
-        #[arg(short, long, default_value = "5")]
-        limit: usize,
-    },
-
     /// Show diff between indexed and current content
     Diff {
         /// File path
@@ -149,28 +143,15 @@ pub enum Command {
         symbol: Option<String>,
     },
 
-    /// Project overview (file→purpose, key symbols)
-    Map {
-        /// Path filter
-        path: Option<String>,
-    },
-
-    /// Full call graph for a symbol
-    Callgraph {
-        /// Symbol name
-        symbol: String,
-    },
-
-    /// What breaks if this symbol changes
-    Impact {
-        /// Symbol name
-        symbol: String,
-    },
-
-    /// Complete understanding: body + callers + callees + types
+    /// Complete understanding of a symbol: body + callers + callees + types.
+    ///
+    /// Use --graph to include full callgraph with caller/callee names.
     Context {
         /// Symbol name
         symbol: String,
+        /// Include full callgraph (caller + callee names)
+        #[arg(long)]
+        graph: bool,
     },
 
     /// File/module dependency graph
@@ -186,18 +167,6 @@ pub enum Command {
         /// Line number
         #[arg(short, long)]
         line: u32,
-    },
-
-    /// Type info: return type, fields, required methods
-    Type {
-        /// Symbol name
-        symbol: String,
-    },
-
-    /// Find similar implementations in the codebase
-    Patterns {
-        /// Search pattern or symbol name
-        query: String,
     },
 
     /// Start MCP server (stdio transport)
@@ -221,7 +190,7 @@ pub enum Command {
 
     /// List ALL files in the project (indexed + skipped).
     ///
-    /// Unlike `map` or `tree`, this shows files that were skipped during
+    /// Unlike `overview`, this shows files that were skipped during
     /// indexing due to unsupported extensions. Useful for AI agents that
     /// need complete visibility to use their own tools for non-indexed files.
     Files {

@@ -4,6 +4,10 @@ use crate::db::Database;
 use crate::error::{Result, RlmError};
 use crate::models::token_estimate::{estimate_tokens_str, TokenEstimate};
 
+/// Number of lines per chunk when semantic partitioning falls back to uniform splitting
+/// (i.e., when the file has no indexed AST chunks).
+const SEMANTIC_FALLBACK_CHUNK_SIZE: usize = 50;
+
 /// Partitioning strategy.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Strategy {
@@ -118,7 +122,7 @@ fn partition_semantic(db: &Database, file_path: &str, source: &str) -> Result<Ve
     }
 
     // Fallback to uniform if no chunks found
-    Ok(partition_uniform(source, 50))
+    Ok(partition_uniform(source, SEMANTIC_FALLBACK_CHUNK_SIZE))
 }
 
 /// Keyword partitioning: filter lines by regex, then partition remaining.

@@ -78,20 +78,6 @@ impl Dispatcher {
         }
     }
 
-    /// Parse chunks and extract references in a single pass (code languages only).
-    pub fn parse_and_extract(
-        &self,
-        lang: &str,
-        source: &str,
-        file_id: i64,
-    ) -> Result<(Vec<Chunk>, Vec<Reference>)> {
-        if let Some(parser) = self.code_parsers.get(lang) {
-            parser.parse_chunks_and_refs(source, file_id)
-        } else {
-            Err(RlmError::UnsupportedLanguage { ext: lang.into() })
-        }
-    }
-
     /// Extract references from source code (code languages only).
     pub fn extract_refs(
         &self,

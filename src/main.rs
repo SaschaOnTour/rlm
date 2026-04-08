@@ -18,12 +18,15 @@ use rlm::cli::commands::{Cli, Command};
 use rlm::cli::output;
 use rlm::config::Config;
 use rlm::db::Database;
+use rlm::edit::inserter::InsertPosition;
 use rlm::edit::syntax_guard::SyntaxGuard;
 use rlm::edit::{inserter, replacer};
 use rlm::indexer;
 use rlm::ingest::code::quality_log;
-use rlm::operations::{self, parse_position};
-use rlm::rlm::{batch, grep, partition, peek, summarize};
+use rlm::models::token_estimate::estimate_tokens;
+use rlm::operations;
+use rlm::operations::savings;
+use rlm::rlm::{partition, peek, summarize};
 use rlm::search::tree;
 
 fn main() {
@@ -43,16 +46,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::fmt::Display>> {
             path,
             symbol,
             section,
-            lines,
-        } => cmd_read(
-            &path,
-            symbol.as_deref(),
-            section.as_deref(),
-            lines.as_deref(),
-        ),
-        Command::Tree => cmd_tree(),
+            metadata,
+        } => cmd_read(&path, symbol.as_deref(), section.as_deref(), metadata),
+        Command::Overview { detail, path } => cmd_overview(&detail, path.as_deref()),
         Command::Refs { symbol } => cmd_refs(&symbol),
-        Command::Signature { symbol } => cmd_signature(&symbol),
         Command::Replace {
             path,
             symbol,
@@ -64,25 +61,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::fmt::Display>> {
             code,
             position,
         } => cmd_insert(&path, &code, &position),
-        Command::Stats => cmd_stats(),
-        Command::Peek { path } => cmd_peek(path.as_deref()),
-        Command::Grep {
-            pattern,
-            context,
-            path,
-        } => cmd_grep(&pattern, context, path.as_deref()),
+        Command::Stats { savings, since } => cmd_stats(savings, since.as_deref()),
         Command::Partition { path, strategy } => cmd_partition(&path, &strategy),
         Command::Summarize { path } => cmd_summarize(&path),
-        Command::Batch { query, limit } => cmd_batch(&query, limit),
         Command::Diff { path, symbol } => cmd_diff(&path, symbol.as_deref()),
-        Command::Map { path } => cmd_map(path.as_deref()),
-        Command::Callgraph { symbol } => cmd_callgraph(&symbol),
-        Command::Impact { symbol } => cmd_impact(&symbol),
-        Command::Context { symbol } => cmd_context(&symbol),
+        Command::Context { symbol, graph } => cmd_context(&symbol, graph),
         Command::Deps { path } => cmd_deps(&path),
         Command::Scope { path, line } => cmd_scope(&path, line),
-        Command::Type { symbol } => cmd_type(&symbol),
-        Command::Patterns { query } => cmd_patterns(&query),
         Command::Mcp => cmd_mcp(),
         Command::Quality {
             unknown_only,
@@ -131,16 +116,16 @@ fn cmd_search(query: &str, limit: usize) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let result = operations::search_chunks(&db, query, limit).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
+    let json = output::format_json(&result);
+    let out_tokens = estimate_tokens(json.len());
+    let file_count = result.results.len() as u64;
+    let alt_tokens = result.tokens.output.max(out_tokens);
+    savings::record(&db, "search", out_tokens, alt_tokens, file_count);
+    println!("{json}");
     Ok(())
 }
 
-fn cmd_read(
-    path: &str,
-    symbol: Option<&str>,
-    section: Option<&str>,
-    lines: Option<&str>,
-) -> CmdResult {
+fn cmd_read(path: &str, symbol: Option<&str>, section: Option<&str>, metadata: bool) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
 
@@ -156,15 +141,46 @@ fn cmd_read(
             })
             .collect();
 
-        if file_chunks.is_empty() {
-            // Try all chunks with that name
+        let target = if file_chunks.is_empty() {
             if chunks.is_empty() {
                 return Err(map_err(format!("symbol not found: {sym}")));
             }
-            println!("{}", output::format_json(&chunks));
+            &chunks
         } else {
-            println!("{}", output::format_json(&file_chunks));
-        }
+            // We know file_chunks is non-empty; serialize it
+            let json = if metadata {
+                let type_info = operations::get_type_info(&db, sym).ok();
+                let signature = operations::get_signature(&db, sym).ok();
+                output::format_json(&serde_json::json!({
+                    "chunks": file_chunks,
+                    "type_info": type_info,
+                    "signature": signature,
+                }))
+            } else {
+                output::format_json(&file_chunks)
+            };
+            let out_tokens = estimate_tokens(json.len());
+            let alt_tokens = savings::alternative_single_file(&db, path).unwrap_or(out_tokens);
+            savings::record(&db, "read_symbol", out_tokens, alt_tokens, 1);
+            println!("{json}");
+            return Ok(());
+        };
+
+        let json = if metadata {
+            let type_info = operations::get_type_info(&db, sym).ok();
+            let signature = operations::get_signature(&db, sym).ok();
+            output::format_json(&serde_json::json!({
+                "chunks": target,
+                "type_info": type_info,
+                "signature": signature,
+            }))
+        } else {
+            output::format_json(&target)
+        };
+        let out_tokens = estimate_tokens(json.len());
+        let alt_tokens = savings::alternative_single_file(&db, path).unwrap_or(out_tokens);
+        savings::record(&db, "read_symbol", out_tokens, alt_tokens, 1);
+        println!("{json}");
     } else if let Some(heading) = section {
         // Read specific markdown section
         let file = db.get_file_by_path(path).map_err(map_err)?;
@@ -172,55 +188,58 @@ fn cmd_read(
         let chunks = db.get_chunks_for_file(file.id).map_err(map_err)?;
         let section_chunk = chunks.iter().find(|c| c.ident == heading);
         match section_chunk {
-            Some(c) => println!("{}", output::format_json(c)),
+            Some(c) => {
+                let json = output::format_json(c);
+                let out_tokens = estimate_tokens(json.len());
+                let alt_tokens = savings::alternative_single_file(&db, path).unwrap_or(out_tokens);
+                savings::record(&db, "read_section", out_tokens, alt_tokens, 1);
+                println!("{json}");
+            }
             None => return Err(map_err(format!("section not found: {heading}"))),
         }
-    } else if let Some(line_range) = lines {
-        // Read line range
-        let full_path = config.project_root.join(path);
-        let source = std::fs::read_to_string(&full_path).map_err(map_err)?;
-        let all_lines: Vec<&str> = source.lines().collect();
-
-        let parts: Vec<&str> = line_range.split('-').collect();
-        if parts.len() != 2 {
-            return Err(map_err("line range must be in format START-END"));
-        }
-        let start: usize = parts[0].parse().map_err(map_err)?;
-        let end: usize = parts[1].parse().map_err(map_err)?;
-        let start = start.saturating_sub(1);
-        let end = end.min(all_lines.len());
-        let content = all_lines[start..end].join("\n");
-        println!("{}", output::format_with_tokens(content));
     } else {
-        // Read full file
-        let full_path = config.project_root.join(path);
-        let content = std::fs::read_to_string(&full_path).map_err(map_err)?;
-        println!("{}", output::format_with_tokens(content));
+        return Err(map_err(
+            "read requires --symbol or --section. Use Claude Code's Read for full files or line ranges.",
+        ));
     }
     Ok(())
 }
 
-fn cmd_tree() -> CmdResult {
+fn cmd_overview(detail: &str, path: Option<&str>) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
-    let nodes = tree::build_tree(&db).map_err(map_err)?;
-    println!("{}", output::format_with_tokens(nodes));
+
+    match detail {
+        "minimal" => {
+            let result = peek::peek(&db, path).map_err(map_err)?;
+            let json = savings::record_scoped_op(&db, "overview", &result, path);
+            println!("{json}");
+        }
+        "standard" => {
+            let entries = operations::build_map(&db, path).map_err(map_err)?;
+            let json = savings::record_scoped_op(&db, "overview", &entries, path);
+            println!("{json}");
+        }
+        "tree" => {
+            let nodes = tree::build_tree(&db, path).map_err(map_err)?;
+            let json = savings::record_scoped_op(&db, "overview", &nodes, path);
+            println!("{json}");
+        }
+        other => {
+            return Err(map_err(format!(
+                "unknown detail level: '{other}'. Use 'minimal', 'standard', or 'tree'."
+            )));
+        }
+    }
     Ok(())
 }
 
 fn cmd_refs(symbol: &str) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
-    let result = operations::get_refs(&db, symbol).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
-    Ok(())
-}
-
-fn cmd_signature(symbol: &str) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = operations::get_signature(&db, symbol).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
+    let result = operations::analyze_impact(&db, symbol).map_err(map_err)?;
+    let json = savings::record_symbol_op(&db, "refs", &result, symbol, result.count as u64);
+    println!("{json}");
     Ok(())
 }
 
@@ -256,17 +275,22 @@ fn cmd_replace(path: &str, symbol: &str, code: &str, preview: bool) -> CmdResult
     Ok(())
 }
 
-fn cmd_insert(path: &str, code: &str, position: &str) -> CmdResult {
-    let pos = parse_position(position).map_err(map_err)?;
+fn cmd_insert(path: &str, code: &str, position: &InsertPosition) -> CmdResult {
     let guard = SyntaxGuard::new();
-    inserter::insert_code(path, &pos, code, &guard).map_err(map_err)?;
+    inserter::insert_code(path, position, code, &guard).map_err(map_err)?;
     println!("{{\"ok\":true}}");
     Ok(())
 }
 
-fn cmd_stats() -> CmdResult {
+fn cmd_stats(show_savings: bool, since: Option<&str>) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
+
+    if show_savings {
+        let report = savings::get_savings_report(&db, since).map_err(map_err)?;
+        println!("{}", output::format_json(&report));
+        return Ok(());
+    }
 
     let result = operations::get_stats(&db).map_err(map_err)?;
     println!("{}", output::format_json(&result));
@@ -279,29 +303,14 @@ fn cmd_stats() -> CmdResult {
     Ok(())
 }
 
-fn cmd_peek(path: Option<&str>) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = peek::peek(&db, path).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
-    Ok(())
-}
-
-fn cmd_grep(pattern: &str, context: usize, path: Option<&str>) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = grep::grep(&db, pattern, context, path, &config.project_root).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
-    Ok(())
-}
-
 fn cmd_partition(path: &str, strategy_str: &str) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let strategy = parse_strategy(strategy_str)?;
     let result =
         partition::partition_file(&db, path, &strategy, &config.project_root).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
+    let json = savings::record_file_op(&db, "partition", &result, path);
+    println!("{json}");
     Ok(())
 }
 
@@ -324,15 +333,8 @@ fn cmd_summarize(path: &str) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let result = summarize::summarize(&db, path).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
-    Ok(())
-}
-
-fn cmd_batch(query: &str, limit: usize) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = batch::batch_search(&db, query, limit).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
+    let json = savings::record_file_op(&db, "summarize", &result, path);
+    println!("{json}");
     Ok(())
 }
 
@@ -343,43 +345,33 @@ fn cmd_diff(path: &str, symbol: Option<&str>) -> CmdResult {
     if let Some(sym) = symbol {
         let result =
             operations::diff_symbol(&db, path, sym, &config.project_root).map_err(map_err)?;
-        println!("{}", output::format_json(&result));
+        let json = savings::record_file_op(&db, "diff", &result, path);
+        println!("{json}");
     } else {
         let result = operations::diff_file(&db, path, &config.project_root).map_err(map_err)?;
-        println!("{}", output::format_json(&result));
+        let json = savings::record_file_op(&db, "diff", &result, path);
+        println!("{json}");
     }
     Ok(())
 }
 
-fn cmd_map(path: Option<&str>) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let entries = operations::build_map(&db, path).map_err(map_err)?;
-    println!("{}", output::format_with_tokens(entries));
-    Ok(())
-}
-
-fn cmd_callgraph(symbol: &str) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = operations::build_callgraph(&db, symbol).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
-    Ok(())
-}
-
-fn cmd_impact(symbol: &str) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = operations::analyze_impact(&db, symbol).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
-    Ok(())
-}
-
-fn cmd_context(symbol: &str) -> CmdResult {
+fn cmd_context(symbol: &str, graph: bool) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let result = operations::build_context(&db, symbol).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
+
+    if graph {
+        let callgraph = operations::build_callgraph(&db, symbol).map_err(map_err)?;
+        let combined = serde_json::json!({
+            "context": result,
+            "callgraph": callgraph,
+        });
+        let json = savings::record_symbol_op(&db, "context", &combined, symbol, 0);
+        println!("{json}");
+    } else {
+        let json = savings::record_symbol_op(&db, "context", &result, symbol, 0);
+        println!("{json}");
+    }
     Ok(())
 }
 
@@ -387,7 +379,8 @@ fn cmd_deps(path: &str) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let result = operations::get_deps(&db, path).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
+    let json = savings::record_file_op(&db, "deps", &result, path);
+    println!("{json}");
     Ok(())
 }
 
@@ -395,23 +388,8 @@ fn cmd_scope(path: &str, line: u32) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let result = operations::get_scope(&db, path, line).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
-    Ok(())
-}
-
-fn cmd_type(symbol: &str) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = operations::get_type_info(&db, symbol).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
-    Ok(())
-}
-
-fn cmd_patterns(query: &str) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = operations::find_patterns(&db, query).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
+    let json = savings::record_file_op(&db, "scope", &result, path);
+    println!("{json}");
     Ok(())
 }
 

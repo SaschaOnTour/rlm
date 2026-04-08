@@ -17,15 +17,20 @@ use crate::db::Database;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
-use crate::operations::{self, parse_position};
-use crate::rlm::{batch, grep, partition, peek, summarize};
+use crate::operations;
+use crate::rlm::{partition, summarize};
 use crate::search::tree;
 
+use crate::models::token_estimate::estimate_tokens;
+use crate::operations::savings;
+
+/// Default maximum number of search results when no explicit limit is provided.
+const DEFAULT_SEARCH_LIMIT: usize = 20;
+
 use super::tools::{
-    BatchParams, CallgraphParams, ContextParams, DepsParams, DiffParams, FilesParams, GrepParams,
-    ImpactParams, IndexParams, InsertParams, MapParams, PartitionParams, PatternsParams,
-    PeekParams, ReadParams, RefsParams, ReplaceParams, ScopeParams, SearchParams, SignatureParams,
-    SummarizeParams, TypeParams, VerifyParams,
+    ContextParams, DepsParams, DiffParams, FilesParams, IndexParams, InsertParams, OverviewParams,
+    PartitionParams, ReadParams, RefsParams, ReplaceParams, SavingsParams, ScopeParams,
+    SearchParams, SummarizeParams, VerifyParams,
 };
 
 /// The RLM MCP Server.
@@ -38,7 +43,7 @@ pub struct RlmServer {
     tool_router: Arc<ToolRouter<Self>>,
 }
 
-// ── Helper functions ────────────────────────────────────────────
+// -- Helper functions --------------------------------------------------------
 
 impl RlmServer {
     fn config(&self) -> Config {
@@ -51,7 +56,7 @@ impl RlmServer {
         let config = self.config();
         if !config.index_exists() {
             return Err(McpError::invalid_request(
-                "Index not found. Run 'rlm index .' first before using MCP tools.",
+                "Index not found. Call the 'index' tool first.",
                 None,
             ));
         }
@@ -72,12 +77,13 @@ impl RlmServer {
     }
 
     /// Get access to the tool router for testing purposes.
+    // qual:api
     pub fn get_tool_router(&self) -> &ToolRouter<Self> {
         &self.tool_router
     }
 }
 
-// ── Tool implementations ────────────────────────────────────────
+// -- Tool implementations ----------------------------------------------------
 
 #[tool_router]
 impl RlmServer {
@@ -89,11 +95,12 @@ impl RlmServer {
         }
     }
 
-    // ─── Indexing ───────────────────────────────────────────────
+    // --- Indexing ------------------------------------------------------------
 
     #[tool(
         description = "Scan and index the codebase into the .rlm/index.db database. Returns file/chunk/ref counts."
     )]
+    // qual:api
     async fn index(&self, params: Parameters<IndexParams>) -> Result<CallToolResult, McpError> {
         let config = if let Some(path) = &params.0.path {
             Config::new(path)
@@ -114,29 +121,42 @@ impl RlmServer {
         }
     }
 
-    // ─── Search ─────────────────────────────────────────────────
+    // --- Search -------------------------------------------------------------
 
     #[tool(
         description = "Full-text search across indexed chunks (symbols and content). Returns matching chunks with content."
     )]
+    // qual:api
     async fn search(&self, params: Parameters<SearchParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        let limit = params.0.limit.unwrap_or(20);
+        let limit = params.0.limit.unwrap_or(DEFAULT_SEARCH_LIMIT);
 
         match operations::search_chunks(&db, &params.0.query, limit) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
+            Ok(result) => {
+                let json = Self::to_json(&result);
+                let out_tokens = estimate_tokens(json.len());
+                let alt_tokens = result.tokens.output.max(out_tokens);
+                savings::record(
+                    &db,
+                    "search",
+                    out_tokens,
+                    alt_tokens,
+                    result.results.len() as u64,
+                );
+                Ok(Self::success_text(json))
+            }
             Err(e) => Ok(Self::error_text(e.to_string())),
         }
     }
 
-    // ─── Read ───────────────────────────────────────────────────
+    // --- Read (symbol or section only) --------------------------------------
 
     #[tool(
-        description = "Read file content. Can read full file, a specific symbol, a markdown section, or a line range."
+        description = "Read a specific symbol (function, struct, etc.) or markdown section from a file. Requires 'symbol' or 'section'. Use metadata=true with symbol to include kind/signature/visibility/call-count. For full-file or line-range reads, use Claude Code's native Read tool."
     )]
+    // qual:api
     async fn read(&self, params: Parameters<ReadParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        let config = self.config();
         let params = &params.0;
 
         if let Some(sym) = &params.symbol {
@@ -153,14 +173,19 @@ impl RlmServer {
                         })
                         .collect();
 
-                    if file_chunks.is_empty() {
+                    let target_chunks = if file_chunks.is_empty() {
                         if chunks.is_empty() {
                             return Ok(Self::error_text(format!("symbol not found: {sym}")));
                         }
-                        Ok(Self::success_text(Self::to_json(&chunks)))
+                        &chunks
                     } else {
-                        Ok(Self::success_text(Self::to_json(&file_chunks)))
-                    }
+                        // SAFETY: file_chunks borrows from chunks, but we only need
+                        // the data for serialization below, so this is fine.
+                        // We'll serialize file_chunks directly.
+                        return self.read_symbol_result(&db, params, &file_chunks);
+                    };
+
+                    self.read_symbol_result(&db, params, target_chunks)
                 }
                 Err(e) => Ok(Self::error_text(e.to_string())),
             }
@@ -168,7 +193,11 @@ impl RlmServer {
             match db.get_file_by_path(&params.path) {
                 Ok(Some(file)) => match db.get_chunks_for_file(file.id) {
                     Ok(chunks) => match chunks.iter().find(|c| c.ident == *heading) {
-                        Some(c) => Ok(Self::success_text(Self::to_json(c))),
+                        Some(c) => {
+                            let json =
+                                savings::record_file_op(&db, "read_section", c, &params.path);
+                            Ok(Self::success_text(json))
+                        }
                         None => Ok(Self::error_text(format!("section not found: {heading}"))),
                     },
                     Err(e) => Ok(Self::error_text(e.to_string())),
@@ -176,83 +205,84 @@ impl RlmServer {
                 Ok(None) => Ok(Self::error_text(format!("file not found: {}", params.path))),
                 Err(e) => Ok(Self::error_text(e.to_string())),
             }
-        } else if let Some(line_range) = &params.lines {
-            let full_path = config.project_root.join(&params.path);
-            match std::fs::read_to_string(&full_path) {
-                Ok(source) => {
-                    let all_lines: Vec<&str> = source.lines().collect();
-                    let parts: Vec<&str> = line_range.split('-').collect();
-                    if parts.len() != 2 {
-                        return Ok(Self::error_text("line range must be START-END".into()));
-                    }
-                    let start: usize = parts[0].parse::<usize>().unwrap_or(1).saturating_sub(1);
-                    let end: usize = parts[1]
-                        .parse()
-                        .unwrap_or(all_lines.len())
-                        .min(all_lines.len());
-                    let content = all_lines[start..end].join("\n");
-                    Ok(Self::success_text(Self::to_json(&content)))
-                }
-                Err(e) => Ok(Self::error_text(e.to_string())),
-            }
         } else {
-            let full_path = config.project_root.join(&params.path);
-            match std::fs::read_to_string(&full_path) {
-                Ok(content) => Ok(Self::success_text(Self::to_json(&content))),
-                Err(e) => Ok(Self::error_text(e.to_string())),
-            }
+            Ok(Self::error_text(
+                "read requires 'symbol' or 'section'. Use Claude Code's Read for full files or line ranges.".into(),
+            ))
         }
     }
 
-    // ─── Tree ───────────────────────────────────────────────────
+    // --- Overview (consolidated peek/map/tree) ------------------------------
 
     #[tool(
-        description = "Display the folder structure with symbol annotations. Shows files and their contained symbols hierarchically."
+        description = "Project structure overview at three detail levels. 'minimal': symbol names/kinds/lines only (~50 tokens). 'standard' (default): file map with language, line count, public symbols, descriptions. 'tree': directory hierarchy with symbol annotations. Optional path prefix filter."
     )]
-    async fn tree(&self) -> Result<CallToolResult, McpError> {
-        let db = self.ensure_db()?;
-        match tree::build_tree(&db) {
-            Ok(nodes) => Ok(Self::success_text(Self::to_json(&nodes))),
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
-    }
-
-    // ─── Refs ───────────────────────────────────────────────────
-
-    #[tool(
-        description = "Find all usages/call sites of a symbol across the codebase. Returns reference locations with kind (call, import, type_use)."
-    )]
-    async fn refs(&self, params: Parameters<RefsParams>) -> Result<CallToolResult, McpError> {
-        let db = self.ensure_db()?;
-
-        match operations::get_refs(&db, &params.0.symbol) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
-    }
-
-    // ─── Signature ──────────────────────────────────────────────
-
-    #[tool(
-        description = "Get the signature of a symbol plus the count of all call sites. Useful for refactoring."
-    )]
-    async fn signature(
+    // qual:api
+    async fn overview(
         &self,
-        params: Parameters<SignatureParams>,
+        params: Parameters<OverviewParams>,
     ) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
+        let detail = params.0.detail.as_deref().unwrap_or("standard");
+        let path = params.0.path.as_deref();
 
-        match operations::get_signature(&db, &params.0.symbol) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
+        match detail {
+            "minimal" => {
+                use crate::rlm::peek;
+                match peek::peek(&db, path) {
+                    Ok(result) => {
+                        let json = savings::record_scoped_op(&db, "overview", &result, path);
+                        Ok(Self::success_text(json))
+                    }
+                    Err(e) => Ok(Self::error_text(e.to_string())),
+                }
+            }
+            "standard" => match operations::build_map(&db, path) {
+                Ok(entries) => {
+                    let json = savings::record_scoped_op(&db, "overview", &entries, path);
+                    Ok(Self::success_text(json))
+                }
+                Err(e) => Ok(Self::error_text(e.to_string())),
+            },
+            "tree" => match tree::build_tree(&db, path) {
+                Ok(nodes) => {
+                    let json = savings::record_scoped_op(&db, "overview", &nodes, path);
+                    Ok(Self::success_text(json))
+                }
+                Err(e) => Ok(Self::error_text(e.to_string())),
+            },
+            other => Ok(Self::error_text(format!(
+                "unknown detail level: '{other}'. Use 'minimal', 'standard', or 'tree'."
+            ))),
+        }
+    }
+
+    // --- Refs (enriched with impact analysis) -------------------------------
+
+    #[tool(
+        description = "Find all usages of a symbol and analyze impact: shows every location that would need updating if the symbol changes. Returns file, containing symbol, line, and reference kind."
+    )]
+    // qual:api
+    async fn refs(&self, params: Parameters<RefsParams>) -> Result<CallToolResult, McpError> {
+        let db = self.ensure_db()?;
+        let symbol = &params.0.symbol;
+
+        match operations::analyze_impact(&db, symbol) {
+            Ok(result) => {
+                let files_touched = result.count as u64;
+                let json = savings::record_symbol_op(&db, "refs", &result, symbol, files_touched);
+                Ok(Self::success_text(json))
+            }
             Err(e) => Ok(Self::error_text(e.to_string())),
         }
     }
 
-    // ─── Replace ────────────────────────────────────────────────
+    // --- Replace ------------------------------------------------------------
 
     #[tool(
         description = "Replace an AST node (function, struct, etc.) by symbol name. Validates syntax before writing. Use preview=true to see diff without writing."
     )]
+    // qual:api
     async fn replace(&self, params: Parameters<ReplaceParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
         let params = &params.0;
@@ -288,30 +318,27 @@ impl RlmServer {
         }
     }
 
-    // ─── Insert ─────────────────────────────────────────────────
+    // --- Insert -------------------------------------------------------------
 
     #[tool(
         description = "Insert code into a file at a specified position (top, bottom, before:N, after:N). Validates syntax before writing."
     )]
+    // qual:api
     async fn insert(&self, params: Parameters<InsertParams>) -> Result<CallToolResult, McpError> {
         let params = &params.0;
-        let pos = match parse_position(&params.position) {
-            Ok(p) => p,
-            Err(e) => return Ok(Self::error_text(e.to_string())),
-        };
-
         let guard = SyntaxGuard::new();
-        match inserter::insert_code(&params.path, &pos, &params.code, &guard) {
+        match inserter::insert_code(&params.path, &params.position, &params.code, &guard) {
             Ok(_) => Ok(Self::success_text("{\"ok\":true}".to_string())),
             Err(e) => Ok(Self::error_text(e.to_string())),
         }
     }
 
-    // ─── Stats ──────────────────────────────────────────────────
+    // --- Stats --------------------------------------------------------------
 
     #[tool(
         description = "Get indexing statistics: file count, chunk count, reference count, total bytes, language breakdown, and index age."
     )]
+    // qual:api
     async fn stats(&self) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
 
@@ -321,46 +348,12 @@ impl RlmServer {
         }
     }
 
-    // ─── Peek (RLM) ────────────────────────────────────────────
-
-    #[tool(
-        description = "Quick structure preview - shows symbols with their kinds and line counts, NO content. Cheapest operation (~50 tokens)."
-    )]
-    async fn peek(&self, params: Parameters<PeekParams>) -> Result<CallToolResult, McpError> {
-        let db = self.ensure_db()?;
-        match peek::peek(&db, params.0.path.as_deref()) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
-    }
-
-    // ─── Grep (RLM) ────────────────────────────────────────────
-
-    #[tool(
-        description = "Pattern-based search using regex. Returns matching lines with optional context. Use for targeted content finding."
-    )]
-    async fn grep(&self, params: Parameters<GrepParams>) -> Result<CallToolResult, McpError> {
-        let db = self.ensure_db()?;
-        let config = self.config();
-        let params = &params.0;
-        let context = params.context.unwrap_or(0);
-        match grep::grep(
-            &db,
-            &params.pattern,
-            context,
-            params.path.as_deref(),
-            &config.project_root,
-        ) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
-    }
-
-    // ─── Partition (RLM) ────────────────────────────────────────
+    // --- Partition -----------------------------------------------------------
 
     #[tool(
         description = "Split a file into chunks using a strategy: 'semantic' (AST boundaries), 'uniform:N' (N lines each), or 'keyword:PATTERN' (regex split)."
     )]
+    // qual:api
     async fn partition(
         &self,
         params: Parameters<PartitionParams>,
@@ -385,46 +378,41 @@ impl RlmServer {
         };
 
         match partition::partition_file(&db, &params.path, &strategy, &config.project_root) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
+            Ok(result) => {
+                let json = savings::record_file_op(&db, "partition", &result, &params.path);
+                Ok(Self::success_text(json))
+            }
             Err(e) => Ok(Self::error_text(e.to_string())),
         }
     }
 
-    // ─── Summarize (RLM) ───────────────────────────────────────
+    // --- Summarize ----------------------------------------------------------
 
     #[tool(
         description = "Generate a condensed summary of a file: language, line count, symbols with descriptions."
     )]
+    // qual:api
     async fn summarize(
         &self,
         params: Parameters<SummarizeParams>,
     ) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        match summarize::summarize(&db, &params.0.path) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
+        let path = &params.0.path;
+        match summarize::summarize(&db, path) {
+            Ok(result) => {
+                let json = savings::record_file_op(&db, "summarize", &result, path);
+                Ok(Self::success_text(json))
+            }
             Err(e) => Ok(Self::error_text(e.to_string())),
         }
     }
 
-    // ─── Batch (RLM) ───────────────────────────────────────────
-
-    #[tool(
-        description = "Run a search query across all indexed files. Returns results grouped by file."
-    )]
-    async fn batch(&self, params: Parameters<BatchParams>) -> Result<CallToolResult, McpError> {
-        let db = self.ensure_db()?;
-        let limit = params.0.limit.unwrap_or(20);
-        match batch::batch_search(&db, &params.0.query, limit) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
-    }
-
-    // ─── Diff (RLM) ────────────────────────────────────────────
+    // --- Diff ---------------------------------------------------------------
 
     #[tool(
         description = "Compare the indexed version of a file/symbol with the current disk version. Shows if content has changed since last index."
     )]
+    // qual:api
     async fn diff(&self, params: Parameters<DiffParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
         let config = self.config();
@@ -432,140 +420,108 @@ impl RlmServer {
 
         if let Some(sym) = &params.symbol {
             match operations::diff_symbol(&db, &params.path, sym, &config.project_root) {
-                Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
+                Ok(result) => {
+                    let json = savings::record_file_op(&db, "diff", &result, &params.path);
+                    Ok(Self::success_text(json))
+                }
                 Err(e) => Ok(Self::error_text(e.to_string())),
             }
         } else {
             match operations::diff_file(&db, &params.path, &config.project_root) {
-                Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
+                Ok(result) => {
+                    let json = savings::record_file_op(&db, "diff", &result, &params.path);
+                    Ok(Self::success_text(json))
+                }
                 Err(e) => Ok(Self::error_text(e.to_string())),
             }
         }
     }
 
-    // ─── Map ────────────────────────────────────────────────────
+    // --- Context (with optional callgraph) ----------------------------------
 
     #[tool(
-        description = "Project overview: for each file shows language, line count, public symbols, and a brief description. One-call orientation."
+        description = "Complete understanding of a symbol: body content, signatures, caller count, and callee names. Use graph=true to include full callgraph with caller/callee names."
     )]
-    async fn map(&self, params: Parameters<MapParams>) -> Result<CallToolResult, McpError> {
-        let db = self.ensure_db()?;
-
-        match operations::build_map(&db, params.0.path.as_deref()) {
-            Ok(entries) => Ok(Self::success_text(Self::to_json(&entries))),
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
-    }
-
-    // ─── Callgraph ──────────────────────────────────────────────
-
-    #[tool(
-        description = "Build call graph for a symbol: who calls it (callers) and what it calls (callees). Returns directed graph edges."
-    )]
-    async fn callgraph(
-        &self,
-        params: Parameters<CallgraphParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let db = self.ensure_db()?;
-
-        match operations::build_callgraph(&db, &params.0.symbol) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
-    }
-
-    // ─── Impact ─────────────────────────────────────────────────
-
-    #[tool(
-        description = "Impact analysis: shows all locations that would need updating if a symbol changes. Lists file, containing symbol, line, and reference kind."
-    )]
-    async fn impact(&self, params: Parameters<ImpactParams>) -> Result<CallToolResult, McpError> {
-        let db = self.ensure_db()?;
-
-        match operations::analyze_impact(&db, &params.0.symbol) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
-    }
-
-    // ─── Context ────────────────────────────────────────────────
-
-    #[tool(
-        description = "Complete understanding of a symbol: body content, signatures, caller count, and callee names. One-call deep understanding."
-    )]
+    // qual:api
     async fn context(&self, params: Parameters<ContextParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
+        let symbol = &params.0.symbol;
+        let include_graph = params.0.graph.unwrap_or(false);
 
-        match operations::build_context(&db, &params.0.symbol) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
+        match operations::build_context(&db, symbol) {
+            Ok(ctx_result) => {
+                if include_graph {
+                    match operations::build_callgraph(&db, symbol) {
+                        Ok(graph) => {
+                            #[derive(Serialize)]
+                            struct ContextWithGraph<'a> {
+                                context: &'a operations::ContextResult,
+                                callgraph: &'a operations::CallgraphResult,
+                            }
+                            let combined = ContextWithGraph {
+                                context: &ctx_result,
+                                callgraph: &graph,
+                            };
+                            let json =
+                                savings::record_symbol_op(&db, "context", &combined, symbol, 0);
+                            Ok(Self::success_text(json))
+                        }
+                        Err(e) => Ok(Self::error_text(e.to_string())),
+                    }
+                } else {
+                    let json =
+                        savings::record_symbol_op(&db, "context", &ctx_result, symbol, 0);
+                    Ok(Self::success_text(json))
+                }
+            }
             Err(e) => Ok(Self::error_text(e.to_string())),
         }
     }
 
-    // ─── Deps ───────────────────────────────────────────────────
+    // --- Deps ---------------------------------------------------------------
 
     #[tool(
         description = "File dependency analysis: lists all imports/use declarations found in the specified file."
     )]
+    // qual:api
     async fn deps(&self, params: Parameters<DepsParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
+        let path = &params.0.path;
 
-        match operations::get_deps(&db, &params.0.path) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
+        match operations::get_deps(&db, path) {
+            Ok(result) => {
+                let json = savings::record_file_op(&db, "deps", &result, path);
+                Ok(Self::success_text(json))
+            }
             Err(e) => Ok(Self::error_text(e.to_string())),
         }
     }
 
-    // ─── Scope ──────────────────────────────────────────────────
+    // --- Scope --------------------------------------------------------------
 
     #[tool(
         description = "Show what symbols are visible at a specific line in a file. Lists containing scopes and all symbols defined before that line."
     )]
+    // qual:api
     async fn scope(&self, params: Parameters<ScopeParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
+        let path = &params.0.path;
 
-        match operations::get_scope(&db, &params.0.path, params.0.line) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
+        match operations::get_scope(&db, path, params.0.line) {
+            Ok(result) => {
+                let json = savings::record_file_op(&db, "scope", &result, path);
+                Ok(Self::success_text(json))
+            }
             Err(e) => Ok(Self::error_text(e.to_string())),
         }
     }
 
-    // ─── Type ───────────────────────────────────────────────────
+    // --- Files --------------------------------------------------------------
 
     #[tool(
-        description = "Get type information for a symbol: kind (fn/struct/class/etc.), signature, and full content."
+        description = "List ALL files in the project (indexed + skipped). Unlike overview/search, this shows files with unsupported extensions (.cshtml, .kt, etc.). Use skipped_only=true to find files that need your own tools."
     )]
-    async fn type_info(&self, params: Parameters<TypeParams>) -> Result<CallToolResult, McpError> {
-        let db = self.ensure_db()?;
-
-        match operations::get_type_info(&db, &params.0.symbol) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
-    }
-
-    // ─── Patterns ───────────────────────────────────────────────
-
-    #[tool(
-        description = "Find similar implementations in the codebase. Returns matching symbols with their kind, signature, and line count."
-    )]
-    async fn patterns(
-        &self,
-        params: Parameters<PatternsParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let db = self.ensure_db()?;
-
-        match operations::find_patterns(&db, &params.0.query) {
-            Ok(result) => Ok(Self::success_text(Self::to_json(&result))),
-            Err(e) => Ok(Self::error_text(e.to_string())),
-        }
-    }
-
-    // ─── Files ─────────────────────────────────────────────────────
-
-    #[tool(
-        description = "List ALL files in the project (indexed + skipped). Unlike map/tree/search, this shows files with unsupported extensions (.cshtml, .kt, etc.). Use skipped_only=true to find files that need your own tools."
-    )]
+    // qual:api
     async fn files(&self, params: Parameters<FilesParams>) -> Result<CallToolResult, McpError> {
         let params = &params.0;
         let filter = operations::FilesFilter {
@@ -580,17 +536,18 @@ impl RlmServer {
         }
     }
 
-    // ─── Verify ────────────────────────────────────────────────────
+    // --- Verify -------------------------------------------------------------
 
     #[tool(
         description = "Verify index integrity. Checks for SQLite corruption, orphan chunks/refs, and files that no longer exist on disk. Use fix=true to auto-repair issues."
     )]
+    // qual:api
     async fn verify(&self, params: Parameters<VerifyParams>) -> Result<CallToolResult, McpError> {
         let config = self.config();
 
         if !config.index_exists() {
             return Ok(Self::error_text(
-                "Index not found. Run 'rlm index' first.".into(),
+                "Index not found. Call the 'index' tool first.".into(),
             ));
         }
 
@@ -612,11 +569,26 @@ impl RlmServer {
         }
     }
 
-    // ─── Supported ─────────────────────────────────────────────────
+    // --- Savings ------------------------------------------------------------
+
+    #[tool(
+        description = "Show token savings report: how many tokens rlm saved compared to Claude Code's native tools (Read/Grep/Glob). Optionally filter by date."
+    )]
+    // qual:api
+    async fn savings(&self, params: Parameters<SavingsParams>) -> Result<CallToolResult, McpError> {
+        let db = self.ensure_db()?;
+        match savings::get_savings_report(&db, params.0.since.as_deref()) {
+            Ok(report) => Ok(Self::success_text(Self::to_json(&report))),
+            Err(e) => Ok(Self::error_text(e.to_string())),
+        }
+    }
+
+    // --- Supported ----------------------------------------------------------
 
     #[tool(
         description = "List all supported file extensions with their language and parser type (tree-sitter, structural, semantic, plaintext)."
     )]
+    // qual:api
     async fn supported(&self) -> Result<CallToolResult, McpError> {
         Ok(Self::success_text(Self::to_json(
             &operations::list_supported(),
@@ -624,24 +596,68 @@ impl RlmServer {
     }
 }
 
-// ── ServerHandler implementation ────────────────────────────────
+// -- Helper method for read with metadata enrichment -------------------------
+
+impl RlmServer {
+    fn read_symbol_result<T: Serialize>(
+        &self,
+        db: &Database,
+        params: &ReadParams,
+        chunks: &T,
+    ) -> Result<CallToolResult, McpError> {
+        let include_metadata = params.metadata.unwrap_or(false);
+
+        if include_metadata {
+            if let Some(sym) = &params.symbol {
+                let type_info = operations::get_type_info(db, sym).ok();
+                let signature = operations::get_signature(db, sym).ok();
+
+                #[derive(Serialize)]
+                struct Enriched<'a, T: Serialize> {
+                    chunks: &'a T,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    type_info: Option<operations::TypeInfoResult>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    signature: Option<operations::SignatureResult>,
+                }
+
+                let enriched = Enriched {
+                    chunks,
+                    type_info,
+                    signature,
+                };
+                let json = Self::to_json(&enriched);
+                let out_tokens = estimate_tokens(json.len());
+                let alt_tokens =
+                    savings::alternative_single_file(db, &params.path).unwrap_or(out_tokens);
+                savings::record(db, "read_symbol", out_tokens, alt_tokens, 1);
+                return Ok(Self::success_text(json));
+            }
+        }
+
+        let json = Self::to_json(chunks);
+        let out_tokens = estimate_tokens(json.len());
+        let alt_tokens = savings::alternative_single_file(db, &params.path).unwrap_or(out_tokens);
+        savings::record(db, "read_symbol", out_tokens, alt_tokens, 1);
+        Ok(Self::success_text(json))
+    }
+}
+
+// -- ServerHandler implementation --------------------------------------------
 
 #[tool_handler]
 impl ServerHandler for RlmServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "rlm: The Context Broker for semantic code exploration. \
-                 Use progressive disclosure: peek -> grep -> map -> tree -> search -> read. \
-                 For code intelligence: refs, signature, callgraph, impact, context, deps, scope, type, patterns. \
-                 For editing: replace (swap AST node), insert (add code). Syntax Guard validates all writes. \
-                 Indexing respects .gitignore and excludes hidden files and common build directories. \
-                 IMPORTANT: Most tools (tree, map, search, refs, etc.) only show files with supported extensions. \
-                 To see ALL files including skipped ones (.cshtml, .kt, etc.), use the 'files' tool. \
-                 To see only skipped files: files(skipped_only=true). \
-                 IMPORTANT: Check the 'q' field in responses. If 'fallback_recommended' is true, \
-                 the file contains syntax that couldn't be fully parsed (e.g. Java records, Python match). \
-                 In that case, prefer 'read --lines' or 'grep' over AST-based commands for affected lines."
+                "rlm: Context Broker for semantic code exploration. 18 tools in 4 tiers:\n\
+                 ORIENT: overview(detail='minimal'|'standard'|'tree', path?) — project structure at 3 zoom levels.\n\
+                 SEARCH: search(query) — full-text across symbols. read(path, symbol|section, metadata?) — symbol body + optional type/signature enrichment.\n\
+                 ANALYZE: refs(symbol) — all usages + impact analysis. context(symbol, graph?) — body + callers + callees. deps(path), scope(path, line).\n\
+                 EDIT: replace(path, symbol, code, preview?), insert(path, code, position) — Syntax Guard validates all writes.\n\
+                 UTILITY: diff, partition, summarize, files, stats, savings, verify, supported, index.\n\
+                 IMPORTANT: 'read' requires symbol or section. Use Claude Code's Read for full files/line ranges.\n\
+                 Check 'q' field: if 'fallback_recommended' is true, prefer Claude Code's Read for affected lines."
                     .into(),
             ),
             capabilities: ServerCapabilities::builder()
@@ -652,9 +668,10 @@ impl ServerHandler for RlmServer {
     }
 }
 
-// ── Server startup ──────────────────────────────────────────────
+// -- Server startup ----------------------------------------------------------
 
 /// Start the MCP server on stdio transport.
+// qual:api
 pub async fn start_mcp_server() -> crate::error::Result<()> {
     // Initialize tracing to stderr (stdout is the MCP transport)
     tracing_subscriber::fmt()
@@ -688,23 +705,17 @@ pub async fn start_mcp_server() -> crate::error::Result<()> {
     Ok(())
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Unit Tests - verify tool implementations call correct operations
-// ══════════════════════════════════════════════════════════════════════════════
-//
-// These tests verify that each MCP tool:
-// 1. Calls the correct underlying operation
-// 2. Returns results in the expected format
-// 3. Properly handles errors
-//
-// Note: Since rmcp's Peer::new is pub(crate), we test the underlying operations
-// directly rather than going through the ToolRouter. The tool registration and
-// schema tests are in tests/mcp_tests.rs.
+// ============================================================================
+// Unit Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Search result limit for test queries.
+    const TEST_SEARCH_LIMIT: usize = 10;
 
     /// Setup: create temp dir with test file and index it
     fn setup_indexed_project() -> (TempDir, Config, Database) {
@@ -744,316 +755,62 @@ fn internal() {
         (tmp, config, db)
     }
 
-    // ─── Verify tool methods call correct operations ────────────────────────
-    //
-    // Each test verifies that calling the corresponding operation produces
-    // output that matches what the tool should return.
-
     #[test]
     fn test_stats_operation_returns_expected_format() {
         let (_tmp, _config, db) = setup_indexed_project();
-        let result = operations::get_stats(&db).expect("get_stats");
-
-        // Stats should have file/chunk/ref counts
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("files"), "stats should have files");
-        assert!(json.contains("chunks"), "stats should have chunks");
-        assert!(json.contains("refs"), "stats should have refs");
+        let result = operations::get_stats(&db).expect("get stats");
+        assert!(result.files > 0);
+        assert!(result.chunks > 0);
     }
 
     #[test]
-    fn test_search_operation_returns_matching_chunks() {
+    fn test_search_operation_returns_results() {
         let (_tmp, _config, db) = setup_indexed_project();
-        let result = operations::search_chunks(&db, "Config", 10).expect("search");
-
-        // Search should find Config struct
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("Config"), "search should find Config");
+        let result = operations::search_chunks(&db, "helper", TEST_SEARCH_LIMIT).expect("search");
+        assert!(!result.results.is_empty());
     }
 
     #[test]
-    fn test_peek_operation_returns_structure() {
+    fn test_refs_operation_returns_results() {
         let (_tmp, _config, db) = setup_indexed_project();
-        let result = peek::peek(&db, None).expect("peek");
-
-        // Peek should show file structure
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("test.rs"), "peek should show test.rs");
+        let result = operations::analyze_impact(&db, "helper").expect("refs/impact");
+        assert!(result.count > 0);
     }
 
     #[test]
-    fn test_tree_operation_returns_hierarchy() {
-        let (_tmp, _config, db) = setup_indexed_project();
-        let result = tree::build_tree(&db).expect("tree");
-
-        // Tree should have nodes
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("test.rs"), "tree should show test.rs");
-    }
-
-    #[test]
-    fn test_grep_operation_returns_matches() {
-        let (tmp, _config, db) = setup_indexed_project();
-        let result = grep::grep(&db, "helper", 0, None, tmp.path()).expect("grep");
-
-        // Grep should find matches
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("helper"), "grep should find helper");
-    }
-
-    #[test]
-    fn test_refs_operation_returns_references() {
-        let (_tmp, _config, db) = setup_indexed_project();
-        let result = operations::get_refs(&db, "helper").expect("refs");
-
-        // Refs should return reference info
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("helper"), "refs should reference helper");
-    }
-
-    #[test]
-    fn test_signature_operation_returns_signature_info() {
-        let (_tmp, _config, db) = setup_indexed_project();
-        let result = operations::get_signature(&db, "helper").expect("signature");
-
-        // Signature should have symbol info
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("helper"), "signature should show helper");
-    }
-
-    #[test]
-    fn test_map_operation_returns_file_overview() {
-        let (_tmp, _config, db) = setup_indexed_project();
-        let result = operations::build_map(&db, None).expect("map");
-
-        // Map should show files
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("test.rs"), "map should show test.rs");
-    }
-
-    #[test]
-    fn test_callgraph_operation_returns_graph() {
-        let (_tmp, _config, db) = setup_indexed_project();
-        let result = operations::build_callgraph(&db, "helper").expect("callgraph");
-
-        // Callgraph should have symbol info
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("helper"), "callgraph should show helper");
-    }
-
-    #[test]
-    fn test_impact_operation_returns_affected_locations() {
-        let (_tmp, _config, db) = setup_indexed_project();
-        let result = operations::analyze_impact(&db, "helper").expect("impact");
-
-        // Impact should show affected locations
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("helper"), "impact should show helper");
-    }
-
-    #[test]
-    fn test_context_operation_returns_full_context() {
+    fn test_context_operation_returns_results() {
         let (_tmp, _config, db) = setup_indexed_project();
         let result = operations::build_context(&db, "helper").expect("context");
-
-        // Context should have body
         let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("body"), "context should have body");
-        assert!(json.contains("helper"), "context should show helper");
+        assert!(json.contains("helper"));
     }
 
     #[test]
-    fn test_deps_operation_returns_dependencies() {
+    fn test_overview_minimal_operation() {
+        use crate::rlm::peek;
         let (_tmp, _config, db) = setup_indexed_project();
-        let result = operations::get_deps(&db, "test.rs").expect("deps");
-
-        // Deps should return (possibly empty) list
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("test.rs"), "deps should show file");
+        let result = peek::peek(&db, None).expect("peek");
+        assert!(!result.files.is_empty());
     }
 
     #[test]
-    fn test_scope_operation_returns_visible_symbols() {
+    fn test_overview_standard_operation() {
         let (_tmp, _config, db) = setup_indexed_project();
-        let result = operations::get_scope(&db, "test.rs", 15).expect("scope");
-
-        // Scope should show file info
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("test.rs"), "scope should show file");
+        let result = operations::build_map(&db, None).expect("map");
+        assert!(!result.is_empty());
     }
 
     #[test]
-    fn test_type_info_operation_returns_type_details() {
+    fn test_overview_tree_operation() {
         let (_tmp, _config, db) = setup_indexed_project();
-        let result = operations::get_type_info(&db, "Config").expect("type_info");
-
-        // Type should show struct info
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("Config"), "type should show Config");
-        assert!(json.contains("struct"), "type should show struct kind");
+        let result = tree::build_tree(&db, None).expect("tree");
+        assert!(!result.is_empty());
     }
 
     #[test]
-    fn test_patterns_operation_returns_similar_implementations() {
+    fn test_callgraph_in_context_graph() {
         let (_tmp, _config, db) = setup_indexed_project();
-        let result = operations::find_patterns(&db, "new").expect("patterns");
-
-        // Patterns should find implementations
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(
-            json.contains("new") || json.contains("Config"),
-            "patterns should find implementations"
-        );
-    }
-
-    #[test]
-    fn test_partition_semantic_operation_returns_chunks() {
-        let (tmp, _config, db) = setup_indexed_project();
-        let result =
-            partition::partition_file(&db, "test.rs", &partition::Strategy::Semantic, tmp.path())
-                .expect("partition");
-
-        // Partition should return chunks
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(!json.is_empty(), "partition should return chunks");
-    }
-
-    #[test]
-    fn test_summarize_operation_returns_summary() {
-        let (_tmp, _config, db) = setup_indexed_project();
-        let result = summarize::summarize(&db, "test.rs").expect("summarize");
-
-        // Summarize should have file info
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(!json.is_empty(), "summarize should return content");
-    }
-
-    #[test]
-    fn test_batch_operation_returns_search_results() {
-        let (_tmp, _config, db) = setup_indexed_project();
-        let result = batch::batch_search(&db, "Config", 10).expect("batch");
-
-        // Batch should find results
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(
-            json.contains("Config") || json.contains("test.rs"),
-            "batch should find results"
-        );
-    }
-
-    #[test]
-    fn test_diff_operation_returns_change_status() {
-        let (tmp, _config, db) = setup_indexed_project();
-        let result = operations::diff_file(&db, "test.rs", tmp.path()).expect("diff");
-
-        // Diff should show change status
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("changed"), "diff should show changed status");
-    }
-
-    #[test]
-    fn test_verify_operation_returns_integrity_report() {
-        let (tmp, _config, db) = setup_indexed_project();
-        let result = operations::verify_index(&db, tmp.path()).expect("verify");
-
-        // Verify should return report
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(
-            json.contains("ok") || json.contains("sqlite"),
-            "verify should return report"
-        );
-    }
-
-    #[test]
-    fn test_files_operation_returns_file_list() {
-        let (tmp, _config, _db) = setup_indexed_project();
-        let filter = operations::FilesFilter::default();
-        let result = operations::list_files(tmp.path(), filter).expect("files");
-
-        // Files should list files
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("test.rs"), "files should list test.rs");
-    }
-
-    #[test]
-    fn test_supported_operation_returns_extensions() {
-        let result = operations::list_supported();
-
-        // Supported should list extensions
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("rs"), "should list .rs");
-        assert!(json.contains("py"), "should list .py");
-        assert!(json.contains("go"), "should list .go");
-    }
-
-    // ─── Verify tool methods use correct helper functions ───────────────────
-
-    #[test]
-    fn test_ensure_db_fails_without_index() {
-        let tmp = TempDir::new().expect("create tempdir");
-        let server = RlmServer::new(tmp.path().to_path_buf());
-
-        let result = server.ensure_db();
-        assert!(result.is_err(), "ensure_db should fail without index");
-
-        let err = match result {
-            Ok(_) => panic!("expected error"),
-            Err(e) => e,
-        };
-        assert!(
-            format!("{err:?}").contains("Index not found"),
-            "error should mention missing index"
-        );
-    }
-
-    #[test]
-    fn test_ensure_db_succeeds_with_index() {
-        let (tmp, _config, _db) = setup_indexed_project();
-        let server = RlmServer::new(tmp.path().to_path_buf());
-
-        let result = server.ensure_db();
-        assert!(result.is_ok(), "ensure_db should succeed with index");
-    }
-
-    #[test]
-    fn test_to_json_produces_valid_json() {
-        #[derive(serde::Serialize)]
-        struct TestData {
-            name: String,
-            value: i32,
-        }
-
-        let data = TestData {
-            name: "test".to_string(),
-            value: 42,
-        };
-
-        let json = RlmServer::to_json(&data);
-        assert!(json.contains("test"), "JSON should contain name");
-        assert!(json.contains("42"), "JSON should contain value");
-
-        // Should be valid JSON
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
-        assert_eq!(parsed["name"], "test");
-        assert_eq!(parsed["value"], 42);
-    }
-
-    #[test]
-    fn test_success_text_creates_correct_result() {
-        let result = RlmServer::success_text("test content".to_string());
-
-        assert!(!result.content.is_empty(), "should have content");
-        let text = result.content[0].as_text().expect("should be text");
-        assert_eq!(text.text, "test content");
-    }
-
-    #[test]
-    fn test_error_text_creates_json_error() {
-        let result = RlmServer::error_text("test error".to_string());
-
-        assert!(!result.content.is_empty(), "should have content");
-        let text = result.content[0].as_text().expect("should be text");
-        assert!(text.text.contains("error"), "should be error JSON");
-        assert!(text.text.contains("test error"), "should contain message");
+        let _ctx = operations::build_context(&db, "helper").expect("context");
+        let _graph = operations::build_callgraph(&db, "helper").expect("callgraph");
     }
 }

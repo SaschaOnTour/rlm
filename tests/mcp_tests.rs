@@ -13,9 +13,9 @@ use rlm::config::Config;
 use rlm::indexer;
 use rlm::mcp::server::RlmServer;
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // Test Setup Helpers
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 /// Create a temp directory with a Rust test file and index it.
 fn setup_indexed_project() -> (TempDir, RlmServer) {
@@ -56,27 +56,25 @@ fn internal() {
     (tmp, server)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // 1. Server Creation Tests
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 #[test]
 fn test_server_new() {
     let path = PathBuf::from("/tmp/test");
     let _server = RlmServer::new(path);
-    // Server creation should not panic
 }
 
 #[test]
 fn test_server_new_with_real_path() {
     let tmp = TempDir::new().expect("create tempdir");
     let _server = RlmServer::new(tmp.path().to_path_buf());
-    // Server should be created successfully with a real path
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // 2. ServerHandler Implementation Tests
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 #[test]
 fn test_server_info() {
@@ -98,10 +96,10 @@ fn test_server_info_mentions_key_concepts() {
 
     let instructions = info.instructions.unwrap();
 
-    // Should mention progressive disclosure workflow
+    // Should mention overview (consolidated from peek/map/tree)
     assert!(
-        instructions.contains("peek") || instructions.contains("grep"),
-        "Instructions should mention progressive disclosure tools"
+        instructions.contains("overview"),
+        "Instructions should mention overview tool"
     );
 
     // Should mention editing capabilities
@@ -112,8 +110,8 @@ fn test_server_info_mentions_key_concepts() {
 
     // Should mention Syntax Guard
     assert!(
-        instructions.contains("Syntax Guard") || instructions.contains("validate"),
-        "Instructions should mention validation"
+        instructions.contains("Syntax Guard"),
+        "Instructions should mention Syntax Guard"
     );
 }
 
@@ -126,9 +124,9 @@ fn test_server_capabilities() {
     assert!(info.capabilities.tools.is_some());
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // 3. Tool List Tests
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 #[test]
 fn test_tool_list_count() {
@@ -136,11 +134,12 @@ fn test_tool_list_count() {
     let server = RlmServer::new(path);
     let tools = server.get_tool_router().list_all();
 
-    // Should have all expected tools (20+)
-    assert!(
-        tools.len() >= 20,
-        "Expected at least 20 tools, got {}",
-        tools.len()
+    assert_eq!(
+        tools.len(),
+        18,
+        "Expected exactly 18 tools, got {}. Tools: {:?}",
+        tools.len(),
+        tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>()
     );
 }
 
@@ -152,26 +151,14 @@ fn test_tool_list_core_tools() {
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
 
-    // Core indexing/search tools
     assert!(tool_names.contains(&"index"), "Should have index tool");
     assert!(tool_names.contains(&"search"), "Should have search tool");
     assert!(tool_names.contains(&"read"), "Should have read tool");
     assert!(tool_names.contains(&"stats"), "Should have stats tool");
-}
-
-#[test]
-fn test_tool_list_rlm_tools() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path);
-    let tools = server.get_tool_router().list_all();
-
-    let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-
-    // RLM-specific progressive disclosure tools
-    assert!(tool_names.contains(&"peek"), "Should have peek tool");
-    assert!(tool_names.contains(&"grep"), "Should have grep tool");
-    assert!(tool_names.contains(&"tree"), "Should have tree tool");
-    assert!(tool_names.contains(&"map"), "Should have map tool");
+    assert!(
+        tool_names.contains(&"overview"),
+        "Should have overview tool"
+    );
 }
 
 #[test]
@@ -182,17 +169,7 @@ fn test_tool_list_code_intelligence_tools() {
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
 
-    // Code intelligence tools
     assert!(tool_names.contains(&"refs"), "Should have refs tool");
-    assert!(
-        tool_names.contains(&"signature"),
-        "Should have signature tool"
-    );
-    assert!(
-        tool_names.contains(&"callgraph"),
-        "Should have callgraph tool"
-    );
-    assert!(tool_names.contains(&"impact"), "Should have impact tool");
     assert!(tool_names.contains(&"context"), "Should have context tool");
     assert!(tool_names.contains(&"deps"), "Should have deps tool");
     assert!(tool_names.contains(&"scope"), "Should have scope tool");
@@ -206,7 +183,6 @@ fn test_tool_list_edit_tools() {
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
 
-    // Edit tools (Surgeon)
     assert!(tool_names.contains(&"replace"), "Should have replace tool");
     assert!(tool_names.contains(&"insert"), "Should have insert tool");
 }
@@ -219,7 +195,6 @@ fn test_tool_list_utility_tools() {
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
 
-    // Utility tools
     assert!(tool_names.contains(&"verify"), "Should have verify tool");
     assert!(tool_names.contains(&"files"), "Should have files tool");
     assert!(
@@ -227,11 +202,57 @@ fn test_tool_list_utility_tools() {
         "Should have supported tool"
     );
     assert!(tool_names.contains(&"diff"), "Should have diff tool");
+    assert!(tool_names.contains(&"savings"), "Should have savings tool");
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+#[test]
+fn test_removed_tools_not_present() {
+    let path = PathBuf::from("/tmp/test");
+    let server = RlmServer::new(path);
+    let tools = server.get_tool_router().list_all();
+
+    let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+
+    // These tools were consolidated/removed in Phase 0
+    assert!(!tool_names.contains(&"grep"), "grep should be removed");
+    assert!(!tool_names.contains(&"batch"), "batch should be removed");
+    assert!(
+        !tool_names.contains(&"patterns"),
+        "patterns should be removed"
+    );
+    assert!(
+        !tool_names.contains(&"peek"),
+        "peek should be removed (now overview)"
+    );
+    assert!(
+        !tool_names.contains(&"map"),
+        "map should be removed (now overview)"
+    );
+    assert!(
+        !tool_names.contains(&"tree"),
+        "tree should be removed (now overview)"
+    );
+    assert!(
+        !tool_names.contains(&"type_info"),
+        "type_info should be removed (now read+metadata)"
+    );
+    assert!(
+        !tool_names.contains(&"signature"),
+        "signature should be removed (now read+metadata)"
+    );
+    assert!(
+        !tool_names.contains(&"callgraph"),
+        "callgraph should be removed (now context+graph)"
+    );
+    assert!(
+        !tool_names.contains(&"impact"),
+        "impact should be removed (now refs)"
+    );
+}
+
+// =============================================================================
 // 4. Tool Description Tests
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 #[test]
 fn test_tool_descriptions_exist() {
@@ -260,10 +281,8 @@ fn test_tool_descriptions_informative() {
     let server = RlmServer::new(path);
     let tools = server.get_tool_router().list_all();
 
-    // Check that key tools have meaningful descriptions
     for tool in &tools {
         let desc = tool.description.as_ref().unwrap();
-        // Descriptions should be at least 20 characters
         assert!(
             desc.len() >= 20,
             "Tool '{}' description too short: '{}'",
@@ -274,24 +293,24 @@ fn test_tool_descriptions_informative() {
 }
 
 #[test]
-fn test_peek_tool_description_mentions_tokens() {
+fn test_overview_tool_description() {
     let path = PathBuf::from("/tmp/test");
     let server = RlmServer::new(path);
     let tools = server.get_tool_router().list_all();
 
-    let peek_tool = tools.iter().find(|t| t.name == "peek").unwrap();
-    let desc = peek_tool.description.as_ref().unwrap();
+    let overview_tool = tools.iter().find(|t| t.name == "overview").unwrap();
+    let desc = overview_tool.description.as_ref().unwrap();
 
     assert!(
-        desc.contains("token") || desc.contains("NO content"),
-        "Peek description should mention token efficiency or no content: '{}'",
+        desc.contains("minimal") && desc.contains("standard") && desc.contains("tree"),
+        "Overview description should mention all three detail levels: '{}'",
         desc
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // 5. Tool Input Schema Tests
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 #[test]
 fn test_tool_schemas_defined() {
@@ -300,8 +319,6 @@ fn test_tool_schemas_defined() {
     let tools = server.get_tool_router().list_all();
 
     for tool in &tools {
-        // All tools should have input schema (non-empty or empty for no-param tools)
-        // Just checking that it serializes properly
         let schema_str = serde_json::to_string(&tool.input_schema).unwrap();
         assert!(
             !schema_str.is_empty(),
@@ -318,8 +335,6 @@ fn test_search_tool_requires_query() {
     let tools = server.get_tool_router().list_all();
 
     let search_tool = tools.iter().find(|t| t.name == "search").unwrap();
-
-    // Schema should be an object with properties
     let schema_str = serde_json::to_string(&search_tool.input_schema).unwrap();
     assert!(
         schema_str.contains("query"),
@@ -334,24 +349,58 @@ fn test_read_tool_requires_path() {
     let tools = server.get_tool_router().list_all();
 
     let read_tool = tools.iter().find(|t| t.name == "read").unwrap();
-
     let schema_str = serde_json::to_string(&read_tool.input_schema).unwrap();
     assert!(
         schema_str.contains("path"),
         "Read tool should have 'path' parameter"
     );
+    assert!(
+        schema_str.contains("metadata"),
+        "Read tool should have 'metadata' parameter"
+    );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+#[test]
+fn test_overview_tool_has_detail_param() {
+    let path = PathBuf::from("/tmp/test");
+    let server = RlmServer::new(path);
+    let tools = server.get_tool_router().list_all();
+
+    let overview_tool = tools.iter().find(|t| t.name == "overview").unwrap();
+    let schema_str = serde_json::to_string(&overview_tool.input_schema).unwrap();
+    assert!(
+        schema_str.contains("detail"),
+        "Overview tool should have 'detail' parameter"
+    );
+    assert!(
+        schema_str.contains("path"),
+        "Overview tool should have 'path' parameter"
+    );
+}
+
+#[test]
+fn test_context_tool_has_graph_param() {
+    let path = PathBuf::from("/tmp/test");
+    let server = RlmServer::new(path);
+    let tools = server.get_tool_router().list_all();
+
+    let context_tool = tools.iter().find(|t| t.name == "context").unwrap();
+    let schema_str = serde_json::to_string(&context_tool.input_schema).unwrap();
+    assert!(
+        schema_str.contains("graph"),
+        "Context tool should have 'graph' parameter"
+    );
+}
+
+// =============================================================================
 // 6. Server With Indexed Project Tests
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 #[test]
 fn test_server_with_indexed_project() {
     let (_tmp, server) = setup_indexed_project();
     let info = server.get_info();
 
-    // Server should work the same with or without index
     assert!(info.instructions.is_some());
     assert!(info.capabilities.tools.is_some());
 }
@@ -361,13 +410,12 @@ fn test_tool_list_unchanged_with_index() {
     let (_tmp, server) = setup_indexed_project();
     let tools = server.get_tool_router().list_all();
 
-    // Tool list should be the same regardless of index state
-    assert!(tools.len() >= 20, "Tool count should be same with index");
+    assert_eq!(tools.len(), 18, "Tool count should be 18 with index");
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // 7. Additional Coverage Tests
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 #[test]
 fn test_all_tools_have_valid_names() {
@@ -376,7 +424,6 @@ fn test_all_tools_have_valid_names() {
     let tools = server.get_tool_router().list_all();
 
     for tool in &tools {
-        // Names should be snake_case identifiers
         assert!(!tool.name.is_empty(), "Tool name should not be empty");
         assert!(
             tool.name
@@ -395,7 +442,6 @@ fn test_partition_tool_has_strategy_param() {
     let tools = server.get_tool_router().list_all();
 
     let partition_tool = tools.iter().find(|t| t.name == "partition").unwrap();
-
     let schema_str = serde_json::to_string(&partition_tool.input_schema).unwrap();
     assert!(
         schema_str.contains("strategy"),
@@ -414,20 +460,10 @@ fn test_replace_tool_has_required_params() {
     let tools = server.get_tool_router().list_all();
 
     let replace_tool = tools.iter().find(|t| t.name == "replace").unwrap();
-
     let schema_str = serde_json::to_string(&replace_tool.input_schema).unwrap();
-    assert!(
-        schema_str.contains("path"),
-        "Replace tool should have 'path' parameter"
-    );
-    assert!(
-        schema_str.contains("symbol"),
-        "Replace tool should have 'symbol' parameter"
-    );
-    assert!(
-        schema_str.contains("code"),
-        "Replace tool should have 'code' parameter"
-    );
+    assert!(schema_str.contains("path"));
+    assert!(schema_str.contains("symbol"));
+    assert!(schema_str.contains("code"));
 }
 
 #[test]
@@ -437,10 +473,52 @@ fn test_insert_tool_has_position_param() {
     let tools = server.get_tool_router().list_all();
 
     let insert_tool = tools.iter().find(|t| t.name == "insert").unwrap();
-
     let schema_str = serde_json::to_string(&insert_tool.input_schema).unwrap();
     assert!(
         schema_str.contains("position"),
         "Insert tool should have 'position' parameter"
+    );
+}
+
+// =============================================================================
+// 8. Savings Tool Tests
+// =============================================================================
+
+#[test]
+fn test_savings_tool_exists() {
+    let path = PathBuf::from("/tmp/test");
+    let server = RlmServer::new(path);
+    let tools = server.get_tool_router().list_all();
+
+    let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+    assert!(tool_names.contains(&"savings"), "Should have savings tool");
+}
+
+#[test]
+fn test_savings_tool_has_since_param() {
+    let path = PathBuf::from("/tmp/test");
+    let server = RlmServer::new(path);
+    let tools = server.get_tool_router().list_all();
+
+    let savings_tool = tools.iter().find(|t| t.name == "savings").unwrap();
+    let schema_str = serde_json::to_string(&savings_tool.input_schema).unwrap();
+    assert!(
+        schema_str.contains("since"),
+        "Savings tool should have 'since' parameter"
+    );
+}
+
+#[test]
+fn test_savings_tool_description() {
+    let path = PathBuf::from("/tmp/test");
+    let server = RlmServer::new(path);
+    let tools = server.get_tool_router().list_all();
+
+    let savings_tool = tools.iter().find(|t| t.name == "savings").unwrap();
+    let desc = savings_tool.description.as_ref().unwrap();
+    assert!(
+        desc.contains("savings") || desc.contains("token"),
+        "Savings description should mention savings or tokens: '{}'",
+        desc
     );
 }

@@ -70,6 +70,22 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
     use crate::models::file::FileRecord;
 
+    const TEST_FILE_BYTES: u64 = 100;
+    const TEST_SMALL_FILE_BYTES: u64 = 50;
+    const TEST_START_LINE: u32 = 1;
+    const TEST_END_LINE: u32 = 5;
+    const TEST_START_BYTE: u32 = 0;
+    const TEST_END_BYTE: u32 = 50;
+    const TEST_END_BYTE_LARGE: u32 = 80;
+    const TARGET_START_LINE: u32 = 10;
+    const TARGET_END_LINE: u32 = 15;
+    const TARGET_START_BYTE: u32 = 100;
+    const TARGET_END_BYTE: u32 = 150;
+    const TEST_REF_LINE_A: u32 = 3;
+    const TEST_REF_LINE_B: u32 = 12;
+    const TEST_REF_COL: u32 = 5;
+    const TYPE_REF_COL: u32 = 15;
+
     fn setup_test_db() -> Database {
         Database::open_in_memory().unwrap()
     }
@@ -92,17 +108,17 @@ mod tests {
             "src/lib.rs".to_string(),
             "abc123".to_string(),
             "rust".to_string(),
-            100,
+            TEST_FILE_BYTES,
         );
         let file_id = db.upsert_file(&file).unwrap();
 
         let caller = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Function,
             ident: "caller_fn".to_string(),
             parent: None,
@@ -118,10 +134,10 @@ mod tests {
         let target = Chunk {
             id: 0,
             file_id,
-            start_line: 10,
-            end_line: 15,
-            start_byte: 100,
-            end_byte: 150,
+            start_line: TARGET_START_LINE,
+            end_line: TARGET_END_LINE,
+            start_byte: TARGET_START_BYTE,
+            end_byte: TARGET_END_BYTE,
             kind: ChunkKind::Function,
             ident: "target_fn".to_string(),
             parent: None,
@@ -139,8 +155,8 @@ mod tests {
             chunk_id: caller_id,
             target_ident: "target_fn".to_string(),
             ref_kind: RefKind::Call,
-            line: 3,
-            col: 5,
+            line: TEST_REF_LINE_A,
+            col: TEST_REF_COL,
         };
         db.insert_ref(&ref_to_target).unwrap();
 
@@ -149,8 +165,8 @@ mod tests {
             chunk_id: target_id,
             target_ident: "helper".to_string(),
             ref_kind: RefKind::Call,
-            line: 12,
-            col: 5,
+            line: TEST_REF_LINE_B,
+            col: TEST_REF_COL,
         };
         db.insert_ref(&ref_to_helper).unwrap();
 
@@ -169,17 +185,17 @@ mod tests {
             "src/main.rs".to_string(),
             "def456".to_string(),
             "rust".to_string(),
-            50,
+            TEST_SMALL_FILE_BYTES,
         );
         let file_id = db.upsert_file(&file).unwrap();
 
         let main_fn = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Function,
             ident: "main".to_string(),
             parent: None,
@@ -198,7 +214,7 @@ mod tests {
             target_ident: "println".to_string(),
             ref_kind: RefKind::Call,
             line: 2,
-            col: 5,
+            col: TEST_REF_COL,
         };
         db.insert_ref(&ref_to_println).unwrap();
 
@@ -217,17 +233,17 @@ mod tests {
             "src/types.rs".to_string(),
             "ghi789".to_string(),
             "rust".to_string(),
-            100,
+            TEST_FILE_BYTES,
         );
         let file_id = db.upsert_file(&file).unwrap();
 
         let func = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 80,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE_LARGE,
             kind: ChunkKind::Function,
             ident: "process".to_string(),
             parent: None,
@@ -246,7 +262,7 @@ mod tests {
             target_ident: "helper".to_string(),
             ref_kind: RefKind::Call,
             line: 2,
-            col: 5,
+            col: TEST_REF_COL,
         };
         db.insert_ref(&call_ref).unwrap();
 
@@ -256,7 +272,7 @@ mod tests {
             target_ident: "MyType".to_string(),
             ref_kind: RefKind::TypeUse,
             line: 1,
-            col: 15,
+            col: TYPE_REF_COL,
         };
         db.insert_ref(&type_ref).unwrap();
 

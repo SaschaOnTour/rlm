@@ -44,16 +44,19 @@ pub enum ParseQuality {
 }
 
 impl ParseQuality {
-    /// Returns true if the parse was complete without errors.
-    #[must_use]
-    pub fn is_complete(&self) -> bool {
-        matches!(self, Self::Complete)
-    }
-
     /// Returns true if fallback to standard tools is recommended.
     #[must_use]
     pub fn fallback_recommended(&self) -> bool {
         !matches!(self, Self::Complete)
+    }
+}
+
+#[cfg(test)]
+impl ParseQuality {
+    /// Returns true if the parse was complete without errors.
+    #[must_use]
+    fn is_complete(&self) -> bool {
+        matches!(self, Self::Complete)
     }
 }
 

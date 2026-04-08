@@ -79,6 +79,11 @@ mod tests {
     use rusqlite::params;
     use tempfile::TempDir;
 
+    const TEST_FILE_BYTES: u64 = 100;
+    const TEST_START_BYTE: u32 = 0;
+    const TEST_END_BYTE: u32 = 12;
+    const TEST_END_BYTE_SMALL: u32 = 10;
+
     fn setup_test_db_and_dir() -> (Database, TempDir) {
         let db = Database::open_in_memory().unwrap();
         let tmp = TempDir::new().unwrap();
@@ -93,7 +98,7 @@ mod tests {
         let file_path = tmp.path().join("test.rs");
         std::fs::write(&file_path, "fn main() {}").unwrap();
 
-        let file = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
@@ -101,8 +106,8 @@ mod tests {
             file_id,
             start_line: 1,
             end_line: 1,
-            start_byte: 0,
-            end_byte: 12,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Function,
             ident: "main".into(),
             parent: None,
@@ -128,7 +133,7 @@ mod tests {
         let (db, tmp) = setup_test_db_and_dir();
 
         // Index a file but don't create it on disk
-        let file = FileRecord::new("missing.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new("missing.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
         db.upsert_file(&file).unwrap();
 
         let report = verify_index(&db, tmp.path()).unwrap();
@@ -144,7 +149,7 @@ mod tests {
         let (db, tmp) = setup_test_db_and_dir();
 
         // Index a file that doesn't exist on disk
-        let file = FileRecord::new("missing.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new("missing.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
         db.upsert_file(&file).unwrap();
 
         let report = verify_index(&db, tmp.path()).unwrap();
@@ -164,10 +169,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
 
         // Create two files in the index
-        let file1 = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), 100);
+        let file1 = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
         let _file1_id = db.upsert_file(&file1).unwrap();
 
-        let file2 = FileRecord::new("other.rs".into(), "hash2".into(), "rust".into(), 100);
+        let file2 = FileRecord::new("other.rs".into(), "hash2".into(), "rust".into(), TEST_FILE_BYTES);
         let file2_id = db.upsert_file(&file2).unwrap();
 
         // Create a chunk for file2
@@ -176,8 +181,8 @@ mod tests {
             file_id: file2_id,
             start_line: 1,
             end_line: 1,
-            start_byte: 0,
-            end_byte: 10,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE_SMALL,
             kind: ChunkKind::Function,
             ident: "orphan_soon".into(),
             parent: None,
@@ -220,7 +225,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
 
         // Create a file and chunk
-        let file = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new("test.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
@@ -228,8 +233,8 @@ mod tests {
             file_id,
             start_line: 1,
             end_line: 1,
-            start_byte: 0,
-            end_byte: 10,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE_SMALL,
             kind: ChunkKind::Function,
             ident: "test".into(),
             parent: None,

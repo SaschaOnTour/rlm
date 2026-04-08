@@ -88,6 +88,13 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind};
     use crate::models::file::FileRecord;
 
+    const TEST_FILE_SIZE: u64 = 1024;
+    const TEST_FILE_BYTES_SMALL: u64 = 100;
+    const TEST_START_LINE: u32 = 1;
+    const TEST_END_LINE: u32 = 5;
+    const TEST_START_BYTE: u32 = 0;
+    const TEST_END_BYTE: u32 = 50;
+
     fn test_db() -> Database {
         Database::open_in_memory().unwrap()
     }
@@ -96,16 +103,16 @@ mod tests {
     fn get_stats_basic() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), 1024);
+        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_SIZE);
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Function,
             ident: "test".into(),
             parent: None,
@@ -121,7 +128,7 @@ mod tests {
         let result = get_stats(&db).unwrap();
         assert_eq!(result.files, 1);
         assert_eq!(result.chunks, 1);
-        assert_eq!(result.total_bytes, 1024);
+        assert_eq!(result.total_bytes, TEST_FILE_SIZE);
     }
 
     #[test]
@@ -135,7 +142,7 @@ mod tests {
     fn get_quality_info_with_issues() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES_SMALL);
         let file_id = db.upsert_file(&file).unwrap();
         db.set_file_parse_quality(file_id, "partial").unwrap();
 

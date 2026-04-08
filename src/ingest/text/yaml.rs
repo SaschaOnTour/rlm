@@ -12,6 +12,15 @@ use crate::error::Result;
 use crate::ingest::text::TextParser;
 use crate::models::chunk::{Chunk, ChunkKind};
 
+/// Maximum nesting depth for recursive YAML chunk extraction.
+const MAX_NESTING_DEPTH: usize = 3;
+/// Maximum string length before truncation in YAML value previews.
+const MAX_PREVIEW_LENGTH: usize = 100;
+/// Maximum number of sequence items shown in a YAML value preview.
+const ARRAY_PREVIEW_ITEMS: usize = 5;
+/// Maximum number of mapping keys shown in a YAML value preview.
+const OBJECT_PREVIEW_KEYS: usize = 5;
+
 pub struct YamlParser;
 
 impl YamlParser {
@@ -86,7 +95,7 @@ fn extract_yaml_chunks(
     depth: usize,
 ) {
     // Limit depth to avoid excessive chunking
-    if depth > 3 {
+    if depth > MAX_NESTING_DEPTH {
         return;
     }
 
@@ -265,14 +274,14 @@ fn yaml_value_to_string(value: &Value, indent: usize) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => n.to_string(),
         Value::String(s) => {
-            if s.len() > 100 {
-                format!("\"{}...\"", &s[..97])
+            if s.len() > MAX_PREVIEW_LENGTH {
+                format!("\"{}...\"", &s[..MAX_PREVIEW_LENGTH - 3])
             } else {
                 format!("\"{s}\"")
             }
         }
         Value::Sequence(seq) => {
-            if seq.len() > 5 {
+            if seq.len() > ARRAY_PREVIEW_ITEMS {
                 format!("[...{} items]", seq.len())
             } else {
                 let items: Vec<String> = seq
@@ -283,7 +292,7 @@ fn yaml_value_to_string(value: &Value, indent: usize) -> String {
             }
         }
         Value::Mapping(map) => {
-            if map.len() > 5 {
+            if map.len() > OBJECT_PREVIEW_KEYS {
                 format!("{{...{} keys}}", map.len())
             } else {
                 let items: Vec<String> = map

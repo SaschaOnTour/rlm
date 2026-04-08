@@ -218,6 +218,9 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    /// Non-UTF-8 byte sequence used to test binary file rejection.
+    const NON_UTF8_BYTES: [u8; 4] = [0xFF, 0xFE, 0x00, 0x01];
+
     #[test]
     fn index_rust_project() {
         let tmp = TempDir::new().unwrap();
@@ -312,7 +315,7 @@ mod tests {
         fs::write(src_dir.join("main.rs"), "fn main() {}").unwrap();
 
         // Create a binary file (non-UTF8)
-        fs::write(src_dir.join("binary.rs"), [0xFF, 0xFE, 0x00, 0x01]).unwrap();
+        fs::write(src_dir.join("binary.rs"), NON_UTF8_BYTES).unwrap();
 
         let config = Config::new(tmp.path());
         let result = run_index(&config).unwrap();

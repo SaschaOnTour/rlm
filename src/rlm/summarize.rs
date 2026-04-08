@@ -116,10 +116,17 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind};
     use crate::models::file::FileRecord;
 
+    /// File size in bytes for the test file record.
+    const TEST_FILE_SIZE: u64 = 500;
+    /// End line of each test chunk (symbol spans 10 lines).
+    const CHUNK_END_LINE: u32 = 10;
+    /// End byte offset of each test chunk.
+    const CHUNK_END_BYTE: u32 = 100;
+
     #[test]
     fn summarize_file() {
         let db = Database::open_in_memory().unwrap();
-        let f = FileRecord::new("src/lib.rs".into(), "h".into(), "rust".into(), 500);
+        let f = FileRecord::new("src/lib.rs".into(), "h".into(), "rust".into(), TEST_FILE_SIZE);
         let fid = db.upsert_file(&f).unwrap();
 
         for (name, kind, vis) in [
@@ -131,9 +138,9 @@ mod tests {
                 id: 0,
                 file_id: fid,
                 start_line: 1,
-                end_line: 10,
+                end_line: CHUNK_END_LINE,
                 start_byte: 0,
-                end_byte: 100,
+                end_byte: CHUNK_END_BYTE,
                 kind,
                 ident: name.into(),
                 parent: None,

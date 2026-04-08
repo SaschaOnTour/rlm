@@ -399,26 +399,6 @@ impl<C: LanguageConfig> CodeParser for BaseParser<C> {
 // Helper functions for common parsing patterns
 // =============================================================================
 
-/// Extract signature up to the opening brace.
-#[must_use]
-pub fn extract_signature_to_brace(content: &str) -> Option<String> {
-    content
-        .find('{')
-        .map(|pos| content[..pos].trim().to_string())
-}
-
-/// Extract signature up to the opening brace or semicolon.
-#[must_use]
-pub fn extract_signature_to_brace_or_semi(content: &str) -> Option<String> {
-    if let Some(brace_pos) = content.find('{') {
-        Some(content[..brace_pos].trim().to_string())
-    } else {
-        content
-            .find(';')
-            .map(|semi_pos| content[..semi_pos].trim().to_string())
-    }
-}
-
 /// Extract type signature (first line or up to brace).
 #[must_use]
 pub fn extract_type_signature(content: &str) -> Option<String> {
@@ -440,112 +420,22 @@ pub fn extract_type_signature(content: &str) -> Option<String> {
     }
 }
 
+#[cfg(test)]
+/// Extract signature up to the opening brace.
+#[must_use]
+pub fn extract_signature_to_brace(content: &str) -> Option<String> {
+    content
+        .find('{')
+        .map(|pos| content[..pos].trim().to_string())
+}
+
+#[cfg(test)]
 /// Extract Python-style signature (up to colon).
 #[must_use]
 pub fn extract_signature_to_colon(content: &str) -> Option<String> {
     content
         .find(':')
         .map(|pos| content[..pos].trim().to_string())
-}
-
-/// Find parent by walking up the tree looking for specific node kinds.
-#[must_use]
-pub fn find_parent_by_kinds(
-    node: tree_sitter::Node,
-    source: &[u8],
-    parent_kinds: &[&str],
-    identifier_kind: &str,
-) -> Option<String> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if parent_kinds.contains(&parent.kind()) {
-            for i in 0..parent.child_count() {
-                if let Some(child) = parent.child(i as u32) {
-                    if child.kind() == identifier_kind {
-                        return child
-                            .utf8_text(source)
-                            .ok()
-                            .map(std::string::ToString::to_string);
-                    }
-                }
-            }
-        }
-        current = parent.parent();
-    }
-    None
-}
-
-/// Collect doc comments by walking previous siblings.
-#[must_use]
-pub fn collect_doc_comments_by_prefix(
-    node: tree_sitter::Node,
-    source: &[u8],
-    comment_kind: &str,
-    prefixes: &[&str],
-    skip_kind: Option<&str>,
-) -> Option<String> {
-    let mut lines = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        // Skip specific node kinds (like attribute lists)
-        if let Some(skip) = skip_kind {
-            if sib.kind() == skip {
-                current = sib.prev_sibling();
-                continue;
-            }
-        }
-        if sib.kind() == comment_kind {
-            let text = sib.utf8_text(source).unwrap_or("");
-            if prefixes.iter().any(|p| text.starts_with(p)) {
-                lines.push(text.to_string());
-                current = sib.prev_sibling();
-                continue;
-            }
-        }
-        break;
-    }
-    lines.reverse();
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
-    }
-}
-
-/// Collect attributes/annotations by walking previous siblings.
-#[must_use]
-pub fn collect_attributes_by_kind(
-    node: tree_sitter::Node,
-    source: &[u8],
-    attr_kind: &str,
-    skip_comment_prefixes: Option<&[&str]>,
-) -> Option<String> {
-    let mut attrs = Vec::new();
-    let mut current = node.prev_sibling();
-    while let Some(sib) = current {
-        if sib.kind() == attr_kind {
-            attrs.push(sib.utf8_text(source).unwrap_or("").to_string());
-            current = sib.prev_sibling();
-            continue;
-        }
-        // Skip doc comments when collecting attributes
-        if sib.kind() == "line_comment" || sib.kind() == "comment" {
-            if let Some(prefixes) = skip_comment_prefixes {
-                let text = sib.utf8_text(source).unwrap_or("");
-                if prefixes.iter().any(|p| text.starts_with(p)) {
-                    current = sib.prev_sibling();
-                    continue;
-                }
-            }
-        }
-        break;
-    }
-    attrs.reverse();
-    if attrs.is_empty() {
-        None
-    } else {
-        Some(attrs.join("\n"))
-    }
 }
 
 #[cfg(test)]

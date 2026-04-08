@@ -569,6 +569,11 @@ fn collect_rust_attributes(node: tree_sitter::Node, source: &[u8]) -> Option<Str
 mod tests {
     use super::*;
 
+    /// Number of parameters to generate for the long-signature stress test.
+    const LONG_SIGNATURE_PARAM_COUNT: usize = 50;
+    /// Length of the repeated string for the very-long-line stress test.
+    const VERY_LONG_LINE_LENGTH: usize = 10_000;
+
     fn parser() -> RustParser {
         RustParser::new()
     }
@@ -1291,7 +1296,7 @@ mod outer {
     /// Very long function signature.
     #[test]
     fn very_long_signature() {
-        let long_params = (0..50)
+        let long_params = (0..LONG_SIGNATURE_PARAM_COUNT)
             .map(|i| format!("param{}: Type{}", i, i))
             .collect::<Vec<_>>()
             .join(", ");
@@ -1343,7 +1348,7 @@ mod outer {
     /// Very long line (should not crash).
     #[test]
     fn very_long_line() {
-        let long_string = "x".repeat(10_000);
+        let long_string = "x".repeat(VERY_LONG_LINE_LENGTH);
         let source = format!("const LONG: &str = \"{}\";", long_string);
 
         let chunks = parser().parse_chunks(&source, 1).unwrap();

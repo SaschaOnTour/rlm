@@ -95,18 +95,25 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind};
     use crate::models::file::FileRecord;
 
+    /// File size in bytes for test file records.
+    const TEST_FILE_SIZE: u64 = 100;
+    /// End line of the test chunk.
+    const CHUNK_END_LINE: u32 = 5;
+    /// End byte offset of the test chunk.
+    const CHUNK_END_BYTE: u32 = 50;
+
     #[test]
     fn peek_returns_structure_no_content() {
         let db = Database::open_in_memory().unwrap();
-        let f = FileRecord::new("src/main.rs".into(), "h".into(), "rust".into(), 100);
+        let f = FileRecord::new("src/main.rs".into(), "h".into(), "rust".into(), TEST_FILE_SIZE);
         let fid = db.upsert_file(&f).unwrap();
         let c = Chunk {
             id: 0,
             file_id: fid,
             start_line: 1,
-            end_line: 5,
+            end_line: CHUNK_END_LINE,
             start_byte: 0,
-            end_byte: 50,
+            end_byte: CHUNK_END_BYTE,
             kind: ChunkKind::Function,
             ident: "main".into(),
             parent: None,
@@ -136,14 +143,14 @@ mod tests {
             "src/a.rs".into(),
             "h1".into(),
             "rust".into(),
-            50,
+            TEST_FILE_SIZE,
         ))
         .unwrap();
         db.upsert_file(&FileRecord::new(
             "lib/b.rs".into(),
             "h2".into(),
             "rust".into(),
-            50,
+            TEST_FILE_SIZE,
         ))
         .unwrap();
 

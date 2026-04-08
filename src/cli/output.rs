@@ -43,34 +43,14 @@ pub struct QualityWarning {
 }
 
 impl QualityWarning {
-    /// Create from a `ParseQuality`.
-    #[must_use]
-    pub fn from_quality(quality: &crate::ingest::code::ParseQuality) -> Option<Self> {
-        match quality {
-            crate::ingest::code::ParseQuality::Complete => None,
-            crate::ingest::code::ParseQuality::Partial { error_count, error_lines } => {
-                Some(Self {
-                    fallback_recommended: true,
-                    error_lines: error_lines.clone(),
-                    message: format!(
-                        "File has {error_count} parse error(s). Some syntax may use unsupported language features. Consider using read/grep for affected lines."
-                    ),
-                })
-            }
-            crate::ingest::code::ParseQuality::Failed { reason } => {
-                Some(Self {
-                    fallback_recommended: true,
-                    error_lines: vec![],
-                    message: format!("Parse failed: {reason}"),
-                })
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Arbitrary test value used as a representative integer payload.
+    const TEST_VALUE: i32 = 42;
 
     #[derive(Serialize)]
     struct TestData {
@@ -82,7 +62,7 @@ mod tests {
     fn format_json_minified() {
         let data = TestData {
             name: "test".into(),
-            value: 42,
+            value: TEST_VALUE,
         };
         let json = format_json(&data);
         assert!(!json.contains('\n'));
@@ -93,7 +73,7 @@ mod tests {
     fn format_with_tokens_includes_estimates() {
         let data = TestData {
             name: "test".into(),
-            value: 42,
+            value: TEST_VALUE,
         };
         let json = format_with_tokens(data);
         assert!(json.contains("\"t\":{"));

@@ -9,6 +9,9 @@ use crate::error::Result;
 use crate::models::token_estimate::{estimate_tokens_str, TokenEstimate};
 use crate::search::fts;
 
+/// Approximate number of characters per token for output size estimation.
+const MIN_FTS_TOKEN_LENGTH: u64 = 4;
+
 /// Result of a full-text search.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
@@ -58,7 +61,7 @@ pub fn search_chunks(db: &Database, query: &str, limit: usize) -> Result<SearchR
 
     Ok(SearchResult {
         results: hits,
-        tokens: TokenEstimate::new(0, estimate_tokens_str(query) + total_chars as u64 / 4),
+        tokens: TokenEstimate::new(0, estimate_tokens_str(query) + total_chars as u64 / MIN_FTS_TOKEN_LENGTH),
     })
 }
 
@@ -68,6 +71,13 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind};
     use crate::models::file::FileRecord;
 
+    const TEST_FILE_BYTES: u64 = 100;
+    const TEST_START_LINE: u32 = 1;
+    const TEST_END_LINE: u32 = 5;
+    const TEST_START_BYTE: u32 = 0;
+    const TEST_END_BYTE: u32 = 50;
+    const TEST_SEARCH_LIMIT: usize = 10;
+
     fn test_db() -> Database {
         Database::open_in_memory().unwrap()
     }
@@ -76,16 +86,16 @@ mod tests {
     fn search_basic() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Function,
             ident: "search_test".into(),
             parent: None,
@@ -98,7 +108,7 @@ mod tests {
         };
         db.insert_chunk(&chunk).unwrap();
 
-        let result = search_chunks(&db, "search_test", 10).unwrap();
+        let result = search_chunks(&db, "search_test", TEST_SEARCH_LIMIT).unwrap();
         assert_eq!(result.results.len(), 1);
         assert_eq!(result.results[0].name, "search_test");
         assert_eq!(result.results[0].kind, "fn");
@@ -107,7 +117,7 @@ mod tests {
     #[test]
     fn search_no_results() {
         let db = test_db();
-        let result = search_chunks(&db, "nonexistent_xyz_123", 10).unwrap();
+        let result = search_chunks(&db, "nonexistent_xyz_123", TEST_SEARCH_LIMIT).unwrap();
         assert!(result.results.is_empty());
     }
 }

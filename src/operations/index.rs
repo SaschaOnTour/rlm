@@ -30,6 +30,7 @@ pub struct IndexOutput {
     pub deleted_from_index: usize,
 }
 
+// qual:api
 #[allow(clippy::trivially_copy_pass_by_ref)] // Required by serde's skip_serializing_if
 fn is_zero(v: &usize) -> bool {
     *v == 0

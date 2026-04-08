@@ -1,4 +1,4 @@
-use crate::error::{Result, RlmError};
+use crate::error::Result;
 use crate::ingest::text::TextParser;
 use crate::models::chunk::{Chunk, ChunkKind};
 
@@ -17,15 +17,6 @@ impl PdfParser {
         Self
     }
 
-    /// Extract text from a PDF file path.
-    pub fn extract_from_file(&self, path: &std::path::Path, file_id: i64) -> Result<Vec<Chunk>> {
-        let bytes = std::fs::read(path)?;
-        let text = pdf_extract::extract_text_from_mem(&bytes).map_err(|e| RlmError::Parse {
-            path: path.to_string_lossy().into(),
-            detail: format!("PDF extraction error: {e}"),
-        })?;
-        self.parse_chunks(&text, file_id)
-    }
 }
 
 impl TextParser for PdfParser {

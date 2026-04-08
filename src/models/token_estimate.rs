@@ -19,9 +19,12 @@ impl TokenEstimate {
     pub fn new(input: u64, output: u64) -> Self {
         Self { input, output }
     }
+}
 
+#[cfg(test)]
+impl TokenEstimate {
     #[must_use]
-    pub fn total(&self) -> u64 {
+    fn total(&self) -> u64 {
         self.input + self.output
     }
 }
@@ -36,6 +39,14 @@ pub fn estimate_tokens(char_count: usize) -> u64 {
 #[must_use]
 pub fn estimate_tokens_str(s: &str) -> u64 {
     estimate_tokens(s.len())
+}
+
+/// Estimate tokens from a byte count (file size).
+///
+/// Uses the same ~4 chars/token heuristic as `estimate_tokens`.
+#[must_use]
+pub fn estimate_tokens_from_bytes(size_bytes: u64) -> u64 {
+    (size_bytes as f64 / CHARS_PER_TOKEN).ceil() as u64
 }
 
 #[cfg(test)]
@@ -60,5 +71,13 @@ mod tests {
     fn estimate_tokens_str_works() {
         let s = "hello world"; // 11 chars
         assert_eq!(estimate_tokens_str(s), 3); // ceil(11/4) = 3
+    }
+
+    #[test]
+    fn estimate_tokens_from_bytes_works() {
+        assert_eq!(estimate_tokens_from_bytes(0), 0);
+        assert_eq!(estimate_tokens_from_bytes(4), 1);
+        assert_eq!(estimate_tokens_from_bytes(1024), 256);
+        assert_eq!(estimate_tokens_from_bytes(5), 2); // ceil(5/4) = 2
     }
 }

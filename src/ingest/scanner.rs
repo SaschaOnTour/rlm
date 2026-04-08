@@ -7,6 +7,9 @@ use serde::Serialize;
 use crate::error::Result;
 use crate::ingest::hasher;
 
+/// Bytes per megabyte (1024 * 1024).
+const BYTES_PER_MB: u64 = 1024 * 1024;
+
 /// Reason why a file was skipped during scanning/indexing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -89,7 +92,7 @@ impl Scanner {
     pub fn with_max_file_size(root: impl Into<PathBuf>, max_size_mb: u32) -> Self {
         Self {
             root: root.into(),
-            max_file_size_bytes: u64::from(max_size_mb) * 1024 * 1024,
+            max_file_size_bytes: u64::from(max_size_mb) * BYTES_PER_MB,
         }
     }
 
@@ -374,6 +377,14 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    /// File size limit in bytes for the large-file-skip tests.
+    const TEST_MAX_FILE_SIZE_BYTES: u64 = 1000;
+    /// Content length used to create a file larger than `TEST_MAX_FILE_SIZE_BYTES`.
+    const LARGE_FILE_CONTENT_LENGTH: usize = 2000;
+    /// Expected max_file_size_bytes when constructing with 10 MB.
+    const TEST_MAX_FILE_SIZE_MB: u32 = 10;
+    const TEN_MB_IN_BYTES: u64 = TEST_MAX_FILE_SIZE_MB as u64 * BYTES_PER_MB;
+
     #[test]
     fn is_supported_extension_works() {
         assert!(is_supported_extension("rs"));
@@ -488,17 +499,14 @@ mod tests {
     #[test]
     fn scanner_skips_large_files() {
         let tmp = TempDir::new().unwrap();
-        // Create a file larger than 1KB
-        let large_content = "x".repeat(2000);
+        // Create a file larger than TEST_MAX_FILE_SIZE_BYTES
+        let large_content = "x".repeat(LARGE_FILE_CONTENT_LENGTH);
         fs::write(tmp.path().join("large.rs"), &large_content).unwrap();
         fs::write(tmp.path().join("small.rs"), "fn main() {}").unwrap();
 
-        // Scanner with 1KB limit (1KB = 1/1024 MB, but we use MB so set to 0 for bytes test)
-        // Actually we need to use with_max_file_size which takes MB
-        // Let's create a scanner that only accepts files < 1KB
         let scanner = Scanner {
             root: tmp.path().to_path_buf(),
-            max_file_size_bytes: 1000, // 1KB limit for test
+            max_file_size_bytes: TEST_MAX_FILE_SIZE_BYTES,
         };
         let files = scanner.scan().unwrap();
 
@@ -510,13 +518,13 @@ mod tests {
     #[test]
     fn scan_all_reports_large_files() {
         let tmp = TempDir::new().unwrap();
-        let large_content = "x".repeat(2000);
+        let large_content = "x".repeat(LARGE_FILE_CONTENT_LENGTH);
         fs::write(tmp.path().join("large.rs"), &large_content).unwrap();
         fs::write(tmp.path().join("small.rs"), "fn main() {}").unwrap();
 
         let scanner = Scanner {
             root: tmp.path().to_path_buf(),
-            max_file_size_bytes: 1000,
+            max_file_size_bytes: TEST_MAX_FILE_SIZE_BYTES,
         };
         let files = scanner.scan_all().unwrap();
 
@@ -541,7 +549,7 @@ mod tests {
     #[test]
     fn with_max_file_size_constructor() {
         let tmp = TempDir::new().unwrap();
-        let scanner = Scanner::with_max_file_size(tmp.path(), 10);
-        assert_eq!(scanner.max_file_size_bytes, 10 * 1024 * 1024);
+        let scanner = Scanner::with_max_file_size(tmp.path(), TEST_MAX_FILE_SIZE_MB);
+        assert_eq!(scanner.max_file_size_bytes, TEN_MB_IN_BYTES);
     }
 }

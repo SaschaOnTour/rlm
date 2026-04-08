@@ -12,6 +12,15 @@ use crate::error::Result;
 use crate::ingest::text::TextParser;
 use crate::models::chunk::{Chunk, ChunkKind};
 
+/// Maximum nesting depth for recursive JSON chunk extraction.
+const MAX_NESTING_DEPTH: usize = 3;
+/// Maximum string length before truncation in JSON value previews.
+const MAX_PREVIEW_LENGTH: usize = 100;
+/// Maximum number of array items shown in a JSON value preview.
+const ARRAY_PREVIEW_ITEMS: usize = 5;
+/// Maximum number of object keys shown in a JSON value preview.
+const OBJECT_PREVIEW_KEYS: usize = 5;
+
 pub struct JsonSemanticParser;
 
 impl JsonSemanticParser {
@@ -86,7 +95,7 @@ fn extract_json_chunks(
     depth: usize,
 ) {
     // Limit depth to avoid excessive chunking
-    if depth > 3 {
+    if depth > MAX_NESTING_DEPTH {
         return;
     }
 
@@ -278,14 +287,14 @@ fn json_value_to_string(value: &Value, indent: usize) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => n.to_string(),
         Value::String(s) => {
-            if s.len() > 100 {
-                format!("\"{}...\"", &s[..97])
+            if s.len() > MAX_PREVIEW_LENGTH {
+                format!("\"{}...\"", &s[..MAX_PREVIEW_LENGTH - 3])
             } else {
                 format!("\"{s}\"")
             }
         }
         Value::Array(arr) => {
-            if arr.len() > 5 {
+            if arr.len() > ARRAY_PREVIEW_ITEMS {
                 format!("[...{} items]", arr.len())
             } else {
                 let items: Vec<String> = arr
@@ -296,7 +305,7 @@ fn json_value_to_string(value: &Value, indent: usize) -> String {
             }
         }
         Value::Object(obj) => {
-            if obj.len() > 5 {
+            if obj.len() > OBJECT_PREVIEW_KEYS {
                 format!("{{...{} keys}}", obj.len())
             } else {
                 let items: Vec<String> = obj

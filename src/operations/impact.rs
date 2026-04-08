@@ -77,6 +77,40 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
     use crate::models::file::FileRecord;
 
+    const TEST_FILE_BYTES: u64 = 200;
+    const TEST_FILE_BYTES_MEDIUM: u64 = 100;
+    const TEST_SMALL_FILE_BYTES: u64 = 50;
+    const TEST_START_LINE: u32 = 1;
+    const TEST_END_LINE: u32 = 5;
+    const TEST_END_LINE_SHORT: u32 = 3;
+    const TEST_START_BYTE: u32 = 0;
+    const TEST_END_BYTE: u32 = 50;
+    const TEST_END_BYTE_SMALL: u32 = 30;
+    const TARGET_START_LINE: u32 = 50;
+    const TARGET_END_LINE: u32 = 60;
+    const TARGET_START_BYTE: u32 = 500;
+    const TARGET_END_BYTE: u32 = 600;
+    const CALLER1_START_LINE: u32 = 10;
+    const CALLER1_END_LINE: u32 = 20;
+    const CALLER1_START_BYTE: u32 = 100;
+    const CALLER1_END_BYTE: u32 = 200;
+    const CALLER2_START_LINE: u32 = 30;
+    const CALLER2_END_LINE: u32 = 40;
+    const CALLER2_START_BYTE: u32 = 300;
+    const CALLER2_END_BYTE: u32 = 400;
+    const CALLER1_REF_LINE: u32 = 15;
+    const CALLER2_REF_LINE: u32 = 35;
+    const TEST_REF_COL: u32 = 5;
+    const TYPE_USER_START_LINE: u32 = 10;
+    const TYPE_USER_END_LINE: u32 = 15;
+    const TYPE_USER_START_BYTE: u32 = 100;
+    const TYPE_USER_END_BYTE: u32 = 180;
+    const TYPE_REF_COL: u32 = 18;
+    const CROSS_FILE_CALLER_START_LINE: u32 = 5;
+    const CROSS_FILE_CALLER_END_LINE: u32 = 10;
+    const CROSS_FILE_CALLER_END_BYTE: u32 = 60;
+    const CROSS_FILE_REF_LINE: u32 = 7;
+
     fn setup_test_db() -> Database {
         Database::open_in_memory().unwrap()
     }
@@ -99,17 +133,17 @@ mod tests {
             "src/utils.rs".to_string(),
             "abc123".to_string(),
             "rust".to_string(),
-            200,
+            TEST_FILE_BYTES,
         );
         let file_id = db.upsert_file(&file).unwrap();
 
         let target = Chunk {
             id: 0,
             file_id,
-            start_line: 50,
-            end_line: 60,
-            start_byte: 500,
-            end_byte: 600,
+            start_line: TARGET_START_LINE,
+            end_line: TARGET_END_LINE,
+            start_byte: TARGET_START_BYTE,
+            end_byte: TARGET_END_BYTE,
             kind: ChunkKind::Function,
             ident: "helper".to_string(),
             parent: None,
@@ -125,10 +159,10 @@ mod tests {
         let caller1 = Chunk {
             id: 0,
             file_id,
-            start_line: 10,
-            end_line: 20,
-            start_byte: 100,
-            end_byte: 200,
+            start_line: CALLER1_START_LINE,
+            end_line: CALLER1_END_LINE,
+            start_byte: CALLER1_START_BYTE,
+            end_byte: CALLER1_END_BYTE,
             kind: ChunkKind::Function,
             ident: "process".to_string(),
             parent: None,
@@ -144,10 +178,10 @@ mod tests {
         let caller2 = Chunk {
             id: 0,
             file_id,
-            start_line: 30,
-            end_line: 40,
-            start_byte: 300,
-            end_byte: 400,
+            start_line: CALLER2_START_LINE,
+            end_line: CALLER2_END_LINE,
+            start_byte: CALLER2_START_BYTE,
+            end_byte: CALLER2_END_BYTE,
             kind: ChunkKind::Function,
             ident: "handle".to_string(),
             parent: None,
@@ -165,8 +199,8 @@ mod tests {
             chunk_id: caller1_id,
             target_ident: "helper".to_string(),
             ref_kind: RefKind::Call,
-            line: 15,
-            col: 5,
+            line: CALLER1_REF_LINE,
+            col: TEST_REF_COL,
         };
         db.insert_ref(&ref1).unwrap();
 
@@ -175,8 +209,8 @@ mod tests {
             chunk_id: caller2_id,
             target_ident: "helper".to_string(),
             ref_kind: RefKind::Call,
-            line: 35,
-            col: 5,
+            line: CALLER2_REF_LINE,
+            col: TEST_REF_COL,
         };
         db.insert_ref(&ref2).unwrap();
 
@@ -203,17 +237,17 @@ mod tests {
             "src/types.rs".to_string(),
             "def456".to_string(),
             "rust".to_string(),
-            100,
+            TEST_FILE_BYTES_MEDIUM,
         );
         let file_id = db.upsert_file(&file).unwrap();
 
         let type_def = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Struct,
             ident: "MyStruct".to_string(),
             parent: None,
@@ -229,10 +263,10 @@ mod tests {
         let func = Chunk {
             id: 0,
             file_id,
-            start_line: 10,
-            end_line: 15,
-            start_byte: 100,
-            end_byte: 180,
+            start_line: TYPE_USER_START_LINE,
+            end_line: TYPE_USER_END_LINE,
+            start_byte: TYPE_USER_START_BYTE,
+            end_byte: TYPE_USER_END_BYTE,
             kind: ChunkKind::Function,
             ident: "use_type".to_string(),
             parent: None,
@@ -250,8 +284,8 @@ mod tests {
             chunk_id: func_id,
             target_ident: "MyStruct".to_string(),
             ref_kind: RefKind::TypeUse,
-            line: 10,
-            col: 18,
+            line: TYPE_USER_START_LINE,
+            col: TYPE_REF_COL,
         };
         db.insert_ref(&type_ref).unwrap();
 
@@ -270,7 +304,7 @@ mod tests {
             "src/a.rs".to_string(),
             "aaa".to_string(),
             "rust".to_string(),
-            50,
+            TEST_SMALL_FILE_BYTES,
         );
         let file1_id = db.upsert_file(&file1).unwrap();
 
@@ -278,17 +312,17 @@ mod tests {
             "src/b.rs".to_string(),
             "bbb".to_string(),
             "rust".to_string(),
-            50,
+            TEST_SMALL_FILE_BYTES,
         );
         let file2_id = db.upsert_file(&file2).unwrap();
 
         let target = Chunk {
             id: 0,
             file_id: file1_id,
-            start_line: 1,
-            end_line: 3,
-            start_byte: 0,
-            end_byte: 30,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE_SHORT,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE_SMALL,
             kind: ChunkKind::Function,
             ident: "shared_fn".to_string(),
             parent: None,
@@ -304,10 +338,10 @@ mod tests {
         let caller = Chunk {
             id: 0,
             file_id: file2_id,
-            start_line: 5,
-            end_line: 10,
-            start_byte: 0,
-            end_byte: 60,
+            start_line: CROSS_FILE_CALLER_START_LINE,
+            end_line: CROSS_FILE_CALLER_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: CROSS_FILE_CALLER_END_BYTE,
             kind: ChunkKind::Function,
             ident: "consumer".to_string(),
             parent: None,
@@ -325,8 +359,8 @@ mod tests {
             chunk_id: caller_id,
             target_ident: "shared_fn".to_string(),
             ref_kind: RefKind::Call,
-            line: 7,
-            col: 5,
+            line: CROSS_FILE_REF_LINE,
+            col: TEST_REF_COL,
         };
         db.insert_ref(&ref_to_target).unwrap();
 

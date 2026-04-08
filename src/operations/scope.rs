@@ -59,6 +59,17 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind};
     use crate::models::file::FileRecord;
 
+    const TEST_FILE_BYTES: u64 = 100;
+    const TEST_START_LINE: u32 = 1;
+    const TEST_END_LINE: u32 = 5;
+    const TEST_START_BYTE: u32 = 0;
+    const TEST_END_BYTE: u32 = 50;
+    const BAR_START_LINE: u32 = 7;
+    const BAR_END_LINE: u32 = 15;
+    const BAR_START_BYTE: u32 = 51;
+    const BAR_END_BYTE: u32 = 150;
+    const QUERY_LINE: u32 = 10;
+
     fn test_db() -> Database {
         Database::open_in_memory().unwrap()
     }
@@ -67,17 +78,17 @@ mod tests {
     fn get_scope_basic() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
         let file_id = db.upsert_file(&file).unwrap();
 
         // First function
         let chunk1 = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Function,
             ident: "foo".into(),
             parent: None,
@@ -94,10 +105,10 @@ mod tests {
         let chunk2 = Chunk {
             id: 0,
             file_id,
-            start_line: 7,
-            end_line: 15,
-            start_byte: 51,
-            end_byte: 150,
+            start_line: BAR_START_LINE,
+            end_line: BAR_END_LINE,
+            start_byte: BAR_START_BYTE,
+            end_byte: BAR_END_BYTE,
             kind: ChunkKind::Function,
             ident: "bar".into(),
             parent: None,
@@ -110,10 +121,10 @@ mod tests {
         };
         db.insert_chunk(&chunk2).unwrap();
 
-        // Query at line 10 (inside bar)
-        let result = get_scope(&db, "src/lib.rs", 10).unwrap();
+        // Query at line QUERY_LINE (inside bar)
+        let result = get_scope(&db, "src/lib.rs", QUERY_LINE).unwrap();
         assert_eq!(result.file, "src/lib.rs");
-        assert_eq!(result.line, 10);
+        assert_eq!(result.line, QUERY_LINE);
         assert_eq!(result.containing, vec!["bar"]);
         // Both foo and bar are visible (defined before line 10)
         assert!(result.visible.contains(&"fn:foo".to_string()));

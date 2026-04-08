@@ -67,6 +67,13 @@ mod tests {
     use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
     use crate::models::file::FileRecord;
 
+    const TEST_FILE_BYTES: u64 = 100;
+    const TEST_START_LINE: u32 = 1;
+    const TEST_END_LINE: u32 = 5;
+    const TEST_START_BYTE: u32 = 0;
+    const TEST_END_BYTE: u32 = 50;
+    const TEST_REF_COL: u32 = 14;
+
     fn test_db() -> Database {
         Database::open_in_memory().unwrap()
     }
@@ -75,16 +82,16 @@ mod tests {
     fn get_refs_basic() {
         let db = test_db();
 
-        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), 100);
+        let file = FileRecord::new("src/lib.rs".into(), "hash".into(), "rust".into(), TEST_FILE_BYTES);
         let file_id = db.upsert_file(&file).unwrap();
 
         let chunk = Chunk {
             id: 0,
             file_id,
-            start_line: 1,
-            end_line: 5,
-            start_byte: 0,
-            end_byte: 50,
+            start_line: TEST_START_LINE,
+            end_line: TEST_END_LINE,
+            start_byte: TEST_START_BYTE,
+            end_byte: TEST_END_BYTE,
             kind: ChunkKind::Function,
             ident: "caller".into(),
             parent: None,
@@ -103,7 +110,7 @@ mod tests {
             target_ident: "foo".into(),
             ref_kind: RefKind::Call,
             line: 1,
-            col: 14,
+            col: TEST_REF_COL,
         };
         db.insert_ref(&reference).unwrap();
 
@@ -112,7 +119,7 @@ mod tests {
         assert_eq!(result.count, 1);
         assert_eq!(result.refs[0].kind, "call");
         assert_eq!(result.refs[0].line, 1);
-        assert_eq!(result.refs[0].col, 14);
+        assert_eq!(result.refs[0].col, TEST_REF_COL);
     }
 
     #[test]
