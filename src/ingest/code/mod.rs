@@ -149,9 +149,7 @@ pub fn find_error_lines(root: tree_sitter::Node) -> Vec<u32> {
         }
 
         // Depth-first: try child, then sibling, then uncle
-        if did_enter && cursor.goto_first_child() {
-            did_enter = true;
-        } else if cursor.goto_next_sibling() {
+        if (did_enter && cursor.goto_first_child()) || cursor.goto_next_sibling() {
             did_enter = true;
         } else if cursor.goto_parent() {
             did_enter = false;

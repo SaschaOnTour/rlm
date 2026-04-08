@@ -37,13 +37,13 @@ pub fn handle_partition(
 ) -> Result<CallToolResult, McpError> {
     let strategy = if strategy_str == "semantic" {
         partition::Strategy::Semantic
-    } else if strategy_str.starts_with("uniform:") {
-        match strategy_str[8..].parse::<usize>() {
+    } else if let Some(rest) = strategy_str.strip_prefix("uniform:") {
+        match rest.parse::<usize>() {
             Ok(n) => partition::Strategy::Uniform(n),
             Err(e) => return Ok(RlmServer::error_text(format!("invalid chunk size: {e}"))),
         }
-    } else if strategy_str.starts_with("keyword:") {
-        partition::Strategy::Keyword(strategy_str[8..].to_string())
+    } else if let Some(rest) = strategy_str.strip_prefix("keyword:") {
+        partition::Strategy::Keyword(rest.to_string())
     } else {
         return Ok(RlmServer::error_text(
             "strategy must be: semantic, uniform:N, or keyword:PATTERN".into(),

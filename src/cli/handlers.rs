@@ -196,7 +196,7 @@ pub fn cmd_partition(path: &str, strategy_str: &str) -> CmdResult {
 }
 
 pub fn cmd_summarize(path: &str) -> CmdResult {
-    cmd_single_file_op("summarize", path, |db, p| summarize::summarize(db, p))
+    cmd_single_file_op("summarize", path, summarize::summarize)
 }
 
 pub fn cmd_diff(path: &str, symbol: Option<&str>) -> CmdResult {
@@ -237,7 +237,7 @@ pub fn cmd_context(symbol: &str, graph: bool) -> CmdResult {
 }
 
 pub fn cmd_deps(path: &str) -> CmdResult {
-    cmd_single_file_op("deps", path, |db, p| operations::get_deps(db, p))
+    cmd_single_file_op("deps", path, operations::get_deps)
 }
 
 pub fn cmd_scope(path: &str, line: u32) -> CmdResult {

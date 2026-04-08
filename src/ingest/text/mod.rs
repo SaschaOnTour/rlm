@@ -49,6 +49,9 @@ pub struct EntryContext<'a> {
     pub depth: usize,
 }
 
+/// Return type for `collect_structured_entries`: entries paired with recurse targets.
+type StructuredEntries = (Vec<(String, String)>, Vec<RecurseTarget>);
+
 /// Describes a child entry that should be recursed into.
 struct RecurseTarget {
     /// The `serde_json::Value` index inside the parent object.
@@ -99,7 +102,7 @@ fn collect_structured_entries(
     value: &serde_json::Value,
     path: &str,
     depth: usize,
-) -> Option<(Vec<(String, String)>, Vec<RecurseTarget>)> {
+) -> Option<StructuredEntries> {
     if depth > MAX_NESTING_DEPTH {
         return None;
     }

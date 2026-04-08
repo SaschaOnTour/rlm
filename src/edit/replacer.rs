@@ -7,7 +7,7 @@ use crate::models::chunk::Chunk;
 /// Look up a file and its matching chunk by symbol identifier.
 ///
 /// Returns the resolved `Chunk` (cloned) so callers can use byte offsets, content, etc.
-fn find_symbol_in_file<'a>(db: &Database, file_path: &str, symbol: &str) -> Result<Chunk> {
+fn find_symbol_in_file(db: &Database, file_path: &str, symbol: &str) -> Result<Chunk> {
     let file = db
         .get_file_by_path(file_path)?
         .ok_or_else(|| RlmError::FileNotFound {

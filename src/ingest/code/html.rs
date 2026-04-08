@@ -228,7 +228,7 @@ fn extract_html_id_signature(content: &str) -> Option<String> {
             let id_val = after_id
                 .trim_start_matches('"')
                 .trim_start_matches('\'')
-                .split(|c: char| c == '"' || c == '\'')
+                .split(['"', '\''])
                 .next()
                 .unwrap_or("");
             if !tag_name.is_empty() && !id_val.is_empty() {

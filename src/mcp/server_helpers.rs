@@ -22,7 +22,7 @@ use super::server::RlmServer;
 
 impl RlmServer {
     pub(crate) fn config(&self) -> Config {
-        Config::new(&self.project_root())
+        Config::new(self.project_root())
     }
 
     /// Get the database. Returns an error if the index doesn't exist.

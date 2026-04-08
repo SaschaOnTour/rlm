@@ -316,7 +316,7 @@ path = "src/cli.rs"
         );
         assert_eq!(
             toml_value_kind_label(&serde_json::Value::Number(
-                serde_json::Number::from_f64(3.14).unwrap()
+                serde_json::Number::from_f64(3.15).unwrap()
             )),
             "float"
         );
