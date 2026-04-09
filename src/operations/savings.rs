@@ -76,12 +76,24 @@ impl SavingsEntry {
     /// tool_use blocks as output tokens.
     // qual:api
     pub fn cost_saved_microdollars(&self) -> u64 {
-        let alt_cost = self.alt_input * INPUT_COST_PER_M
-            + self.alt_output * INPUT_COST_PER_M
-            + self.alt_calls * CALL_OVERHEAD * OVERHEAD_COST_PER_M;
-        let rlm_cost = self.rlm_input * INPUT_COST_PER_M
-            + self.rlm_output * INPUT_COST_PER_M
-            + self.rlm_calls * CALL_OVERHEAD * OVERHEAD_COST_PER_M;
+        let alt_cost = self
+            .alt_input
+            .saturating_mul(INPUT_COST_PER_M)
+            .saturating_add(self.alt_output.saturating_mul(INPUT_COST_PER_M))
+            .saturating_add(
+                self.alt_calls
+                    .saturating_mul(CALL_OVERHEAD)
+                    .saturating_mul(OVERHEAD_COST_PER_M),
+            );
+        let rlm_cost = self
+            .rlm_input
+            .saturating_mul(INPUT_COST_PER_M)
+            .saturating_add(self.rlm_output.saturating_mul(INPUT_COST_PER_M))
+            .saturating_add(
+                self.rlm_calls
+                    .saturating_mul(CALL_OVERHEAD)
+                    .saturating_mul(OVERHEAD_COST_PER_M),
+            );
         alt_cost.saturating_sub(rlm_cost)
     }
 }
@@ -335,6 +347,10 @@ pub fn record_file_op<T: serde::Serialize>(
 /// Record savings for a symbol-scoped operation and return the serialized JSON.
 ///
 /// CC equivalent: Grep (1 call) + Read per file (N calls).
+///
+/// **Note:** `files_touched` should be the number of *distinct files*, not total
+/// hits. Some callers (e.g., `refs`) currently pass hit count — this overstates
+/// `alt_calls` when multiple hits come from the same file.
 pub fn record_symbol_op<T: serde::Serialize>(
     db: &Database,
     command: &str,
@@ -471,6 +487,16 @@ mod tests {
     const CMD_SAVINGS_ALT_1: u64 = 1000;
     const CMD_SAVINGS_OUTPUT_2: u64 = 30;
     const CMD_SAVINGS_ALT_2: u64 = 800;
+
+    // Pre-edit adjustment test constants
+    const REPLACE_POST_EDIT_SIZE: u64 = 4300;
+    const REPLACE_OLD_CODE: usize = 100;
+    const REPLACE_NEW_CODE: usize = 400;
+    const PRE_EDIT_TOKENS: u64 = 1000; // (4300+100-400)/4 = 4000/4
+    const INSERT_POST_EDIT_SIZE: u64 = 4200;
+    const INSERT_NEW_CODE: usize = 200;
+    const INSERT_PRE_EDIT_TOKENS: u64 = 1000; // (4200-200)/4 = 4000/4
+    const SYMBOL_FILES_TOUCHED: u64 = 5;
 
     // V2 test constants
     const V2_FILE_SIZE: u64 = 4000;
@@ -872,6 +898,123 @@ mod tests {
         assert_eq!(cmd.alt_calls, CC_CALLS_REPLACE);
         assert_eq!(cmd.rlm_total, 83);
         assert_eq!(cmd.alt_total, 1637);
+    }
+
+    #[test]
+    fn replace_entry_uses_pre_edit_file_size() {
+        let db = test_db();
+        // File in DB has post-edit size (after reindex). The replacement grew the file.
+        let file = FileRecord::new(
+            "src/grow.rs".into(),
+            "h".into(),
+            "rust".into(),
+            REPLACE_POST_EDIT_SIZE,
+        );
+        db.upsert_file(&file).unwrap();
+
+        let entry = alternative_replace_entry(
+            &db,
+            "src/grow.rs",
+            REPLACE_OLD_CODE,
+            REPLACE_NEW_CODE,
+            V2_RESULT_LEN,
+        )
+        .unwrap();
+
+        // Pre-edit size = 4300 + 100 - 400 = 4000 → tokens = 1000
+        let line_overhead = PRE_EDIT_TOKENS / LINE_OVERHEAD_DIVISOR;
+        let expected_alt_output = SNIPPET_TOKENS + PRE_EDIT_TOKENS + line_overhead + SNIPPET_TOKENS;
+        assert_eq!(entry.alt_output, expected_alt_output);
+    }
+
+    #[test]
+    fn insert_entry_uses_pre_edit_file_size() {
+        let db = test_db();
+        // Post-edit size after inserting INSERT_NEW_CODE bytes.
+        let file = FileRecord::new(
+            "src/grow.rs".into(),
+            "h".into(),
+            "rust".into(),
+            INSERT_POST_EDIT_SIZE,
+        );
+        db.upsert_file(&file).unwrap();
+
+        let entry =
+            alternative_insert_entry(&db, "src/grow.rs", INSERT_NEW_CODE, V2_RESULT_LEN).unwrap();
+
+        // Pre-edit size = 4200 - 200 = 4000 → tokens = 1000
+        let line_overhead = INSERT_PRE_EDIT_TOKENS / LINE_OVERHEAD_DIVISOR;
+        let expected_alt_output = INSERT_PRE_EDIT_TOKENS + line_overhead + SNIPPET_TOKENS;
+        assert_eq!(entry.alt_output, expected_alt_output);
+    }
+
+    #[test]
+    fn symbol_op_alt_calls_scales_with_files() {
+        let db = test_db();
+        // Set up two files with the same symbol so alternative_symbol_files returns something.
+        let f1 = FileRecord::new(
+            "src/a.rs".into(),
+            "a".into(),
+            "rust".into(),
+            SCOPED_FILE_SIZE_A,
+        );
+        let f2 = FileRecord::new(
+            "src/b.rs".into(),
+            "b".into(),
+            "rust".into(),
+            SCOPED_FILE_SIZE_B,
+        );
+        let fid1 = db.upsert_file(&f1).unwrap();
+        let fid2 = db.upsert_file(&f2).unwrap();
+        let c1 = Chunk {
+            kind: ChunkKind::Function,
+            ident: "shared_fn".into(),
+            end_line: TEST_END_LINE,
+            end_byte: TEST_END_BYTE,
+            content: "fn shared_fn() {}".into(),
+            ..Chunk::stub(fid1)
+        };
+        let c2 = Chunk {
+            kind: ChunkKind::Function,
+            ident: "shared_fn".into(),
+            end_line: TEST_END_LINE,
+            end_byte: TEST_END_BYTE,
+            content: "fn shared_fn() {}".into(),
+            ..Chunk::stub(fid2)
+        };
+        db.insert_chunk(&c1).unwrap();
+        db.insert_chunk(&c2).unwrap();
+
+        // Record with files_touched=5 (Grep + 5 Reads = 6 CC calls)
+        let data = serde_json::json!({"test": true});
+        record_symbol_op(&db, "refs", &data, "shared_fn", SYMBOL_FILES_TOUCHED);
+
+        let report = get_savings_report(&db, None).unwrap();
+        let cmd = &report.by_cmd[0];
+        assert_eq!(cmd.alt_calls, 1 + SYMBOL_FILES_TOUCHED); // Grep + Read×5
+
+        // With 0 files, only 1 Grep call
+        let db2 = test_db();
+        record_symbol_op(&db2, "refs", &data, "nonexistent", 0);
+        let report2 = get_savings_report(&db2, None).unwrap();
+        assert_eq!(report2.by_cmd[0].alt_calls, 1); // Grep only
+    }
+
+    #[test]
+    fn cost_saved_microdollars_saturates_on_overflow() {
+        let entry = SavingsEntry {
+            command: "huge".into(),
+            rlm_input: 0,
+            rlm_output: 0,
+            rlm_calls: 0,
+            alt_input: u64::MAX,
+            alt_output: u64::MAX,
+            alt_calls: u64::MAX,
+            files_touched: 0,
+        };
+        // Should not panic or wrap — saturating arithmetic clamps to u64::MAX.
+        let cost = entry.cost_saved_microdollars();
+        assert_eq!(cost, u64::MAX);
     }
 
     #[test]
