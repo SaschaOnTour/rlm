@@ -131,8 +131,15 @@ impl RlmServer {
     // qual:api
     // qual:allow(srp) reason: "rmcp #[tool_router] requires &self on all #[tool] methods"
     async fn insert(&self, params: Parameters<InsertParams>) -> Result<CallToolResult, McpError> {
+        let db = self.try_open_db();
         let p = &params.0;
-        tool_handlers::handle_insert(&p.path, &p.position, &p.code, &self.project_root)
+        tool_handlers::handle_insert(
+            db.as_ref(),
+            &p.path,
+            &p.position,
+            &p.code,
+            &self.project_root,
+        )
     }
 
     #[tool(

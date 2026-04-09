@@ -54,6 +54,16 @@ impl Database {
         tables_exist && (!has_doc_comment || !has_parse_quality)
     }
 
+    /// Open an existing database, returning `None` if the file does not exist.
+    // qual:allow(iosp) reason: "check-then-open is inherent to this method's purpose"
+    pub fn open_if_exists(path: &Path) -> Option<Self> {
+        if path.exists() {
+            Self::open(path).ok()
+        } else {
+            None
+        }
+    }
+
     /// Create an in-memory database (for testing).
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;

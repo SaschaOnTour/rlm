@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-09
+
+### Changed
+
+- **N+1 query fix**: `read --symbol` now uses single `get_file_by_path` lookup instead
+  of loading all files per chunk (O(1) vs O(files × chunks))
+- **Auto-reindex after writes**: `replace` and `insert` (MCP + CLI) automatically
+  re-index the modified file. Response includes `{reindexed: true, chunks: N, refs: N}`
+- **Shared index pipeline**: Extracted `index_source()` used by both bulk indexing and
+  single-file reindex (DRY)
+- **ReplaceDiff serializable**: `ReplaceDiff` implements `Serialize` manually (backward-compatible `old_lines` format) — eliminated
+  duplicate `DiffOutput`/`Out` structs in CLI and MCP handlers
+- **Indexer module split**: `indexer.rs` split into `indexer/mod.rs` + `file_processing.rs`
+  + `db_insert.rs` (SRP)
+- `reindex_single_file` runs in transaction with rollback on failure
+- `hash_bytes()` for in-memory hashing (no double disk read)
+
 ## [0.2.1] - 2026-04-09
 
 ### Fixed

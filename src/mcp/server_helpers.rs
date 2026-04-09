@@ -27,17 +27,16 @@ impl RlmServer {
 
     /// Get the database. Returns an error if the index doesn't exist.
     /// Unlike the CLI, MCP does NOT auto-index to avoid blocking on large projects.
-    // qual:allow(iosp) reason: "check-then-act: verify index exists before opening database"
     pub(crate) fn ensure_db(&self) -> Result<Database, McpError> {
-        let config = self.config();
-        if !config.index_exists() {
-            return Err(McpError::invalid_request(
-                "Index not found. Call the 'index' tool first.",
-                None,
-            ));
-        }
-        Database::open(&config.db_path)
-            .map_err(|e| McpError::internal_error(format!("database error: {e}"), None))
+        Database::open_if_exists(&self.config().db_path).ok_or_else(|| {
+            McpError::invalid_request("Index not found. Call the 'index' tool first.", None)
+        })
+    }
+
+    /// Try to open the database without requiring the index to exist.
+    /// Returns `None` if the index hasn't been created yet.
+    pub(crate) fn try_open_db(&self) -> Option<Database> {
+        Database::open_if_exists(&self.config().db_path)
     }
 
     pub(crate) fn to_json<T: Serialize>(val: &T) -> String {
