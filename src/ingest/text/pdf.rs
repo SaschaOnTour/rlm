@@ -54,11 +54,10 @@ impl TextParser for PdfParser {
             let start_byte = byte_offset as u32;
             let page_len = page_content.len() as u64;
             let end_byte_u64 = byte_offset + page_len;
-            let end_byte = if end_byte_u64 > u64::from(u32::MAX) {
-                u32::MAX
-            } else {
-                end_byte_u64 as u32
-            };
+            if end_byte_u64 > u64::from(u32::MAX) {
+                break; // Skip this and remaining pages — byte range would be truncated
+            }
+            let end_byte = end_byte_u64 as u32;
 
             chunks.push(Chunk {
                 start_line: line_offset,

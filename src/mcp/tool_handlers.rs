@@ -55,8 +55,7 @@ pub fn handle_index(
     path: Option<&str>,
     project_root: &std::path::Path,
 ) -> Result<CallToolResult, McpError> {
-    let config = resolve_index_config(path, project_root)
-        .map_err(|e| McpError::invalid_request(e.to_string(), None))?;
+    let config = resolve_index_config(path, project_root)?;
 
     if let Err(e) = config.ensure_rlm_dir() {
         return Ok(RlmServer::error_text(e.to_string()));
