@@ -339,7 +339,7 @@ pub fn record_symbol_op<T: serde::Serialize>(
     let alt_tokens = alternative_symbol_files(db, symbol)
         .unwrap_or(0)
         .saturating_add(SNIPPET_TOKENS); // Grep result + Read results
-    let alt_calls = 1 + files_touched.max(1); // Grep + Read×N
+    let alt_calls = 1 + files_touched; // Grep + Read×N
     serialize_and_record_entry(db, command, result, alt_tokens, alt_calls, files_touched)
 }
 
