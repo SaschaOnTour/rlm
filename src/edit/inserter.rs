@@ -49,15 +49,18 @@ impl TryFrom<String> for InsertPosition {
 }
 
 /// Insert code at a specific position in a file.
+///
+/// `project_root` is used to resolve `rel_path` into an absolute path for disk I/O.
 pub fn insert_code(
-    file_path: &str,
+    project_root: &std::path::Path,
+    rel_path: &str,
     position: &InsertPosition,
     code: &str,
     guard: &SyntaxGuard,
 ) -> Result<String> {
-    let path = std::path::Path::new(file_path);
-    let source = std::fs::read_to_string(path).map_err(|_| RlmError::FileNotFound {
-        path: file_path.into(),
+    let path = project_root.join(rel_path);
+    let source = std::fs::read_to_string(&path).map_err(|_| RlmError::FileNotFound {
+        path: rel_path.into(),
     })?;
 
     let modified = apply_insertion(&source, position, code)?;
@@ -65,7 +68,7 @@ pub fn insert_code(
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let lang = ext_to_lang(ext);
 
-    validate_and_write(guard, lang, &modified, path)?;
+    validate_and_write(guard, lang, &modified, &path)?;
 
     Ok(modified)
 }

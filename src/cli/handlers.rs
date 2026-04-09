@@ -170,16 +170,16 @@ pub fn cmd_replace(path: &str, symbol: &str, code: &str, preview: bool) -> CmdRe
             })
         );
     } else {
-        let guard = SyntaxGuard::new();
-        replacer::replace_symbol(&db, path, symbol, code, &guard).map_err(map_err)?;
+        replacer::replace_symbol(&db, path, symbol, code, &config.project_root).map_err(map_err)?;
         println!("{{\"ok\":true}}");
     }
     Ok(())
 }
 
 pub fn cmd_insert(path: &str, code: &str, position: &InsertPosition) -> CmdResult {
+    let config = get_config()?;
     let guard = SyntaxGuard::new();
-    inserter::insert_code(path, position, code, &guard).map_err(map_err)?;
+    inserter::insert_code(&config.project_root, path, position, code, &guard).map_err(map_err)?;
     println!("{{\"ok\":true}}");
     Ok(())
 }

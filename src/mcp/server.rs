@@ -127,8 +127,7 @@ impl RlmServer {
     // qual:api
     async fn replace(&self, params: Parameters<ReplaceParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        let p = &params.0;
-        tool_handlers::handle_replace(&db, &p.path, &p.symbol, &p.code, p.preview.unwrap_or(false))
+        tool_handlers::handle_replace(&db, &params.0, &self.project_root)
     }
 
     #[tool(
@@ -138,7 +137,7 @@ impl RlmServer {
     // qual:allow(srp) reason: "rmcp #[tool_router] requires &self on all #[tool] methods"
     async fn insert(&self, params: Parameters<InsertParams>) -> Result<CallToolResult, McpError> {
         let p = &params.0;
-        tool_handlers::handle_insert(&p.path, &p.position, &p.code)
+        tool_handlers::handle_insert(&p.path, &p.position, &p.code, &self.project_root)
     }
 
     #[tool(
