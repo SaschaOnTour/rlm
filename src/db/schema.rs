@@ -116,24 +116,40 @@ mod tests {
     }
 
     #[test]
-    fn savings_v2_migration_idempotent() {
+    fn savings_v2_migration_from_old_schema() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(CREATE_SCHEMA).unwrap();
-        // Run migration twice — second run hits "duplicate column" but must not panic.
-        for _ in 0..2 {
-            for sql in MIGRATE_SAVINGS_V2.split(';') {
-                let trimmed = sql.trim();
-                if !trimmed.is_empty() {
-                    let _ = conn.execute(trimmed, []);
-                }
+        // Create the pre-V2 savings table (without new columns).
+        conn.execute_batch(
+            "CREATE TABLE savings (
+                id INTEGER PRIMARY KEY,
+                command TEXT NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                alternative_tokens INTEGER NOT NULL,
+                files_touched INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );",
+        )
+        .unwrap();
+        // Migrate — should add the 4 new columns.
+        for sql in MIGRATE_SAVINGS_V2.split(';') {
+            let trimmed = sql.trim();
+            if !trimmed.is_empty() {
+                conn.execute(trimmed, []).unwrap();
             }
         }
-        // Verify new columns exist
+        // Verify new columns exist by inserting a row that uses them.
         conn.execute(
             "INSERT INTO savings (command, output_tokens, alternative_tokens, rlm_input_tokens, alt_input_tokens, rlm_calls, alt_calls) \
              VALUES ('test', 10, 20, 30, 60, 1, 2)",
             [],
         )
         .unwrap();
+        // Run migration again — must not fail (idempotent).
+        for sql in MIGRATE_SAVINGS_V2.split(';') {
+            let trimmed = sql.trim();
+            if !trimmed.is_empty() {
+                let _ = conn.execute(trimmed, []);
+            }
+        }
     }
 }

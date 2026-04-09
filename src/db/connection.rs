@@ -54,7 +54,12 @@ impl Database {
         for sql in MIGRATE_SAVINGS_V2.split(';') {
             let trimmed = sql.trim();
             if !trimmed.is_empty() {
-                let _ = conn.execute(trimmed, []);
+                if let Err(e) = conn.execute(trimmed, []) {
+                    let msg = e.to_string();
+                    if !msg.contains("duplicate column") {
+                        eprintln!("warning: savings migration failed: {msg}");
+                    }
+                }
             }
         }
     }

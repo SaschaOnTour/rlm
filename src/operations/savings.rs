@@ -189,13 +189,13 @@ pub fn alternative_replace_entry(
 
     Ok(SavingsEntry {
         command: "replace".to_string(),
-        rlm_input: CALL_OVERHEAD + new_tokens,
+        // Parameter tokens only; per-call overhead is accounted for via rlm_calls.
+        rlm_input: new_tokens,
         rlm_output: estimate_tokens(rlm_result_len),
         rlm_calls: 1,
         // CC: Grep(symbol) → Read(file) → Edit(old, new)
-        alt_input: CALL_OVERHEAD              // Grep tool_use
-            + CALL_OVERHEAD                   // Read tool_use
-            + CALL_OVERHEAD + old_tokens + new_tokens, // Edit: path + old_string + new_string
+        // Parameter tokens only; per-call overhead is accounted for via alt_calls.
+        alt_input: old_tokens + new_tokens, // Edit: old_string + new_string
         alt_output: SNIPPET_TOKENS            // Grep result (file matches)
             + file_tokens + line_overhead     // Read result (full file + line numbers)
             + SNIPPET_TOKENS, // Edit result (patch + snippet)
@@ -217,10 +217,10 @@ pub fn alternative_insert_entry(
 
     Ok(SavingsEntry {
         command: "insert".to_string(),
-        rlm_input: CALL_OVERHEAD + new_tokens,
+        rlm_input: new_tokens,
         rlm_output: estimate_tokens(rlm_result_len),
         rlm_calls: 1,
-        alt_input: CALL_OVERHEAD + CALL_OVERHEAD + new_tokens, // Read + Edit tool_use + new_string
+        alt_input: new_tokens, // Edit: new_string (Read has negligible path param)
         alt_output: file_tokens + line_overhead + SNIPPET_TOKENS, // Read result + Edit result
         alt_calls: CC_CALLS_INSERT,
         files_touched: 1,
@@ -253,10 +253,10 @@ pub fn record(
 ) {
     let entry = SavingsEntry {
         command: command.to_string(),
-        rlm_input: CALL_OVERHEAD,
+        rlm_input: 0, // legacy: unknown parameter tokens
         rlm_output: output_tokens,
         rlm_calls: 1,
-        alt_input: CALL_OVERHEAD,
+        alt_input: 0,
         alt_output: alternative_tokens,
         alt_calls: 1,
         files_touched,
@@ -269,10 +269,10 @@ pub fn record_read_symbol(db: &Database, out_tokens: u64, path: &str) {
     let alt_tokens = alternative_single_file(db, path).unwrap_or(out_tokens);
     let entry = SavingsEntry {
         command: "read_symbol".to_string(),
-        rlm_input: CALL_OVERHEAD,
+        rlm_input: 0, // negligible path/symbol params
         rlm_output: out_tokens,
         rlm_calls: 1,
-        alt_input: 2 * CALL_OVERHEAD, // Grep + Read
+        alt_input: 0, // negligible path/pattern params
         alt_output: alt_tokens,
         alt_calls: 2,
         files_touched: 1,
@@ -294,10 +294,10 @@ fn serialize_and_record_entry<T: serde::Serialize>(
     let out_tokens = estimate_tokens(json.len());
     let entry = SavingsEntry {
         command: command.to_string(),
-        rlm_input: CALL_OVERHEAD,
+        rlm_input: 0, // read-only ops have negligible params
         rlm_output: out_tokens,
         rlm_calls: 1,
-        alt_input: alt_calls * CALL_OVERHEAD,
+        alt_input: 0,
         alt_output: alt_tokens,
         alt_calls,
         files_touched,
@@ -365,6 +365,11 @@ fn savings_pct(saved: u64, alternative: u64) -> f64 {
 /// Derives aggregate totals from the per-command breakdown (single DB query).
 pub fn get_savings_report(db: &Database, since: Option<&str>) -> Result<SavingsReport> {
     let by_cmd_raw = db.get_savings_by_command(since)?;
+    // Compute input_saved directly from raw query data (before consuming rows).
+    let input_saved: u64 = by_cmd_raw
+        .iter()
+        .map(|r| r.alt_input_tokens.saturating_sub(r.rlm_input_tokens))
+        .sum();
     let by_cmd: Vec<CommandSavings> = by_cmd_raw
         .into_iter()
         .map(|row| {
@@ -393,13 +398,6 @@ pub fn get_savings_report(db: &Database, since: Option<&str>) -> Result<SavingsR
     let rlm_total: u64 = by_cmd.iter().map(|c| c.rlm_total).sum();
     let alt_total: u64 = by_cmd.iter().map(|c| c.alt_total).sum();
     let total_saved = alt_total.saturating_sub(rlm_total);
-    let input_saved: u64 = by_cmd
-        .iter()
-        .map(|c| {
-            // input portion: (alt_total - alt_output) - (rlm_total - rlm_output)
-            (c.alt_total - c.alternative).saturating_sub(c.rlm_total - c.output)
-        })
-        .sum();
     let result_saved = saved; // output-only savings = result savings
     let calls_saved: u64 = by_cmd
         .iter()
@@ -460,11 +458,11 @@ mod tests {
     const V2_OLD_CODE_LEN: usize = 100;
     const V2_NEW_CODE_LEN: usize = 200;
     const V2_RESULT_LEN: usize = 10;
-    const V2_RLM_INPUT: u64 = 80;
+    const V2_RLM_INPUT: u64 = 50; // ceil(200/4) = new_tokens only (no call overhead)
     const V2_RLM_OUTPUT: u64 = 3;
-    const V2_ALT_INPUT_REPLACE: u64 = 165;
+    const V2_ALT_INPUT_REPLACE: u64 = 75; // ceil(100/4) + ceil(200/4) = old_tokens + new_tokens
     const V2_ALT_OUTPUT_REPLACE: u64 = 1500;
-    const V2_ALT_INPUT_INSERT: u64 = 110;
+    const V2_ALT_INPUT_INSERT: u64 = 50; // ceil(200/4) = new_tokens only
     const V2_ALT_OUTPUT_INSERT: u64 = 1300;
     const LEGACY_OUTPUT: u64 = 50;
     const LEGACY_ALT: u64 = 2000;
@@ -817,10 +815,10 @@ mod tests {
         // Should work and produce valid report
         let report = get_savings_report(&db, None).unwrap();
         assert_eq!(report.ops, 1);
-        // Legacy record sets rlm_input=30, alt_input=30, calls=1
-        // rlm_total = 30 + 50 + 30 = 110, alt_total = 30 + 2000 + 30 = 2060
-        assert_eq!(report.rlm_total, 110);
-        assert_eq!(report.alt_total, 2060);
+        // Legacy record sets rlm_input=0, alt_input=0, calls=1
+        // rlm_total = 0 + 50 + 30 = 80, alt_total = 0 + 2000 + 30 = 2030
+        assert_eq!(report.rlm_total, 80);
+        assert_eq!(report.alt_total, 2030);
         assert_eq!(report.total_saved, 1950);
     }
 
@@ -841,19 +839,20 @@ mod tests {
 
         let report = get_savings_report(&db, None).unwrap();
         assert_eq!(report.ops, 1);
-        // rlm_total = 80 + 3 + 30 = 113
-        assert_eq!(report.rlm_total, 113);
-        // alt_total = 165 + 1500 + 90 = 1755
-        assert_eq!(report.alt_total, 1755);
-        assert_eq!(report.total_saved, 1642);
+        // rlm_total = 50 + 3 + 30 = 83
+        assert_eq!(report.rlm_total, 83);
+        // alt_total = 75 + 1500 + 90 = 1665
+        assert_eq!(report.alt_total, 1665);
+        assert_eq!(report.total_saved, 1582);
         assert!(report.total_pct > 90.0);
+        assert_eq!(report.input_saved, 25); // 75 - 50
         assert_eq!(report.result_saved, 1497); // 1500 - 3
         assert_eq!(report.calls_saved, 2); // 3 - 1
 
         let cmd = &report.by_cmd[0];
         assert_eq!(cmd.alt_calls, CC_CALLS_REPLACE);
-        assert_eq!(cmd.rlm_total, 113);
-        assert_eq!(cmd.alt_total, 1755);
+        assert_eq!(cmd.rlm_total, 83);
+        assert_eq!(cmd.alt_total, 1665);
     }
 
     #[test]
