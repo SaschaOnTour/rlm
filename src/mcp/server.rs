@@ -133,7 +133,13 @@ impl RlmServer {
     async fn insert(&self, params: Parameters<InsertParams>) -> Result<CallToolResult, McpError> {
         let db = self.try_open_db();
         let p = &params.0;
-        tool_handlers::handle_insert(db.as_ref(), &p.path, &p.position, &p.code, &self.project_root)
+        tool_handlers::handle_insert(
+            db.as_ref(),
+            &p.path,
+            &p.position,
+            &p.code,
+            &self.project_root,
+        )
     }
 
     #[tool(
