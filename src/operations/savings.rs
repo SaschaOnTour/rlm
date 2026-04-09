@@ -218,7 +218,13 @@ pub fn alternative_insert_entry(
     new_code_len: usize,
     rlm_result_len: usize,
 ) -> Result<SavingsEntry> {
-    let file_tokens = alternative_single_file(db, file_path)?;
+    // DB has post-edit size after reindex; CC's Read sees the pre-edit file.
+    let post_edit_bytes = db
+        .get_file_by_path(file_path)?
+        .map(|f| f.size_bytes)
+        .unwrap_or(0);
+    let pre_edit_bytes = post_edit_bytes.saturating_sub(new_code_len as u64);
+    let file_tokens = estimate_tokens_from_bytes(pre_edit_bytes);
     let line_overhead = file_tokens / LINE_OVERHEAD_DIVISOR;
     let new_tokens = estimate_tokens(new_code_len);
 
@@ -378,10 +384,14 @@ fn savings_pct(saved: u64, alternative: u64) -> f64 {
 /// Derives aggregate totals from the per-command breakdown (single DB query).
 pub fn get_savings_report(db: &Database, since: Option<&str>) -> Result<SavingsReport> {
     let by_cmd_raw = db.get_savings_by_command(since)?;
-    // Compute input_saved directly from raw query data (before consuming rows).
+    // Compute input/call savings directly from raw query data (before consuming rows).
     let input_saved: u64 = by_cmd_raw
         .iter()
         .map(|r| r.alt_input_tokens.saturating_sub(r.rlm_input_tokens))
+        .sum();
+    let calls_saved: u64 = by_cmd_raw
+        .iter()
+        .map(|r| r.alt_calls.saturating_sub(r.rlm_calls))
         .sum();
     let by_cmd: Vec<CommandSavings> = by_cmd_raw
         .into_iter()
@@ -412,10 +422,6 @@ pub fn get_savings_report(db: &Database, since: Option<&str>) -> Result<SavingsR
     let alt_total: u64 = by_cmd.iter().map(|c| c.alt_total).sum();
     let total_saved = alt_total.saturating_sub(rlm_total);
     let result_saved = saved; // output-only savings = result savings
-    let calls_saved: u64 = by_cmd
-        .iter()
-        .map(|c| c.alt_calls.saturating_sub(c.ops)) // alt_calls - rlm_calls (rlm_calls = ops, since 1 call per op)
-        .sum();
 
     Ok(SavingsReport {
         ops,
@@ -476,7 +482,7 @@ mod tests {
     const V2_ALT_INPUT_REPLACE: u64 = 75; // ceil(100/4) + ceil(200/4) = old_tokens + new_tokens
     const V2_ALT_OUTPUT_REPLACE: u64 = 1472; // pre-edit: (4000+100-200)/4=975, overhead=97, 200+975+97+200
     const V2_ALT_INPUT_INSERT: u64 = 50; // ceil(200/4) = new_tokens only
-    const V2_ALT_OUTPUT_INSERT: u64 = 1300;
+    const V2_ALT_OUTPUT_INSERT: u64 = 1245; // pre-edit: (4000-200)/4=950, overhead=95, 950+95+200
     const LEGACY_OUTPUT: u64 = 50;
     const LEGACY_ALT: u64 = 2000;
     const LEGACY_FILES: u64 = 10;
