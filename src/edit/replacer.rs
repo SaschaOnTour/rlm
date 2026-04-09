@@ -101,7 +101,7 @@ pub fn preview_replace(
 }
 
 /// A diff showing what would change.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ReplaceDiff {
     pub file: String,
     pub symbol: String,

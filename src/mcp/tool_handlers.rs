@@ -7,7 +7,6 @@
 
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
-use serde::Serialize;
 
 use crate::config::Config;
 use crate::db::Database;
@@ -22,6 +21,28 @@ use crate::search::tree;
 
 use super::server::RlmServer;
 use super::tools::ReadParams;
+
+/// Build the JSON response for a successful write operation, auto-reindexing the file.
+///
+/// Attempts to reindex the modified file so refs/context/search stay up-to-date.
+/// Returns `{"ok":true,"reindexed":true}` on success, or `{"ok":true,"reindexed":false,"hint":"..."}` if reindex fails.
+fn write_result_with_reindex(
+    db: &Database,
+    project_root: &std::path::Path,
+    rel_path: &str,
+) -> String {
+    let config = crate::config::Config::new(project_root);
+    match indexer::reindex_single_file(db, &config, rel_path) {
+        Ok((chunks, refs)) => {
+            serde_json::json!({"ok": true, "reindexed": true, "chunks": chunks, "refs": refs})
+                .to_string()
+        }
+        Err(e) => {
+            serde_json::json!({"ok": true, "reindexed": false, "hint": format!("reindex failed: {e}")})
+                .to_string()
+        }
+    }
+}
 
 /// Resolve the index config, validating that any custom path is within project_root.
 fn resolve_index_config(
@@ -109,14 +130,12 @@ fn filter_chunks_by_path<'a>(
     chunks: &'a [crate::models::chunk::Chunk],
     path: &str,
 ) -> Vec<&'a crate::models::chunk::Chunk> {
-    let files = match db.get_all_files() {
-        Ok(f) => f,
-        Err(_) => return Vec::new(),
+    // Single O(1) lookup instead of loading all files and scanning O(files × chunks)
+    let file_id = match db.get_file_by_path(path) {
+        Ok(Some(f)) => f.id,
+        _ => return Vec::new(),
     };
-    chunks
-        .iter()
-        .filter(|c| files.iter().any(|f| f.id == c.file_id && f.path == path))
-        .collect()
+    chunks.iter().filter(|c| c.file_id == file_id).collect()
 }
 
 /// Resolve which chunks to return and build the result (integration: calls only).
@@ -224,29 +243,17 @@ pub fn handle_replace(
 ) -> Result<CallToolResult, McpError> {
     if params.preview.unwrap_or(false) {
         match replacer::preview_replace(db, &params.path, &params.symbol, &params.code) {
-            Ok(diff) => {
-                #[derive(Serialize)]
-                struct Out {
-                    file: String,
-                    symbol: String,
-                    old_lines: (u32, u32),
-                    old_code: String,
-                    new_code: String,
-                }
-                Ok(RlmServer::success_text(RlmServer::to_json(&Out {
-                    file: diff.file,
-                    symbol: diff.symbol,
-                    old_lines: (diff.start_line, diff.end_line),
-                    old_code: diff.old_code,
-                    new_code: diff.new_code,
-                })))
-            }
+            Ok(diff) => Ok(RlmServer::success_text(RlmServer::to_json(&diff))),
             Err(e) => Ok(RlmServer::error_text(e.to_string())),
         }
     } else {
         match replacer::replace_symbol(db, &params.path, &params.symbol, &params.code, project_root)
         {
-            Ok(_) => Ok(RlmServer::success_text("{\"ok\":true}".to_string())),
+            Ok(_) => Ok(RlmServer::success_text(write_result_with_reindex(
+                db,
+                project_root,
+                &params.path,
+            ))),
             Err(e) => Ok(RlmServer::error_text(e.to_string())),
         }
     }
@@ -255,6 +262,7 @@ pub fn handle_replace(
 /// Handle the `insert` tool: insert code at a specified position.
 // qual:api
 pub fn handle_insert(
+    db: &Database,
     path: &str,
     position: &InsertPosition,
     code: &str,
@@ -262,7 +270,11 @@ pub fn handle_insert(
 ) -> Result<CallToolResult, McpError> {
     let guard = SyntaxGuard::new();
     match inserter::insert_code(project_root, path, position, code, &guard) {
-        Ok(_) => Ok(RlmServer::success_text("{\"ok\":true}".to_string())),
+        Ok(_) => Ok(RlmServer::success_text(write_result_with_reindex(
+            db,
+            project_root,
+            path,
+        ))),
         Err(e) => Ok(RlmServer::error_text(e.to_string())),
     }
 }
@@ -298,7 +310,17 @@ mod tests {
         let file_path = dir.path().join("test.rs");
         std::fs::write(&file_path, "fn main() {}\n").unwrap();
 
-        let result = handle_insert("test.rs", &InsertPosition::Top, "// header\n", dir.path());
+        let config = crate::config::Config::new(dir.path());
+        config.ensure_rlm_dir().unwrap();
+        let db = Database::open(&config.db_path).unwrap();
+
+        let result = handle_insert(
+            &db,
+            "test.rs",
+            &InsertPosition::Top,
+            "// header\n",
+            dir.path(),
+        );
         assert!(
             result.is_ok(),
             "insert should succeed with relative path + project_root"
@@ -314,8 +336,12 @@ mod tests {
     #[test]
     fn insert_with_nonexistent_relative_path_returns_error() {
         let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::Config::new(dir.path());
+        config.ensure_rlm_dir().unwrap();
+        let db = Database::open(&config.db_path).unwrap();
 
         let result = handle_insert(
+            &db,
             "nonexistent.rs",
             &InsertPosition::Top,
             "// hi\n",
