@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-index the modified file. Response includes `{reindexed: true, chunks: N, refs: N}`
 - **Shared index pipeline**: Extracted `index_source()` used by both bulk indexing and
   single-file reindex (DRY)
-- **ReplaceDiff serializable**: `ReplaceDiff` derives `Serialize` directly — eliminated
+- **ReplaceDiff serializable**: `ReplaceDiff` implements `Serialize` manually (backward-compatible `old_lines` format) — eliminated
   duplicate `DiffOutput`/`Out` structs in CLI and MCP handlers
 - **Indexer module split**: `indexer.rs` split into `indexer/mod.rs` + `file_processing.rs`
   + `db_insert.rs` (SRP)
