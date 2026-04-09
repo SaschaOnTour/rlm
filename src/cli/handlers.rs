@@ -5,7 +5,7 @@
 
 use crate::cli::helpers::{
     cmd_single_file_op, emit_read_symbol, format_chunks_json, get_config, get_db, map_err,
-    parse_strategy, print_json, CmdResult,
+    parse_strategy, print_json, print_write_result, CmdResult,
 };
 use crate::cli::output;
 use crate::edit::inserter::InsertPosition;
@@ -152,8 +152,7 @@ pub fn cmd_replace(path: &str, symbol: &str, code: &str, preview: bool) -> CmdRe
         print_json(&output::format_json(&diff));
     } else {
         replacer::replace_symbol(&db, path, symbol, code, &config.project_root).map_err(map_err)?;
-        let _ = crate::indexer::reindex_single_file(&db, &config, path);
-        println!("{{\"ok\":true}}");
+        print_write_result(&db, &config, path);
     }
     Ok(())
 }
@@ -163,8 +162,7 @@ pub fn cmd_insert(path: &str, code: &str, position: &InsertPosition) -> CmdResul
     let db = get_db(&config)?;
     let guard = SyntaxGuard::new();
     inserter::insert_code(&config.project_root, path, position, code, &guard).map_err(map_err)?;
-    let _ = crate::indexer::reindex_single_file(&db, &config, path);
-    println!("{{\"ok\":true}}");
+    print_write_result(&db, &config, path);
     Ok(())
 }
 

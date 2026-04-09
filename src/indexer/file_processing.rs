@@ -4,7 +4,7 @@ use crate::db::Database;
 use crate::ingest::dispatcher::Dispatcher;
 use crate::ingest::scanner::SkipReason;
 
-/// Read file bytes from disk, returning `None` (with skip reason) on failure.
+/// Read file bytes from disk, returning `SkipReason` on failure.
 pub(super) fn read_file_source(path: &std::path::Path) -> std::result::Result<String, SkipReason> {
     let bytes = std::fs::read(path).map_err(|_| SkipReason::IoError)?;
     String::from_utf8(bytes).map_err(|_| SkipReason::NonUtf8)

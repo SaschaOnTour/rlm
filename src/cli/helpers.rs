@@ -48,6 +48,25 @@ pub fn format_chunks_json(
     }
 }
 
+/// Print a write result with reindex status, matching MCP output format.
+pub fn print_write_result(db: &Database, config: &Config, rel_path: &str) {
+    match indexer::reindex_single_file(db, config, rel_path) {
+        Ok((chunks, refs)) => {
+            print_json(
+                &serde_json::json!({"ok": true, "reindexed": true, "chunks": chunks, "refs": refs})
+                    .to_string(),
+            );
+        }
+        Err(e) => {
+            eprintln!("warning: reindex failed: {e}");
+            print_json(
+                &serde_json::json!({"ok": true, "reindexed": false, "hint": format!("reindex failed: {e}")})
+                    .to_string(),
+            );
+        }
+    }
+}
+
 /// Emit a read_symbol result and record savings (integration: calls only).
 pub fn emit_read_symbol(db: &Database, path: &str, json: &str) {
     let out_tokens = estimate_tokens(json.len());

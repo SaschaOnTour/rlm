@@ -101,7 +101,7 @@ pub fn preview_replace(
 }
 
 /// A diff showing what would change.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone)]
 pub struct ReplaceDiff {
     pub file: String,
     pub symbol: String,
@@ -109,6 +109,23 @@ pub struct ReplaceDiff {
     pub new_code: String,
     pub start_line: u32,
     pub end_line: u32,
+}
+
+/// Serialize with backward-compatible `old_lines: [start, end]` instead of separate fields.
+impl serde::Serialize for ReplaceDiff {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("ReplaceDiff", 5)?;
+        state.serialize_field("file", &self.file)?;
+        state.serialize_field("symbol", &self.symbol)?;
+        state.serialize_field("old_code", &self.old_code)?;
+        state.serialize_field("new_code", &self.new_code)?;
+        state.serialize_field("old_lines", &[self.start_line, self.end_line])?;
+        state.end()
+    }
 }
 
 #[cfg(test)]

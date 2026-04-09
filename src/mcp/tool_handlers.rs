@@ -262,7 +262,7 @@ pub fn handle_replace(
 /// Handle the `insert` tool: insert code at a specified position.
 // qual:api
 pub fn handle_insert(
-    db: &Database,
+    db: Option<&Database>,
     path: &str,
     position: &InsertPosition,
     code: &str,
@@ -270,11 +270,17 @@ pub fn handle_insert(
 ) -> Result<CallToolResult, McpError> {
     let guard = SyntaxGuard::new();
     match inserter::insert_code(project_root, path, position, code, &guard) {
-        Ok(_) => Ok(RlmServer::success_text(write_result_with_reindex(
-            db,
-            project_root,
-            path,
-        ))),
+        Ok(_) => match db {
+            Some(db) => Ok(RlmServer::success_text(write_result_with_reindex(
+                db,
+                project_root,
+                path,
+            ))),
+            None => Ok(RlmServer::success_text(
+                serde_json::json!({"ok": true, "reindexed": false, "hint": "no index; call 'index' to enable auto-reindex"})
+                    .to_string(),
+            )),
+        },
         Err(e) => Ok(RlmServer::error_text(e.to_string())),
     }
 }
@@ -315,7 +321,7 @@ mod tests {
         let db = Database::open(&config.db_path).unwrap();
 
         let result = handle_insert(
-            &db,
+            Some(&db),
             "test.rs",
             &InsertPosition::Top,
             "// header\n",
@@ -341,7 +347,7 @@ mod tests {
         let db = Database::open(&config.db_path).unwrap();
 
         let result = handle_insert(
-            &db,
+            Some(&db),
             "nonexistent.rs",
             &InsertPosition::Top,
             "// hi\n",
