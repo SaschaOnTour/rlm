@@ -5,6 +5,7 @@ mod savings;
 mod search;
 mod stats;
 
+pub use savings::SavingsQueryRow;
 pub use stats::{IndexStats, VerifyReport};
 
 #[cfg(test)]

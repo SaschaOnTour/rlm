@@ -4,8 +4,24 @@ use crate::error::Result;
 
 use super::super::Database;
 
+/// Per-call overhead in tokens — must match `operations::savings::CALL_OVERHEAD`.
+const CALL_OVERHEAD: u64 = 30;
+
+/// Aggregate savings row returned by `get_savings_by_command`.
+pub struct SavingsQueryRow {
+    pub command: String,
+    pub ops: u64,
+    pub output_tokens: u64,
+    pub alt_tokens: u64,
+    pub rlm_input_tokens: u64,
+    pub alt_input_tokens: u64,
+    pub rlm_calls: u64,
+    pub alt_calls: u64,
+}
+
 impl Database {
-    /// Record a savings entry (best-effort).
+    /// Record a savings entry (best-effort, legacy — new code should use `record_savings_v2`).
+    // qual:api
     pub fn record_savings(
         &self,
         command: &str,
@@ -20,23 +36,63 @@ impl Database {
         Ok(())
     }
 
-    /// Get savings breakdown by command, optionally filtered by date.
-    pub fn get_savings_by_command(
+    /// Record a full V2 savings entry with input tokens and call counts.
+    #[allow(clippy::too_many_arguments)]
+    // qual:allow(srp_params) reason: "maps directly to the 8 savings table columns"
+    pub fn record_savings_v2(
         &self,
-        since: Option<&str>,
-    ) -> Result<Vec<(String, u64, u64, u64)>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT command, COUNT(*), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(alternative_tokens), 0) \
-             FROM savings WHERE (?1 IS NULL OR created_at >= ?1) \
-             GROUP BY command ORDER BY SUM(alternative_tokens) - SUM(output_tokens) DESC",
+        command: &str,
+        output_tokens: u64,
+        alternative_tokens: u64,
+        files_touched: u64,
+        rlm_input_tokens: u64,
+        alt_input_tokens: u64,
+        rlm_calls: u64,
+        alt_calls: u64,
+    ) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO savings (command, output_tokens, alternative_tokens, files_touched, \
+             rlm_input_tokens, alt_input_tokens, rlm_calls, alt_calls) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                command,
+                output_tokens as i64,
+                alternative_tokens as i64,
+                files_touched as i64,
+                rlm_input_tokens as i64,
+                alt_input_tokens as i64,
+                rlm_calls as i64,
+                alt_calls as i64
+            ],
         )?;
+        Ok(())
+    }
+
+    /// Get savings breakdown by command, optionally filtered by date.
+    pub fn get_savings_by_command(&self, since: Option<&str>) -> Result<Vec<SavingsQueryRow>> {
+        let sql = format!(
+            "SELECT command, COUNT(*), \
+             COALESCE(SUM(output_tokens), 0), COALESCE(SUM(alternative_tokens), 0), \
+             COALESCE(SUM(rlm_input_tokens), 0), COALESCE(SUM(alt_input_tokens), 0), \
+             COALESCE(SUM(rlm_calls), 0), COALESCE(SUM(alt_calls), 0) \
+             FROM savings WHERE (?1 IS NULL OR created_at >= ?1) \
+             GROUP BY command ORDER BY \
+             (SUM(alternative_tokens) + SUM(alt_input_tokens) + SUM(alt_calls) * {oh}) - \
+             (SUM(output_tokens) + SUM(rlm_input_tokens) + SUM(rlm_calls) * {oh}) DESC",
+            oh = CALL_OVERHEAD,
+        );
+        let mut stmt = self.conn().prepare(&sql)?;
         let rows = stmt.query_map(params![since], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)? as u64,
-                row.get::<_, i64>(2)? as u64,
-                row.get::<_, i64>(3)? as u64,
-            ))
+            Ok(SavingsQueryRow {
+                command: row.get(0)?,
+                ops: row.get::<_, i64>(1)? as u64,
+                output_tokens: row.get::<_, i64>(2)? as u64,
+                alt_tokens: row.get::<_, i64>(3)? as u64,
+                rlm_input_tokens: row.get::<_, i64>(4)? as u64,
+                alt_input_tokens: row.get::<_, i64>(5)? as u64,
+                rlm_calls: row.get::<_, i64>(6)? as u64,
+                alt_calls: row.get::<_, i64>(7)? as u64,
+            })
         })?;
         let mut results = Vec::new();
         for r in rows {

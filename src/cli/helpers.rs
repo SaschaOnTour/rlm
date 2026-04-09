@@ -48,30 +48,29 @@ pub fn format_chunks_json(
     }
 }
 
-/// Print a write result with reindex status, matching MCP output format.
-pub fn print_write_result(db: &Database, config: &Config, rel_path: &str) {
-    match indexer::reindex_single_file(db, config, rel_path) {
+/// Build and print a write result with reindex status, matching MCP output format.
+///
+/// Returns the result JSON string so callers can use its length for savings.
+pub fn print_write_result(db: &Database, config: &Config, rel_path: &str) -> String {
+    let json = match indexer::reindex_single_file(db, config, rel_path) {
         Ok((chunks, refs)) => {
-            print_json(
-                &serde_json::json!({"ok": true, "reindexed": true, "chunks": chunks, "refs": refs})
-                    .to_string(),
-            );
+            serde_json::json!({"ok": true, "reindexed": true, "chunks": chunks, "refs": refs})
+                .to_string()
         }
         Err(e) => {
             eprintln!("warning: reindex failed: {e}");
-            print_json(
-                &serde_json::json!({"ok": true, "reindexed": false, "hint": format!("reindex failed: {e}")})
-                    .to_string(),
-            );
+            serde_json::json!({"ok": true, "reindexed": false, "hint": format!("reindex failed: {e}")})
+                .to_string()
         }
-    }
+    };
+    print_json(&json);
+    json
 }
 
 /// Emit a read_symbol result and record savings (integration: calls only).
 pub fn emit_read_symbol(db: &Database, path: &str, json: &str) {
     let out_tokens = estimate_tokens(json.len());
-    let alt_tokens = savings::alternative_single_file(db, path).unwrap_or(out_tokens);
-    savings::record(db, "read_symbol", out_tokens, alt_tokens, 1);
+    savings::record_read_symbol(db, out_tokens, path);
     print_json(json);
 }
 

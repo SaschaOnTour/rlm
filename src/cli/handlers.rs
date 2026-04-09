@@ -151,8 +151,18 @@ pub fn cmd_replace(path: &str, symbol: &str, code: &str, preview: bool) -> CmdRe
         let diff = replacer::preview_replace(&db, path, symbol, code).map_err(map_err)?;
         print_json(&output::format_json(&diff));
     } else {
-        replacer::replace_symbol(&db, path, symbol, code, &config.project_root).map_err(map_err)?;
-        print_write_result(&db, &config, path);
+        let outcome = replacer::replace_symbol(&db, path, symbol, code, &config.project_root)
+            .map_err(map_err)?;
+        let result_json = print_write_result(&db, &config, path);
+        if let Ok(entry) = savings::alternative_replace_entry(
+            &db,
+            path,
+            outcome.old_code_len,
+            code.len(),
+            result_json.len(),
+        ) {
+            savings::record_v2(&db, &entry);
+        }
     }
     Ok(())
 }
@@ -162,7 +172,10 @@ pub fn cmd_insert(path: &str, code: &str, position: &InsertPosition) -> CmdResul
     let db = get_db(&config)?;
     let guard = SyntaxGuard::new();
     inserter::insert_code(&config.project_root, path, position, code, &guard).map_err(map_err)?;
-    print_write_result(&db, &config, path);
+    let result_json = print_write_result(&db, &config, path);
+    if let Ok(entry) = savings::alternative_insert_entry(&db, path, code.len(), result_json.len()) {
+        savings::record_v2(&db, &entry);
+    }
     Ok(())
 }
 

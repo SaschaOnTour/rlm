@@ -2,7 +2,7 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::db::schema::CREATE_SCHEMA;
+use crate::db::schema::{CREATE_SCHEMA, MIGRATE_SAVINGS_V2};
 use crate::error::Result;
 
 /// Database wrapper for the rlm index.
@@ -37,7 +37,32 @@ impl Database {
             )?;
         }
         conn.execute_batch(CREATE_SCHEMA)?;
+        Self::migrate_savings_v2(&conn);
         Ok(Self { conn })
+    }
+
+    /// Apply savings V2 migration (best-effort, idempotent).
+    ///
+    /// Probes for the last added column to avoid 4 failing ALTERs on every open.
+    /// Checks `alt_calls` (last in migration order) so partial migrations are retried.
+    fn migrate_savings_v2(conn: &Connection) {
+        if conn
+            .prepare("SELECT alt_calls FROM savings LIMIT 0")
+            .is_ok()
+        {
+            return;
+        }
+        for sql in MIGRATE_SAVINGS_V2.split(';') {
+            let trimmed = sql.trim();
+            if !trimmed.is_empty() {
+                if let Err(e) = conn.execute(trimmed, []) {
+                    let msg = e.to_string();
+                    if !msg.contains("duplicate column") {
+                        eprintln!("warning: savings migration failed: {msg}");
+                    }
+                }
+            }
+        }
     }
 
     /// Check if the database needs schema migration (missing new columns).
