@@ -45,11 +45,10 @@ pub struct SymbolDiffResult {
 /// - The file is not in the index, OR
 /// - The file's hash differs from the indexed hash
 pub fn diff_file(db: &Database, path: &str, project_root: &Path) -> Result<FileDiffResult> {
-    crate::error::validate_relative_path(path, project_root)?;
+    let full_path = crate::error::validate_relative_path(path, project_root)?;
 
     let file = db.get_file_by_path(path)?;
 
-    let full_path = project_root.join(path);
     let current = std::fs::read_to_string(&full_path)?;
     let current_hash = hasher::hash_bytes(current.as_bytes());
 
@@ -71,14 +70,13 @@ pub fn diff_symbol(
     symbol: &str,
     project_root: &Path,
 ) -> Result<SymbolDiffResult> {
-    crate::error::validate_relative_path(path, project_root)?;
+    let full_path = crate::error::validate_relative_path(path, project_root)?;
 
     let chunks = db.get_chunks_by_ident(symbol)?;
     let chunk = chunks
         .first()
         .ok_or_else(|| crate::error::RlmError::Other(format!("symbol not found: {symbol}")))?;
 
-    let full_path = project_root.join(path);
     let current = std::fs::read_to_string(&full_path)?;
 
     // Extract current content at the same line range

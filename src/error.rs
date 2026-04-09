@@ -53,8 +53,9 @@ pub type Result<T> = std::result::Result<T, RlmError>;
 /// Validate that a relative path is safe to join with a project root.
 ///
 /// Rejects absolute paths, `..` components, prefix/root components (Windows drive letters),
-/// and paths that escape the project root via symlinks. Fails closed: if canonicalization
-/// fails, the path is rejected.
+/// and paths that escape the project root via symlinks. Canonicalization failures on
+/// `project_root` propagate as I/O errors; failures on the target path are treated as
+/// path traversal rejections.
 pub fn validate_relative_path(
     rel_path: &str,
     project_root: &std::path::Path,

@@ -43,7 +43,7 @@ fn resolve_index_config(
                     None,
                 ));
             }
-            Ok(Config::new(p))
+            Ok(Config::new(&canonical))
         }
         None => Ok(Config::new(project_root)),
     }
