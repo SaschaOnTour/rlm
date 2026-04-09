@@ -4,6 +4,9 @@ use crate::error::Result;
 
 use super::super::Database;
 
+/// Per-call overhead in tokens — must match `operations::savings::CALL_OVERHEAD`.
+const CALL_OVERHEAD: u64 = 30;
+
 /// Aggregate savings row returned by `get_savings_by_command`.
 pub struct SavingsQueryRow {
     pub command: String,
@@ -67,16 +70,18 @@ impl Database {
 
     /// Get savings breakdown by command, optionally filtered by date.
     pub fn get_savings_by_command(&self, since: Option<&str>) -> Result<Vec<SavingsQueryRow>> {
-        let mut stmt = self.conn().prepare(
+        let sql = format!(
             "SELECT command, COUNT(*), \
              COALESCE(SUM(output_tokens), 0), COALESCE(SUM(alternative_tokens), 0), \
              COALESCE(SUM(rlm_input_tokens), 0), COALESCE(SUM(alt_input_tokens), 0), \
              COALESCE(SUM(rlm_calls), 0), COALESCE(SUM(alt_calls), 0) \
              FROM savings WHERE (?1 IS NULL OR created_at >= ?1) \
              GROUP BY command ORDER BY \
-             (SUM(alternative_tokens) + SUM(alt_input_tokens) + SUM(alt_calls) * 30) - \
-             (SUM(output_tokens) + SUM(rlm_input_tokens) + SUM(rlm_calls) * 30) DESC",
-        )?;
+             (SUM(alternative_tokens) + SUM(alt_input_tokens) + SUM(alt_calls) * {oh}) - \
+             (SUM(output_tokens) + SUM(rlm_input_tokens) + SUM(rlm_calls) * {oh}) DESC",
+            oh = CALL_OVERHEAD,
+        );
+        let mut stmt = self.conn().prepare(&sql)?;
         let rows = stmt.query_map(params![since], |row| {
             Ok(SavingsQueryRow {
                 command: row.get(0)?,

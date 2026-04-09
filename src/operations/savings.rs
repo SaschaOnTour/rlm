@@ -340,8 +340,22 @@ pub fn record_file_op<T: serde::Serialize>(
     result: &T,
     path: &str,
 ) -> String {
-    let alt_tokens = alternative_single_file(db, path).unwrap_or(0);
-    serialize_and_record_entry(db, command, result, alt_tokens, 1, 1)
+    let json = serde_json::to_string(result).unwrap_or_default();
+    let out_tokens = estimate_tokens(json.len());
+    // Fall back to out_tokens if DB lookup fails (conservative: CC ≥ rlm output).
+    let alt_tokens = alternative_single_file(db, path).unwrap_or(out_tokens);
+    let entry = SavingsEntry {
+        command: command.to_string(),
+        rlm_input: 0,
+        rlm_output: out_tokens,
+        rlm_calls: 1,
+        alt_input: 0,
+        alt_output: alt_tokens,
+        alt_calls: 1,
+        files_touched: 1,
+    };
+    record_v2(db, &entry);
+    json
 }
 
 /// Record savings for a symbol-scoped operation and return the serialized JSON.
