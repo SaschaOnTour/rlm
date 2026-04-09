@@ -291,7 +291,12 @@ pub fn record(
 
 /// Record savings for a read_symbol operation (CC equivalent: Grep + Read, 2 calls).
 pub fn record_read_symbol(db: &Database, out_tokens: u64, path: &str) {
-    let file_tokens = alternative_single_file(db, path).unwrap_or(out_tokens);
+    let file_tokens = alternative_single_file(db, path).unwrap_or(0);
+    let file_tokens = if file_tokens > 0 {
+        file_tokens
+    } else {
+        out_tokens
+    };
     let entry = SavingsEntry {
         command: "read_symbol".to_string(),
         rlm_input: 0, // negligible path/symbol params
@@ -342,8 +347,13 @@ pub fn record_file_op<T: serde::Serialize>(
 ) -> String {
     let json = serde_json::to_string(result).unwrap_or_default();
     let out_tokens = estimate_tokens(json.len());
-    // Fall back to out_tokens if DB lookup fails (conservative: CC ≥ rlm output).
-    let alt_tokens = alternative_single_file(db, path).unwrap_or(out_tokens);
+    // Fall back to out_tokens if file missing or DB error (conservative: CC ≥ rlm output).
+    let alt_tokens = alternative_single_file(db, path).unwrap_or(0);
+    let alt_tokens = if alt_tokens > 0 {
+        alt_tokens
+    } else {
+        out_tokens
+    };
     let entry = SavingsEntry {
         command: command.to_string(),
         rlm_input: 0,
