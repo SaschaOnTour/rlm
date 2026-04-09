@@ -39,6 +39,11 @@ pub fn handle_partition(
         partition::Strategy::Semantic
     } else if let Some(rest) = strategy_str.strip_prefix("uniform:") {
         match rest.parse::<usize>() {
+            Ok(0) => {
+                return Ok(RlmServer::error_text(
+                    "uniform chunk size must be >= 1".into(),
+                ))
+            }
             Ok(n) => partition::Strategy::Uniform(n),
             Err(e) => return Ok(RlmServer::error_text(format!("invalid chunk size: {e}"))),
         }

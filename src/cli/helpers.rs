@@ -78,6 +78,9 @@ pub fn parse_strategy(
         Ok(crate::rlm::partition::Strategy::Semantic)
     } else if let Some(rest) = s.strip_prefix("uniform:") {
         let n: usize = rest.parse().map_err(map_err)?;
+        if n == 0 {
+            return Err(map_err("uniform chunk size must be >= 1"));
+        }
         Ok(crate::rlm::partition::Strategy::Uniform(n))
     } else if let Some(rest) = s.strip_prefix("keyword:") {
         Ok(crate::rlm::partition::Strategy::Keyword(rest.to_string()))

@@ -48,7 +48,8 @@ pub fn validate_and_write(
     // Atomic write: write to temp file, then rename
     let parent = path.parent().unwrap_or(std::path::Path::new("."));
     let temp_path = parent.join(format!(
-        ".rlm_tmp_{}",
+        ".rlm_tmp_{}_{}",
+        std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

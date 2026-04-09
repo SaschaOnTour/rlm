@@ -23,6 +23,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SyntaxGuard` deferred until after file validation
 - TempDir properly managed in tests (no more `.keep()` leak)
 
+### Security
+
+- **Path traversal validation**: `validate_relative_path()` rejects absolute paths,
+  `..` traversal, Windows prefix/drive components, and symlink escapes for all file
+  operations (insert, replace, partition, diff, index). Returns canonical paths to
+  minimize TOCTOU gap.
+- **Partition path traversal**: `partition_file` now validates paths before disk read
+- **Index path restriction**: MCP `index` tool now rejects paths outside project root
+- **Diff validation order**: `diff_file`/`diff_symbol` now validate and query DB
+  before reading from disk
+- **DoS prevention**: `uniform:0` partition strategy now rejected (was panic)
+- **PDF u32 overflow**: byte offset accumulator changed to u64 with guard
+- **Temp file uniqueness**: atomic writes now include process ID in temp file name
+- **Quality log path**: custom log paths with `..` or absolute paths rejected
+
+### Changed
+
+- Migrated `serde_yaml` → `serde_yaml_ng` 0.10 (RUSTSEC-2025-0068 — deprecated crate)
+- Added StepSecurity Harden Runner to all CI/release workflow jobs
+- Scoped GitHub Actions permissions: only release job has `contents: write`
+
 ## [0.2.0] - 2026-04-08
 
 ### Added

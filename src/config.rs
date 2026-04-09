@@ -162,10 +162,16 @@ impl Config {
     }
 
     /// Get the effective quality log path.
+    ///
+    /// Rejects custom paths that are absolute or contain `..` to prevent
+    /// writing outside the `.rlm/` directory.
     #[must_use]
     pub fn get_quality_log_path(&self) -> PathBuf {
         if let Some(custom) = &self.settings.quality.log_file {
-            self.rlm_dir.join(custom)
+            match crate::error::validate_relative_path(custom, &self.rlm_dir) {
+                Ok(path) => path,
+                Err(_) => self.quality_log_path.clone(), // fallback to default
+            }
         } else {
             self.quality_log_path.clone()
         }
@@ -350,9 +356,16 @@ mod tests {
         // Default path
         assert_eq!(cfg.get_quality_log_path(), cfg.quality_log_path);
 
-        // Custom path
+        // Ensure .rlm/ exists so validate_relative_path can canonicalize
+        cfg.ensure_rlm_dir().unwrap();
+
+        // Custom path — validate_relative_path returns canonical form
         cfg.settings.quality.log_file = Some("custom-quality.log".to_string());
-        let expected = cfg.rlm_dir.join("custom-quality.log");
+        let expected = cfg
+            .rlm_dir
+            .canonicalize()
+            .unwrap()
+            .join("custom-quality.log");
         assert_eq!(cfg.get_quality_log_path(), expected);
     }
 

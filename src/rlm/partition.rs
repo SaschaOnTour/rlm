@@ -71,9 +71,15 @@ pub fn partition_file(
     strategy: &Strategy,
     project_root: &std::path::Path,
 ) -> Result<PartitionResult> {
-    let full_path = project_root.join(file_path);
-    let source = std::fs::read_to_string(&full_path).map_err(|_| RlmError::FileNotFound {
-        path: file_path.into(),
+    let full_path = crate::error::validate_relative_path(file_path, project_root)?;
+    let source = std::fs::read_to_string(&full_path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            RlmError::FileNotFound {
+                path: file_path.into(),
+            }
+        } else {
+            RlmError::from(e)
+        }
     })?;
 
     let partitions = match strategy {
