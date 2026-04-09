@@ -52,11 +52,15 @@ pub type Result<T> = std::result::Result<T, RlmError>;
 
 /// Validate that a relative path is safe to join with a project root.
 ///
-/// Rejects absolute paths, `..` components, and paths that escape the project root.
+/// Rejects absolute paths, `..` components, prefix/root components (Windows drive letters),
+/// and paths that escape the project root via symlinks. Fails closed: if canonicalization
+/// fails, the path is rejected.
 pub fn validate_relative_path(
     rel_path: &str,
     project_root: &std::path::Path,
 ) -> Result<std::path::PathBuf> {
+    use std::path::Component;
+
     let rel = std::path::Path::new(rel_path);
 
     // Reject absolute paths
@@ -66,25 +70,49 @@ pub fn validate_relative_path(
         });
     }
 
-    // Reject .. components
+    // Reject .., prefix (Windows drive), and root components
     for component in rel.components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            return Err(RlmError::PathTraversal {
-                path: rel_path.into(),
-            });
+        match component {
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir => {
+                return Err(RlmError::PathTraversal {
+                    path: rel_path.into(),
+                });
+            }
+            _ => {}
         }
     }
 
-    // Canonicalize and verify the resolved path is under project_root
+    // Canonicalize and verify the resolved path is under project_root.
+    // For paths that do not exist yet, resolve the nearest existing ancestor
+    // so symlink escapes through existing path components are still detected.
+    // Fails closed: if canonicalization fails, reject the path.
     let full_path = project_root.join(rel_path);
-    if let (Ok(canonical_root), Ok(canonical_full)) =
-        (project_root.canonicalize(), full_path.canonicalize())
-    {
-        if !canonical_full.starts_with(&canonical_root) {
-            return Err(RlmError::PathTraversal {
+    let canonical_root = project_root
+        .canonicalize()
+        .map_err(|_| RlmError::PathTraversal {
+            path: rel_path.into(),
+        })?;
+
+    let mut existing_ancestor = full_path.as_path();
+    while !existing_ancestor.exists() {
+        existing_ancestor = existing_ancestor
+            .parent()
+            .ok_or_else(|| RlmError::PathTraversal {
                 path: rel_path.into(),
-            });
-        }
+            })?;
+    }
+
+    let canonical_existing =
+        existing_ancestor
+            .canonicalize()
+            .map_err(|_| RlmError::PathTraversal {
+                path: rel_path.into(),
+            })?;
+
+    if !canonical_existing.starts_with(&canonical_root) {
+        return Err(RlmError::PathTraversal {
+            path: rel_path.into(),
+        });
     }
 
     Ok(full_path)

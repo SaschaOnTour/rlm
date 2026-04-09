@@ -37,10 +37,10 @@ pub fn replace_symbol(
     new_code: &str,
     project_root: &std::path::Path,
 ) -> Result<String> {
-    let chunk = find_symbol_in_file(db, file_path, symbol)?;
-
-    // Validate and resolve relative path against project root for disk I/O
+    // Validate path before any DB or disk operations
     let full_path = crate::error::validate_relative_path(file_path, project_root)?;
+
+    let chunk = find_symbol_in_file(db, file_path, symbol)?;
     let source = std::fs::read_to_string(&full_path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             RlmError::FileNotFound {
@@ -224,6 +224,30 @@ mod tests {
         assert!(
             result.is_err(),
             "should reject same-length different content"
+        );
+    }
+
+    #[test]
+    fn replace_rejects_absolute_path() {
+        let db = Database::open_in_memory().unwrap();
+        let root = std::path::Path::new("/tmp");
+        let result = replace_symbol(&db, "/etc/passwd", "foo", "bar", root);
+        assert!(result.is_err());
+        assert!(
+            format!("{}", result.unwrap_err()).contains("path traversal"),
+            "should reject absolute path"
+        );
+    }
+
+    #[test]
+    fn replace_rejects_parent_traversal() {
+        let db = Database::open_in_memory().unwrap();
+        let root = std::path::Path::new("/tmp");
+        let result = replace_symbol(&db, "../etc/passwd", "foo", "bar", root);
+        assert!(result.is_err());
+        assert!(
+            format!("{}", result.unwrap_err()).contains("path traversal"),
+            "should reject .. traversal"
         );
     }
 }

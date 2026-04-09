@@ -249,4 +249,34 @@ mod tests {
     fn deserialize_position_invalid() {
         assert!(serde_json::from_str::<InsertPosition>("\"invalid\"").is_err());
     }
+
+    #[test]
+    fn insert_rejects_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = SyntaxGuard::new();
+        let result = insert_code(dir.path(), "/etc/passwd", &InsertPosition::Top, "x", &guard);
+        assert!(result.is_err());
+        assert!(
+            format!("{}", result.unwrap_err()).contains("path traversal"),
+            "should reject absolute path"
+        );
+    }
+
+    #[test]
+    fn insert_rejects_parent_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = SyntaxGuard::new();
+        let result = insert_code(
+            dir.path(),
+            "../etc/passwd",
+            &InsertPosition::Top,
+            "x",
+            &guard,
+        );
+        assert!(result.is_err());
+        assert!(
+            format!("{}", result.unwrap_err()).contains("path traversal"),
+            "should reject .. traversal"
+        );
+    }
 }
