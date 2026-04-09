@@ -49,7 +49,9 @@ impl RlmServer {
     }
 
     pub(crate) fn error_text(msg: String) -> CallToolResult {
-        CallToolResult::success(vec![Content::text(format!("{{\"error\":\"{msg}\"}}"))])
+        CallToolResult::error(vec![Content::text(
+            serde_json::json!({"error": msg}).to_string(),
+        )])
     }
 }
 
@@ -140,4 +142,33 @@ pub async fn start_mcp_server() -> crate::error::Result<()> {
         .map_err(|e| crate::error::RlmError::Other(format!("MCP server error: {e}")))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_text_sets_is_error_true() {
+        let result = RlmServer::error_text("something failed".into());
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn success_text_does_not_set_is_error() {
+        let result = RlmServer::success_text("ok".into());
+        assert_ne!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn error_text_contains_message() {
+        let result = RlmServer::error_text("disk full".into());
+        let text = result
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.clone())
+            .unwrap_or_default();
+        assert!(text.contains("disk full"));
+    }
 }

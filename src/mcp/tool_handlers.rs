@@ -184,17 +184,15 @@ pub fn handle_refs(db: &Database, symbol: &str) -> Result<CallToolResult, McpErr
     }
 }
 
-/// Handle the `replace` tool: replace an AST node by symbol name.
+/// Handle the `replace` tool: preview or apply a replacement.
 // qual:api
 pub fn handle_replace(
     db: &Database,
-    path: &str,
-    symbol: &str,
-    code: &str,
-    preview: bool,
+    params: &super::tools::ReplaceParams,
+    project_root: &std::path::Path,
 ) -> Result<CallToolResult, McpError> {
-    if preview {
-        match replacer::preview_replace(db, path, symbol, code) {
+    if params.preview.unwrap_or(false) {
+        match replacer::preview_replace(db, &params.path, &params.symbol, &params.code) {
             Ok(diff) => {
                 #[derive(Serialize)]
                 struct Out {
@@ -215,8 +213,8 @@ pub fn handle_replace(
             Err(e) => Ok(RlmServer::error_text(e.to_string())),
         }
     } else {
-        let guard = SyntaxGuard::new();
-        match replacer::replace_symbol(db, path, symbol, code, &guard) {
+        match replacer::replace_symbol(db, &params.path, &params.symbol, &params.code, project_root)
+        {
             Ok(_) => Ok(RlmServer::success_text("{\"ok\":true}".to_string())),
             Err(e) => Ok(RlmServer::error_text(e.to_string())),
         }
@@ -229,9 +227,10 @@ pub fn handle_insert(
     path: &str,
     position: &InsertPosition,
     code: &str,
+    project_root: &std::path::Path,
 ) -> Result<CallToolResult, McpError> {
     let guard = SyntaxGuard::new();
-    match inserter::insert_code(path, position, code, &guard) {
+    match inserter::insert_code(project_root, path, position, code, &guard) {
         Ok(_) => Ok(RlmServer::success_text("{\"ok\":true}".to_string())),
         Err(e) => Ok(RlmServer::error_text(e.to_string())),
     }
@@ -254,5 +253,44 @@ pub fn handle_files(
     match operations::list_files(project_root, filter) {
         Ok(result) => Ok(RlmServer::success_text(RlmServer::to_json(&result))),
         Err(e) => Ok(RlmServer::error_text(e.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::edit::inserter::InsertPosition;
+
+    #[test]
+    fn insert_with_relative_path_resolves_to_project_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.rs");
+        std::fs::write(&file_path, "fn main() {}\n").unwrap();
+
+        let result = handle_insert("test.rs", &InsertPosition::Top, "// header\n", dir.path());
+        assert!(
+            result.is_ok(),
+            "insert should succeed with relative path + project_root"
+        );
+
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        assert!(
+            content.starts_with("// header"),
+            "file should have inserted content at top"
+        );
+    }
+
+    #[test]
+    fn insert_with_nonexistent_relative_path_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = handle_insert(
+            "nonexistent.rs",
+            &InsertPosition::Top,
+            "// hi\n",
+            dir.path(),
+        );
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(true));
     }
 }

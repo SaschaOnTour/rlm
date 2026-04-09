@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-04-09
+
+### Fixed
+
+- **Replace race condition**: `replace_symbol` now verifies file content matches
+  indexed chunk before overwriting, preventing silent corruption when files change
+  between indexing and replace
+- **Path resolution**: `insert_code` and `replace_symbol` now resolve relative paths
+  against `project_root` internally (both MCP and CLI), eliminating TOCTOU race
+  and lossy path conversion
+- **MCP error signaling**: `error_text()` now uses `CallToolResult::error()` with
+  proper JSON escaping, setting `is_error=true` for correct failure detection
+- Safe byte slicing in replacer (`.get()` instead of direct indexing)
+- `SyntaxGuard` deferred until after file validation
+- TempDir properly managed in tests (no more `.keep()` leak)
+
 ## [0.2.0] - 2026-04-08
 
 ### Added
