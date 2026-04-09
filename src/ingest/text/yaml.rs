@@ -343,10 +343,12 @@ spec:
         );
         // Tagged values
         assert_eq!(
-            yaml_type_name(&Value::Tagged(Box::new(serde_yaml_ng::value::TaggedValue {
-                tag: serde_yaml_ng::value::Tag::new("!custom"),
-                value: Value::Null,
-            }))),
+            yaml_type_name(&Value::Tagged(Box::new(
+                serde_yaml_ng::value::TaggedValue {
+                    tag: serde_yaml_ng::value::Tag::new("!custom"),
+                    value: Value::Null,
+                }
+            ))),
             "tagged"
         );
     }
