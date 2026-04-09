@@ -266,14 +266,14 @@ pub fn record(
 
 /// Record savings for a read_symbol operation (CC equivalent: Grep + Read, 2 calls).
 pub fn record_read_symbol(db: &Database, out_tokens: u64, path: &str) {
-    let alt_tokens = alternative_single_file(db, path).unwrap_or(out_tokens);
+    let file_tokens = alternative_single_file(db, path).unwrap_or(out_tokens);
     let entry = SavingsEntry {
         command: "read_symbol".to_string(),
         rlm_input: 0, // negligible path/symbol params
         rlm_output: out_tokens,
         rlm_calls: 1,
-        alt_input: 0, // negligible path/pattern params
-        alt_output: alt_tokens,
+        alt_input: 0,                             // negligible path/pattern params
+        alt_output: SNIPPET_TOKENS + file_tokens, // Grep result + Read result
         alt_calls: 2,
         files_touched: 1,
     };
@@ -329,13 +329,18 @@ pub fn record_symbol_op<T: serde::Serialize>(
     symbol: &str,
     files_touched: u64,
 ) -> String {
-    let alt_tokens = alternative_symbol_files(db, symbol).unwrap_or(0);
+    let alt_tokens = alternative_symbol_files(db, symbol)
+        .unwrap_or(0)
+        .saturating_add(SNIPPET_TOKENS); // Grep result + Read result
     serialize_and_record_entry(db, command, result, alt_tokens, 2, files_touched)
 }
 
 /// Record savings for a scoped overview operation and return the serialized JSON.
 ///
-/// CC equivalent: Glob (single call returning listing).
+/// CC would need Glob + Read×N files to get the same symbol info. `alt_output`
+/// uses total file content (accurate payload), but `alt_calls` is conservative
+/// at 1 since we don't track file count here. Net effect: call overhead is
+/// undercounted but payload savings are accurate.
 pub fn record_scoped_op<T: serde::Serialize>(
     db: &Database,
     command: &str,

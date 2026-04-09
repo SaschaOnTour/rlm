@@ -43,10 +43,11 @@ impl Database {
 
     /// Apply savings V2 migration (best-effort, idempotent).
     ///
-    /// Probes for the new column first to avoid 4 failing ALTERs on every open.
+    /// Probes for the last added column to avoid 4 failing ALTERs on every open.
+    /// Checks `alt_calls` (last in migration order) so partial migrations are retried.
     fn migrate_savings_v2(conn: &Connection) {
         if conn
-            .prepare("SELECT rlm_calls FROM savings LIMIT 0")
+            .prepare("SELECT alt_calls FROM savings LIMIT 0")
             .is_ok()
         {
             return;
