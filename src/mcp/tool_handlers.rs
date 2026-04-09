@@ -249,11 +249,19 @@ pub fn handle_replace(
     } else {
         match replacer::replace_symbol(db, &params.path, &params.symbol, &params.code, project_root)
         {
-            Ok(_) => Ok(RlmServer::success_text(write_result_with_reindex(
-                db,
-                project_root,
-                &params.path,
-            ))),
+            Ok(outcome) => {
+                let result_json = write_result_with_reindex(db, project_root, &params.path);
+                if let Ok(entry) = savings::alternative_replace_entry(
+                    db,
+                    &params.path,
+                    outcome.old_code_len,
+                    params.code.len(),
+                    result_json.len(),
+                ) {
+                    savings::record_v2(db, &entry);
+                }
+                Ok(RlmServer::success_text(result_json))
+            }
             Err(e) => Ok(RlmServer::error_text(e.to_string())),
         }
     }
@@ -271,11 +279,15 @@ pub fn handle_insert(
     let guard = SyntaxGuard::new();
     match inserter::insert_code(project_root, path, position, code, &guard) {
         Ok(_) => match db {
-            Some(db) => Ok(RlmServer::success_text(write_result_with_reindex(
-                db,
-                project_root,
-                path,
-            ))),
+            Some(db) => {
+                let result_json = write_result_with_reindex(db, project_root, path);
+                if let Ok(entry) =
+                    savings::alternative_insert_entry(db, path, code.len(), result_json.len())
+                {
+                    savings::record_v2(db, &entry);
+                }
+                Ok(RlmServer::success_text(result_json))
+            }
             None => Ok(RlmServer::success_text(
                 serde_json::json!({"ok": true, "reindexed": false, "hint": "no index; call 'index' to enable auto-reindex"})
                     .to_string(),

@@ -76,10 +76,25 @@ CREATE TABLE IF NOT EXISTS savings (
     output_tokens INTEGER NOT NULL,
     alternative_tokens INTEGER NOT NULL,
     files_touched INTEGER NOT NULL DEFAULT 0,
+    rlm_input_tokens INTEGER NOT NULL DEFAULT 0,
+    alt_input_tokens INTEGER NOT NULL DEFAULT 0,
+    rlm_calls INTEGER NOT NULL DEFAULT 1,
+    alt_calls INTEGER NOT NULL DEFAULT 1,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_savings_command ON savings(command);
 CREATE INDEX IF NOT EXISTS idx_savings_created ON savings(created_at);
+";
+
+/// Migration for existing databases that lack the V2 savings columns.
+///
+/// Each statement is run individually; "duplicate column" errors are ignored
+/// for idempotency.
+pub const MIGRATE_SAVINGS_V2: &str = "\
+ALTER TABLE savings ADD COLUMN rlm_input_tokens INTEGER NOT NULL DEFAULT 0;\
+ALTER TABLE savings ADD COLUMN alt_input_tokens INTEGER NOT NULL DEFAULT 0;\
+ALTER TABLE savings ADD COLUMN rlm_calls INTEGER NOT NULL DEFAULT 1;\
+ALTER TABLE savings ADD COLUMN alt_calls INTEGER NOT NULL DEFAULT 1;\
 ";
 
 #[cfg(test)]
@@ -98,5 +113,27 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(CREATE_SCHEMA).unwrap();
         conn.execute_batch(CREATE_SCHEMA).unwrap();
+    }
+
+    #[test]
+    fn savings_v2_migration_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(CREATE_SCHEMA).unwrap();
+        // Run migration twice — second run hits "duplicate column" but must not panic.
+        for _ in 0..2 {
+            for sql in MIGRATE_SAVINGS_V2.split(';') {
+                let trimmed = sql.trim();
+                if !trimmed.is_empty() {
+                    let _ = conn.execute(trimmed, []);
+                }
+            }
+        }
+        // Verify new columns exist
+        conn.execute(
+            "INSERT INTO savings (command, output_tokens, alternative_tokens, rlm_input_tokens, alt_input_tokens, rlm_calls, alt_calls) \
+             VALUES ('test', 10, 20, 30, 60, 1, 2)",
+            [],
+        )
+        .unwrap();
     }
 }

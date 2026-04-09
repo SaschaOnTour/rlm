@@ -65,8 +65,7 @@ impl RlmServer {
     ) -> Result<CallToolResult, McpError> {
         let json = Self::to_json(val);
         let out_tokens = estimate_tokens(json.len());
-        let alt_tokens = savings::alternative_single_file(db, path).unwrap_or(out_tokens);
-        savings::record(db, "read_symbol", out_tokens, alt_tokens, 1);
+        savings::record_read_symbol(db, out_tokens, path);
         Ok(Self::success_text(json))
     }
 

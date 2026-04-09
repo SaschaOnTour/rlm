@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-04-09
+
+### Added
+
+- **Full round-trip savings model**: `SavingsEntry` tracks input tokens, output tokens,
+  and call counts for both rlm and Claude Code paths (was: output-only comparison)
+- **Replace/Insert savings**: write operations now record token savings (biggest win —
+  rlm replace saves ~1600 tokens vs Claude Code's Grep→Read→Edit)
+- **Cost estimation in microdollars**: `SavingsEntry::cost_saved_microdollars()` weights
+  savings by API pricing ($3/1M input, $15/1M output)
+- **Enhanced savings report**: `stats --savings` now shows `rlm_total`, `alt_total`,
+  `total_saved`, `input_saved`, `result_saved`, `calls_saved` breakdown
+
+### Changed
+
+- **Savings schema V2**: 4 new columns (`rlm_input_tokens`, `alt_input_tokens`,
+  `rlm_calls`, `alt_calls`) with idempotent migration for existing databases
+- **Accurate CC call counts**: `record_symbol_op` now models Grep+Read (2 calls),
+  `record_file_op` models single Read (1 call), replace models 3 calls, insert models 2
+- **`replace_symbol` returns `ReplaceOutcome`**: exposes `old_code_len` for savings
+  calculation (callers previously discarded the return value)
+- **`print_write_result` returns JSON**: CLI handlers use actual result length for
+  savings instead of hardcoded stub
+- **DRY refactor**: `record_file_op`, `record_symbol_op`, `record_scoped_op` unified
+  via `serialize_and_record_entry` helper; `record_read_symbol` extracted for shared
+  CLI/MCP use
+- **Migration probe**: `migrate_savings_v2` checks column existence before running
+  ALTER statements (avoids 4 failing ALTERs per `Database::open()`)
+
 ## [0.3.0] - 2026-04-09
 
 ### Changed

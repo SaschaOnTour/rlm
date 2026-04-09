@@ -26,6 +26,13 @@ fn find_symbol_in_file(db: &Database, file_path: &str, symbol: &str) -> Result<C
     Ok(chunk.clone())
 }
 
+/// Result of a successful `replace_symbol` call.
+#[derive(Debug)]
+pub struct ReplaceOutcome {
+    /// Length of the old code that was replaced (in bytes).
+    pub old_code_len: usize,
+}
+
 /// Replace an AST node (function, struct, etc.) by identifier.
 ///
 /// `file_path` is the project-relative path (as stored in the DB).
@@ -36,7 +43,7 @@ pub fn replace_symbol(
     symbol: &str,
     new_code: &str,
     project_root: &std::path::Path,
-) -> Result<String> {
+) -> Result<ReplaceOutcome> {
     // Validate and resolve the project-relative path before the DB lookup and file read below.
     let full_path = crate::error::validate_relative_path(file_path, project_root)?;
 
@@ -78,7 +85,8 @@ pub fn replace_symbol(
     let guard = SyntaxGuard::new();
     validate_and_write(&guard, lang, &modified, &full_path)?;
 
-    Ok(modified)
+    let old_code_len = chunk.content.len();
+    Ok(ReplaceOutcome { old_code_len })
 }
 
 /// Preview a replacement without writing (returns the diff).
