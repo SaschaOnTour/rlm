@@ -39,8 +39,8 @@ pub fn replace_symbol(
 ) -> Result<String> {
     let chunk = find_symbol_in_file(db, file_path, symbol)?;
 
-    // Resolve relative path against project root for disk I/O
-    let full_path = project_root.join(file_path);
+    // Validate and resolve relative path against project root for disk I/O
+    let full_path = crate::error::validate_relative_path(file_path, project_root)?;
     let source = std::fs::read_to_string(&full_path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             RlmError::FileNotFound {

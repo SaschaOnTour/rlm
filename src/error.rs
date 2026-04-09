@@ -41,8 +41,51 @@ pub enum RlmError {
     #[error("config error: {0}")]
     Config(String),
 
+    #[error("path traversal rejected: {path}")]
+    PathTraversal { path: String },
+
     #[error("{0}")]
     Other(String),
 }
 
 pub type Result<T> = std::result::Result<T, RlmError>;
+
+/// Validate that a relative path is safe to join with a project root.
+///
+/// Rejects absolute paths, `..` components, and paths that escape the project root.
+pub fn validate_relative_path(
+    rel_path: &str,
+    project_root: &std::path::Path,
+) -> Result<std::path::PathBuf> {
+    let rel = std::path::Path::new(rel_path);
+
+    // Reject absolute paths
+    if rel.is_absolute() {
+        return Err(RlmError::PathTraversal {
+            path: rel_path.into(),
+        });
+    }
+
+    // Reject .. components
+    for component in rel.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(RlmError::PathTraversal {
+                path: rel_path.into(),
+            });
+        }
+    }
+
+    // Canonicalize and verify the resolved path is under project_root
+    let full_path = project_root.join(rel_path);
+    if let (Ok(canonical_root), Ok(canonical_full)) =
+        (project_root.canonicalize(), full_path.canonicalize())
+    {
+        if !canonical_full.starts_with(&canonical_root) {
+            return Err(RlmError::PathTraversal {
+                path: rel_path.into(),
+            });
+        }
+    }
+
+    Ok(full_path)
+}

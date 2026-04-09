@@ -58,9 +58,15 @@ pub fn insert_code(
     code: &str,
     guard: &SyntaxGuard,
 ) -> Result<String> {
-    let path = project_root.join(rel_path);
-    let source = std::fs::read_to_string(&path).map_err(|_| RlmError::FileNotFound {
-        path: rel_path.into(),
+    let path = crate::error::validate_relative_path(rel_path, project_root)?;
+    let source = std::fs::read_to_string(&path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            RlmError::FileNotFound {
+                path: rel_path.into(),
+            }
+        } else {
+            RlmError::from(e)
+        }
     })?;
 
     let modified = apply_insertion(&source, position, code)?;
