@@ -182,7 +182,14 @@ pub fn alternative_replace_entry(
     new_code_len: usize,
     rlm_result_len: usize,
 ) -> Result<SavingsEntry> {
-    let file_tokens = alternative_single_file(db, file_path)?;
+    // DB has post-edit size after reindex; CC's Read sees the pre-edit file.
+    let post_edit_bytes = db
+        .get_file_by_path(file_path)?
+        .map(|f| f.size_bytes)
+        .unwrap_or(0);
+    let pre_edit_bytes =
+        (post_edit_bytes + old_code_len as u64).saturating_sub(new_code_len as u64);
+    let file_tokens = estimate_tokens_from_bytes(pre_edit_bytes);
     let line_overhead = file_tokens / LINE_OVERHEAD_DIVISOR;
     let old_tokens = estimate_tokens(old_code_len);
     let new_tokens = estimate_tokens(new_code_len);
@@ -321,7 +328,7 @@ pub fn record_file_op<T: serde::Serialize>(
 
 /// Record savings for a symbol-scoped operation and return the serialized JSON.
 ///
-/// CC equivalent: Grep + Read (alt_calls=2).
+/// CC equivalent: Grep (1 call) + Read per file (N calls).
 pub fn record_symbol_op<T: serde::Serialize>(
     db: &Database,
     command: &str,
@@ -331,8 +338,9 @@ pub fn record_symbol_op<T: serde::Serialize>(
 ) -> String {
     let alt_tokens = alternative_symbol_files(db, symbol)
         .unwrap_or(0)
-        .saturating_add(SNIPPET_TOKENS); // Grep result + Read result
-    serialize_and_record_entry(db, command, result, alt_tokens, 2, files_touched)
+        .saturating_add(SNIPPET_TOKENS); // Grep result + Read results
+    let alt_calls = 1 + files_touched.max(1); // Grep + Read×N
+    serialize_and_record_entry(db, command, result, alt_tokens, alt_calls, files_touched)
 }
 
 /// Record savings for a scoped overview operation and return the serialized JSON.
@@ -466,7 +474,7 @@ mod tests {
     const V2_RLM_INPUT: u64 = 50; // ceil(200/4) = new_tokens only (no call overhead)
     const V2_RLM_OUTPUT: u64 = 3;
     const V2_ALT_INPUT_REPLACE: u64 = 75; // ceil(100/4) + ceil(200/4) = old_tokens + new_tokens
-    const V2_ALT_OUTPUT_REPLACE: u64 = 1500;
+    const V2_ALT_OUTPUT_REPLACE: u64 = 1472; // pre-edit: (4000+100-200)/4=975, overhead=97, 200+975+97+200
     const V2_ALT_INPUT_INSERT: u64 = 50; // ceil(200/4) = new_tokens only
     const V2_ALT_OUTPUT_INSERT: u64 = 1300;
     const LEGACY_OUTPUT: u64 = 50;
@@ -846,18 +854,18 @@ mod tests {
         assert_eq!(report.ops, 1);
         // rlm_total = 50 + 3 + 30 = 83
         assert_eq!(report.rlm_total, 83);
-        // alt_total = 75 + 1500 + 90 = 1665
-        assert_eq!(report.alt_total, 1665);
-        assert_eq!(report.total_saved, 1582);
+        // alt_total = 75 + 1472 + 90 = 1637
+        assert_eq!(report.alt_total, 1637);
+        assert_eq!(report.total_saved, 1554);
         assert!(report.total_pct > 90.0);
         assert_eq!(report.input_saved, 25); // 75 - 50
-        assert_eq!(report.result_saved, 1497); // 1500 - 3
+        assert_eq!(report.result_saved, 1469); // 1472 - 3
         assert_eq!(report.calls_saved, 2); // 3 - 1
 
         let cmd = &report.by_cmd[0];
         assert_eq!(cmd.alt_calls, CC_CALLS_REPLACE);
         assert_eq!(cmd.rlm_total, 83);
-        assert_eq!(cmd.alt_total, 1665);
+        assert_eq!(cmd.alt_total, 1637);
     }
 
     #[test]
