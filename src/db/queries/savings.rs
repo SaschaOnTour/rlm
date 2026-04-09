@@ -73,7 +73,9 @@ impl Database {
              COALESCE(SUM(rlm_input_tokens), 0), COALESCE(SUM(alt_input_tokens), 0), \
              COALESCE(SUM(rlm_calls), 0), COALESCE(SUM(alt_calls), 0) \
              FROM savings WHERE (?1 IS NULL OR created_at >= ?1) \
-             GROUP BY command ORDER BY SUM(alternative_tokens) - SUM(output_tokens) DESC",
+             GROUP BY command ORDER BY \
+             (SUM(alternative_tokens) + SUM(alt_input_tokens) + SUM(alt_calls) * 30) - \
+             (SUM(output_tokens) + SUM(rlm_input_tokens) + SUM(rlm_calls) * 30) DESC",
         )?;
         let rows = stmt.query_map(params![since], |row| {
             Ok(SavingsQueryRow {
