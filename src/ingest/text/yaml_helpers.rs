@@ -3,7 +3,7 @@
 //! Extracted from `yaml.rs` for SRP compliance. Contains kind determination,
 //! importance checks, line finding, type naming, and value formatting.
 
-use serde_yaml::Value;
+use serde_yaml_ng::Value;
 
 use crate::models::chunk::ChunkKind;
 

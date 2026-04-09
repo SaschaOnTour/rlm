@@ -71,6 +71,7 @@ pub fn partition_file(
     strategy: &Strategy,
     project_root: &std::path::Path,
 ) -> Result<PartitionResult> {
+    crate::error::validate_relative_path(file_path, project_root)?;
     let full_path = project_root.join(file_path);
     let source = std::fs::read_to_string(&full_path).map_err(|_| RlmError::FileNotFound {
         path: file_path.into(),

@@ -162,9 +162,17 @@ impl Config {
     }
 
     /// Get the effective quality log path.
+    ///
+    /// Rejects custom paths that are absolute or contain `..` to prevent
+    /// writing outside the `.rlm/` directory.
     #[must_use]
     pub fn get_quality_log_path(&self) -> PathBuf {
         if let Some(custom) = &self.settings.quality.log_file {
+            let p = std::path::Path::new(custom);
+            if p.is_absolute() || custom.contains("..") {
+                // Unsafe custom path — fall back to default
+                return self.quality_log_path.clone();
+            }
             self.rlm_dir.join(custom)
         } else {
             self.quality_log_path.clone()

@@ -82,18 +82,29 @@ pub fn validate_relative_path(
         }
     }
 
-    // Canonicalize and verify the resolved path is under project_root.
-    // For paths that do not exist yet, resolve the nearest existing ancestor
-    // so symlink escapes through existing path components are still detected.
-    // Fails closed: if canonicalization fails, reject the path.
     let full_path = project_root.join(rel_path);
-    let canonical_root = project_root
-        .canonicalize()
-        .map_err(|_| RlmError::PathTraversal {
-            path: rel_path.into(),
-        })?;
+    let canonical_root = project_root.canonicalize()?;
+    verify_containment(&full_path, &canonical_root, rel_path)?;
 
-    let mut existing_ancestor = full_path.as_path();
+    // Return canonical path (existing files) to minimize TOCTOU gap.
+    // For new files, join under the validated canonical root.
+    if full_path.exists() {
+        Ok(full_path.canonicalize()?)
+    } else {
+        Ok(canonical_root.join(rel_path))
+    }
+}
+
+/// Verify that `full_path` resolves to a location under `canonical_root`.
+///
+/// For paths that do not exist yet, resolves the nearest existing ancestor
+/// so symlink escapes through existing path components are still detected.
+fn verify_containment(
+    full_path: &std::path::Path,
+    canonical_root: &std::path::Path,
+    rel_path: &str,
+) -> Result<()> {
+    let mut existing_ancestor = full_path;
     while !existing_ancestor.exists() {
         existing_ancestor = existing_ancestor
             .parent()
@@ -109,11 +120,10 @@ pub fn validate_relative_path(
                 path: rel_path.into(),
             })?;
 
-    if !canonical_existing.starts_with(&canonical_root) {
+    if !canonical_existing.starts_with(canonical_root) {
         return Err(RlmError::PathTraversal {
             path: rel_path.into(),
         });
     }
-
-    Ok(full_path)
+    Ok(())
 }

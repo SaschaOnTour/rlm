@@ -8,7 +8,7 @@
 //!
 //! Value formatting and kind-detection helpers live in `yaml_helpers`.
 
-use serde_yaml::Value;
+use serde_yaml_ng::Value;
 
 use crate::error::Result;
 use crate::ingest::text::yaml_helpers::{
@@ -46,7 +46,7 @@ impl TextParser for YamlParser {
         let mut chunks = Vec::new();
 
         // Parse the YAML
-        let value: Value = match serde_yaml::from_str(source) {
+        let value: Value = match serde_yaml_ng::from_str(source) {
             Ok(v) => v,
             Err(_) => {
                 // If parsing fails, create a single chunk for the whole file
@@ -327,24 +327,24 @@ spec:
 
     #[test]
     fn test_yaml_type_name() {
-        use serde_yaml::Value;
+        use serde_yaml_ng::Value;
         assert_eq!(yaml_type_name(&Value::Null), "null");
         assert_eq!(yaml_type_name(&Value::Bool(true)), "bool");
         assert_eq!(yaml_type_name(&Value::Bool(false)), "bool");
         assert_eq!(
-            yaml_type_name(&Value::Number(serde_yaml::Number::from(42))),
+            yaml_type_name(&Value::Number(serde_yaml_ng::Number::from(42))),
             "number"
         );
         assert_eq!(yaml_type_name(&Value::String("hello".into())), "string");
         assert_eq!(yaml_type_name(&Value::Sequence(vec![])), "array");
         assert_eq!(
-            yaml_type_name(&Value::Mapping(serde_yaml::Mapping::new())),
+            yaml_type_name(&Value::Mapping(serde_yaml_ng::Mapping::new())),
             "object"
         );
         // Tagged values
         assert_eq!(
-            yaml_type_name(&Value::Tagged(Box::new(serde_yaml::value::TaggedValue {
-                tag: serde_yaml::value::Tag::new("!custom"),
+            yaml_type_name(&Value::Tagged(Box::new(serde_yaml_ng::value::TaggedValue {
+                tag: serde_yaml_ng::value::Tag::new("!custom"),
                 value: Value::Null,
             }))),
             "tagged"

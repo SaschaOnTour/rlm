@@ -68,12 +68,7 @@ impl RlmServer {
     )]
     // qual:api
     async fn index(&self, params: Parameters<IndexParams>) -> Result<CallToolResult, McpError> {
-        let config = if let Some(path) = &params.0.path {
-            crate::config::Config::new(path)
-        } else {
-            self.config()
-        };
-        tool_handlers::handle_index(&config)
+        tool_handlers::handle_index(params.0.path.as_deref(), &self.project_root)
     }
 
     #[tool(

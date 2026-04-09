@@ -34,39 +34,45 @@ impl TextParser for PdfParser {
             vec![source]
         };
 
-        let mut byte_offset = 0u32;
+        let mut byte_offset = 0u64;
         let mut line_offset = 1u32;
 
         for (i, page_content) in pages.iter().enumerate() {
             let trimmed = page_content.trim();
             if trimmed.is_empty() {
-                byte_offset += page_content.len() as u32 + 1; // +1 for page break char
+                byte_offset += page_content.len() as u64 + 1; // +1 for page break char
                 continue;
+            }
+
+            // If byte_offset exceeds u32::MAX, skip remaining pages to avoid truncation
+            if byte_offset > u64::from(u32::MAX) {
+                break;
             }
 
             let line_count = page_content.lines().count() as u32;
             let page_num = i + 1;
+            let start_byte = byte_offset as u32;
+            let page_len = page_content.len() as u64;
+            let end_byte_u64 = byte_offset + page_len;
+            let end_byte = if end_byte_u64 > u64::from(u32::MAX) {
+                u32::MAX
+            } else {
+                end_byte_u64 as u32
+            };
 
             chunks.push(Chunk {
-                id: 0,
-                file_id,
                 start_line: line_offset,
                 end_line: line_offset + line_count.saturating_sub(1),
-                start_byte: byte_offset,
-                end_byte: byte_offset + page_content.len() as u32,
+                start_byte,
+                end_byte,
                 kind: ChunkKind::Page,
                 ident: format!("Page {page_num}"),
-                parent: None,
-                signature: None,
-                visibility: None,
-                ui_ctx: None,
-                doc_comment: None,
-                attributes: None,
                 content: trimmed.to_string(),
+                ..Chunk::stub(file_id)
             });
 
             line_offset += line_count;
-            byte_offset += page_content.len() as u32 + 1;
+            byte_offset += page_len + 1;
         }
 
         Ok(chunks)

@@ -37,7 +37,7 @@ pub fn replace_symbol(
     new_code: &str,
     project_root: &std::path::Path,
 ) -> Result<String> {
-    // Validate path before any DB or disk operations
+    // Validate and resolve the project-relative path before the DB lookup and file read below.
     let full_path = crate::error::validate_relative_path(file_path, project_root)?;
 
     let chunk = find_symbol_in_file(db, file_path, symbol)?;

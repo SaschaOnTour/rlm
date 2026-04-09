@@ -10,14 +10,18 @@ env:
   RUSTFLAGS: -Dwarnings
   PROJECT_NAME: rlm
 
-permissions:
-  contents: write
-
 jobs:
   # Erst CI-Checks durchführen
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@v4
 
       - name: Verify version matches tag
@@ -56,6 +60,8 @@ jobs:
   build:
     needs: check
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -97,6 +103,11 @@ jobs:
             archive: tar.gz
 
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@v4
 
       - name: Install Rust
@@ -147,7 +158,14 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@v4
 
       - name: Download all artifacts
