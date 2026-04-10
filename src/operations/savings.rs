@@ -314,7 +314,8 @@ fn serialize_and_record_entry<T: serde::Serialize>(
     alt_calls: u64,
     files_touched: u64,
 ) -> String {
-    let json = serde_json::to_string(result).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
+    let json = serde_json::to_string(result)
+        .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
     let out_tokens = estimate_tokens(json.len());
     let entry = SavingsEntry {
         command: command.to_string(),
@@ -339,7 +340,8 @@ pub fn record_file_op<T: serde::Serialize>(
     result: &T,
     path: &str,
 ) -> String {
-    let json = serde_json::to_string(result).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
+    let json = serde_json::to_string(result)
+        .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
     let out_tokens = estimate_tokens(json.len());
     // Fall back to out_tokens if file missing or DB error (conservative: CC ≥ rlm output).
     let alt_tokens = alternative_single_file(db, path).unwrap_or(0);
