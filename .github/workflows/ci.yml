@@ -47,7 +47,7 @@ jobs:
       - name: Test
         run: cargo nextest run
 
-  # Auto-tag when version in Cargo.toml changes on main
+  # Auto-tag when Cargo.toml version has no matching release tag
   auto-tag:
     name: Auto-tag release
     needs: check
@@ -62,31 +62,24 @@ jobs:
           egress-policy: audit
 
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Check version change
+      - name: Check if release exists for current version
         id: version
         run: |
-          CURRENT=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          PREVIOUS=$(git show ${{ github.event.before }}:Cargo.toml 2>/dev/null | grep -m1 '^version' | cut -d'"' -f2 || echo "")
-          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
-          echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
-          if [ "$CURRENT" != "$PREVIOUS" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "✅ Version changed: $PREVIOUS → $CURRENT"
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "$TAG"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ Tag $TAG already exists"
           else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "ℹ️ Version unchanged: $CURRENT"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "✅ No tag for $TAG — will create"
           fi
 
       - name: Create tag
-        if: steps.version.outputs.changed == 'true'
+        if: steps.version.outputs.exists == 'false'
         run: |
-          TAG="v${{ steps.version.outputs.current }}"
-          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
-            echo "ℹ️ Tag $TAG already exists, skipping"
-            exit 0
-          fi
-          git tag "$TAG"
-          git push origin "$TAG"
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
