@@ -101,22 +101,23 @@ impl Database {
         Ok(results)
     }
 
-    /// Get total size of all indexed files, optionally filtered by path prefix.
-    pub fn get_scoped_file_sizes(&self, path_prefix: Option<&str>) -> Result<u64> {
-        let total: i64 = if let Some(prefix) = path_prefix {
+    /// Get total size and count of indexed files in one query, optionally filtered by path prefix.
+    pub fn get_scoped_file_stats(&self, path_prefix: Option<&str>) -> Result<(u64, u64)> {
+        let (size, count): (i64, i64) = if let Some(prefix) = path_prefix {
             let pattern = format!("{prefix}%");
             self.conn().query_row(
-                "SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE path LIKE ?1",
+                "SELECT COALESCE(SUM(size_bytes), 0), COUNT(*) FROM files WHERE path LIKE ?1",
                 params![pattern],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )?
         } else {
-            self.conn()
-                .query_row("SELECT COALESCE(SUM(size_bytes), 0) FROM files", [], |r| {
-                    r.get(0)
-                })?
+            self.conn().query_row(
+                "SELECT COALESCE(SUM(size_bytes), 0), COUNT(*) FROM files",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?
         };
-        Ok(total as u64)
+        Ok((size as u64, count as u64))
     }
 
     /// Get total size of files involved with a symbol (definitions + references).
@@ -150,5 +151,44 @@ impl Database {
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
         )?;
         Ok((ops as u64, output as u64, alt as u64))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::db::Database;
+    use crate::models::file::FileRecord;
+
+    const TEST_FILE_SIZE_A: u64 = 400;
+    const TEST_FILE_SIZE_B: u64 = 800;
+
+    #[test]
+    fn scoped_file_stats() {
+        let db = Database::open_in_memory().unwrap();
+        let f1 = FileRecord::new(
+            "src/a.rs".into(),
+            "a".into(),
+            "rust".into(),
+            TEST_FILE_SIZE_A,
+        );
+        let f2 = FileRecord::new(
+            "tests/t.rs".into(),
+            "b".into(),
+            "rust".into(),
+            TEST_FILE_SIZE_B,
+        );
+        db.upsert_file(&f1).unwrap();
+        db.upsert_file(&f2).unwrap();
+
+        let (size, count) = db.get_scoped_file_stats(None).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(size, TEST_FILE_SIZE_A + TEST_FILE_SIZE_B);
+
+        let (size, count) = db.get_scoped_file_stats(Some("src/")).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(size, TEST_FILE_SIZE_A);
+
+        let (_, count) = db.get_scoped_file_stats(Some("nonexistent/")).unwrap();
+        assert_eq!(count, 0);
     }
 }
