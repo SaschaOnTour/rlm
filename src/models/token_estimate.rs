@@ -32,13 +32,16 @@ impl TokenEstimate {
     }
 }
 
-/// Estimate tokens from a character count.
+/// Estimate tokens from a byte count (plain text at ~4 bytes/token).
+///
+/// In Rust, `String::len()` and `str::len()` return byte counts, not char counts.
+/// For ASCII-dominated source code, bytes ≈ chars.
 #[must_use]
-pub fn estimate_tokens(char_count: usize) -> u64 {
-    (char_count as f64 / CHARS_PER_TOKEN).ceil() as u64
+pub fn estimate_tokens(byte_count: usize) -> u64 {
+    (byte_count as f64 / CHARS_PER_TOKEN).ceil() as u64
 }
 
-/// Estimate tokens from a string.
+/// Estimate tokens from a string's byte length.
 #[must_use]
 pub fn estimate_tokens_str(s: &str) -> u64 {
     estimate_tokens(s.len())

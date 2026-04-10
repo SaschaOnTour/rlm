@@ -14,6 +14,7 @@ use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
+use crate::models::chunk::Chunk;
 use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
@@ -154,36 +155,58 @@ fn handle_read_symbol(db: &Database, params: &ReadParams) -> Result<CallToolResu
     }
 }
 
+fn section_not_found_hint(heading: &str, chunks: &[Chunk]) -> String {
+    let total = chunks.len();
+    let shown: Vec<&str> = chunks
+        .iter()
+        .take(MAX_HINT_SECTIONS)
+        .map(|c| c.ident.as_str())
+        .collect();
+    if shown.is_empty() {
+        format!("Section not found: {heading}. File has no sections.")
+    } else if total > shown.len() {
+        format!(
+            "Section not found: {heading}. Available ({total} total, first {MAX_HINT_SECTIONS}): {}",
+            shown.join(", ")
+        )
+    } else {
+        format!(
+            "Section not found: {heading}. Available: {}",
+            shown.join(", ")
+        )
+    }
+}
+
+/// Max sections to show in "not found" error hints.
+const MAX_HINT_SECTIONS: usize = 10;
+
 fn handle_read_section(db: &Database, params: &ReadParams) -> Result<CallToolResult, McpError> {
     let heading = params.section.as_deref().unwrap_or_default();
-    match db.get_file_by_path(&params.path) {
-        Ok(Some(file)) => match db.get_chunks_for_file(file.id) {
-            Ok(chunks) => match chunks.iter().find(|c| c.ident == *heading) {
-                Some(c) => {
-                    let json = savings::record_file_op(db, "read_section", c, &params.path);
-                    Ok(RlmServer::success_text(json))
-                }
-                None => {
-                    let available: Vec<&str> = chunks.iter().map(|c| c.ident.as_str()).collect();
-                    let hint = if available.is_empty() {
-                        format!("Section not found: {heading}. File has no sections.")
-                    } else {
-                        format!(
-                            "Section not found: {heading}. Available: {}",
-                            available.join(", ")
-                        )
-                    };
-                    Ok(RlmServer::error_text(hint))
-                }
-            },
-            Err(e) => Ok(RlmServer::error_text(e.to_string())),
-        },
-        Ok(None) => Ok(RlmServer::error_text(format!(
-            "File not found: {}. Run 'index' to update, or check 'files' for available paths.",
-            params.path
-        ))),
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+
+    let file = match db.get_file_by_path(&params.path) {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            return Ok(RlmServer::error_text(format!(
+                "File not found: {}. Run 'index' to update, or check 'files' for available paths.",
+                params.path
+            )));
+        }
+        Err(e) => return Ok(RlmServer::error_text(e.to_string())),
+    };
+
+    let chunks = match db.get_chunks_for_file(file.id) {
+        Ok(c) => c,
+        Err(e) => return Ok(RlmServer::error_text(e.to_string())),
+    };
+
+    if let Some(c) = chunks.iter().find(|c| c.ident == *heading) {
+        let json = savings::record_file_op(db, "read_section", c, &params.path);
+        return Ok(RlmServer::success_text(json));
     }
+
+    Ok(RlmServer::error_text(section_not_found_hint(
+        heading, &chunks,
+    )))
 }
 
 /// Handle the `overview` tool: project structure at three detail levels.

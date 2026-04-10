@@ -329,14 +329,24 @@ fn find_preview(db: &Database, rel_path: &str, source: &PreviewSource<'_>) -> Op
         PreviewSource::None => return None,
     }?;
 
-    Some(
-        chunk
-            .content
-            .lines()
-            .take(PREVIEW_LINES)
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
+    let lines: Vec<&str> = chunk.content.lines().collect();
+    let selected = match source {
+        PreviewSource::Symbol(_) => &lines[..lines.len().min(PREVIEW_LINES)],
+        PreviewSource::Line(line) => {
+            let max_start = lines.len().saturating_sub(PREVIEW_LINES);
+            let target_idx = (*line).saturating_sub(chunk.start_line) as usize;
+            let start = target_idx.saturating_sub(PREVIEW_LINES / 2).min(max_start);
+            let end = (start + PREVIEW_LINES).min(lines.len());
+            &lines[start..end]
+        }
+        PreviewSource::Last => {
+            let start = lines.len().saturating_sub(PREVIEW_LINES);
+            &lines[start..]
+        }
+        PreviewSource::None => return None,
+    };
+
+    Some(selected.join("\n"))
 }
 
 /// Ensure the index exists, creating it if necessary (auto-index).

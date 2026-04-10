@@ -51,9 +51,8 @@ impl RlmServer {
     }
 
     pub(crate) fn error_text(msg: String) -> CallToolResult {
-        CallToolResult::error(vec![Content::text(
-            serde_json::json!({"error": msg}).to_string(),
-        )])
+        let json = serde_json::json!({"error": msg}).to_string();
+        CallToolResult::error(vec![Content::text(guard_output(json))])
     }
 }
 
