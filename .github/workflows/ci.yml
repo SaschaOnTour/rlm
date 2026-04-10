@@ -47,7 +47,7 @@ jobs:
       - name: Test
         run: cargo nextest run
 
-  # Auto-tag when version in Cargo.toml changes on main
+  # Auto-tag when Cargo.toml version has no matching release tag
   auto-tag:
     name: Auto-tag release
     needs: check
