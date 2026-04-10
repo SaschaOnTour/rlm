@@ -4,7 +4,7 @@ use serde::Serialize;
 const CHARS_PER_TOKEN: f64 = 4.0;
 
 /// Bytes per token for JSON content (Claude Code uses denser tokenization for JSON).
-const JSON_CHARS_PER_TOKEN: f64 = 2.0;
+const JSON_BYTES_PER_TOKEN: f64 = 2.0;
 
 /// Token usage estimate for an operation.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -45,9 +45,11 @@ pub fn estimate_tokens_str(s: &str) -> u64 {
 }
 
 /// Estimate tokens for JSON content (CC uses 2 bytes/token for JSON).
+///
+/// Takes a byte count (e.g., `String::len()`) — in Rust, `len()` returns bytes, not chars.
 #[must_use]
-pub fn estimate_json_tokens(char_count: usize) -> u64 {
-    (char_count as f64 / JSON_CHARS_PER_TOKEN).ceil() as u64
+pub fn estimate_json_tokens(byte_count: usize) -> u64 {
+    (byte_count as f64 / JSON_BYTES_PER_TOKEN).ceil() as u64
 }
 
 /// Estimate tokens from a byte count (file size).

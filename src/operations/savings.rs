@@ -345,7 +345,9 @@ pub fn record_file_op<T: serde::Serialize>(
     let json = serde_json::to_string(result)
         .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
     let out_tokens = estimate_json_tokens(json.len());
-    // Fall back to plaintext estimate if file missing (CC Read returns plain text at 4 bytes/token).
+    // Fall back to json byte count at plaintext rate (4 bytes/token) if file missing from DB.
+    // This uses json.len() as a rough proxy for file size — conservative since CC's Read
+    // would return the actual file content, not JSON.
     let alt_tokens = alternative_single_file(db, path).unwrap_or(0);
     let alt_tokens = if alt_tokens > 0 {
         alt_tokens
