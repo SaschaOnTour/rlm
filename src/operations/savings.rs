@@ -393,7 +393,8 @@ pub fn record_scoped_op<T: serde::Serialize>(
     path_prefix: Option<&str>,
 ) -> String {
     let (total_bytes, file_count) = db.get_scoped_file_stats(path_prefix).unwrap_or((0, 0));
-    let alt_tokens = with_line_overhead(estimate_tokens_from_bytes(total_bytes));
+    let alt_tokens =
+        with_line_overhead(estimate_tokens_from_bytes(total_bytes)).saturating_add(SNIPPET_TOKENS); // Glob result + Read results
     let alt_calls = 1 + file_count; // Glob + Read×N
     serialize_and_record_entry(db, command, result, alt_tokens, alt_calls, file_count)
 }
@@ -1035,5 +1036,12 @@ mod tests {
         let report = get_savings_report(&db, None).unwrap();
         let cmd = &report.by_cmd[0];
         assert_eq!(cmd.alt_calls, 3); // Glob + Read×2
+
+        // alt_tokens = with_line_overhead(total_bytes/4) + SNIPPET_TOKENS
+        // Both files are in src/: 400+800=1200 bytes → 300 tokens → +10% = 330 → +200 snippet = 530
+        let expected_alt = with_line_overhead(estimate_tokens_from_bytes(
+            SCOPED_FILE_SIZE_A + SCOPED_FILE_SIZE_B,
+        )) + SNIPPET_TOKENS;
+        assert_eq!(cmd.alternative, expected_alt);
     }
 }
