@@ -11,6 +11,7 @@ use crate::cli::output;
 use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
+use crate::indexer;
 use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
@@ -149,7 +150,8 @@ pub fn cmd_replace(path: &str, symbol: &str, code: &str, preview: bool) -> CmdRe
     } else {
         let outcome = replacer::replace_symbol(&db, path, symbol, code, &config.project_root)
             .map_err(map_err)?;
-        let result_json = print_write_result(&db, &config, path, Some(symbol));
+        let result_json =
+            print_write_result(&db, &config, path, indexer::PreviewSource::Symbol(symbol));
         if let Ok(entry) = savings::alternative_replace_entry(
             &db,
             path,
@@ -168,7 +170,7 @@ pub fn cmd_insert(path: &str, code: &str, position: &InsertPosition) -> CmdResul
     let db = get_db(&config)?;
     let guard = SyntaxGuard::new();
     inserter::insert_code(&config.project_root, path, position, code, &guard).map_err(map_err)?;
-    let result_json = print_write_result(&db, &config, path, None);
+    let result_json = print_write_result(&db, &config, path, position.preview_source());
     if let Ok(entry) = savings::alternative_insert_entry(&db, path, code.len(), result_json.len()) {
         savings::record_v2(&db, &entry);
     }

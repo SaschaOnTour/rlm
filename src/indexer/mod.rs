@@ -272,6 +272,18 @@ pub fn reindex_single_file(
 /// Max lines to include in the post-write preview.
 const PREVIEW_LINES: usize = 10;
 
+/// What to preview after a write operation.
+pub enum PreviewSource<'a> {
+    /// Preview the named symbol (used by replace).
+    Symbol(&'a str),
+    /// Preview the chunk containing the given line (used by insert).
+    Line(u32),
+    /// Preview the last chunk in the file (used by insert at bottom).
+    Last,
+    /// No preview.
+    None,
+}
+
 /// Re-index a file after write and build the JSON result with optional preview.
 ///
 /// Shared by MCP and CLI write handlers to avoid duplicating reindex + preview logic.
@@ -279,23 +291,11 @@ pub fn reindex_with_result(
     db: &Database,
     config: &Config,
     rel_path: &str,
-    symbol: Option<&str>,
+    source: PreviewSource<'_>,
 ) -> String {
     match reindex_single_file(db, config, rel_path) {
         Ok((chunks, refs)) => {
-            let preview = symbol.and_then(|sym| {
-                db.get_chunks_by_ident(sym).ok().and_then(|cs| {
-                    let file = db.get_file_by_path(rel_path).ok().flatten();
-                    file.and_then(|f| cs.into_iter().find(|c| c.file_id == f.id))
-                        .map(|c| {
-                            c.content
-                                .lines()
-                                .take(PREVIEW_LINES)
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        })
-                })
-            });
+            let preview = find_preview(db, rel_path, &source);
             let mut result =
                 serde_json::json!({"ok": true, "reindexed": true, "chunks": chunks, "refs": refs});
             if let Some(p) = preview {
@@ -308,6 +308,35 @@ pub fn reindex_with_result(
                 .to_string()
         }
     }
+}
+
+/// Find a preview string based on the preview source.
+fn find_preview(db: &Database, rel_path: &str, source: &PreviewSource<'_>) -> Option<String> {
+    // Early exit avoids DB queries when no preview is requested.
+    if matches!(source, PreviewSource::None) {
+        return None;
+    }
+
+    let file = db.get_file_by_path(rel_path).ok().flatten()?;
+    let chunks = db.get_chunks_for_file(file.id).ok()?;
+
+    let chunk = match source {
+        PreviewSource::Symbol(sym) => chunks.into_iter().find(|c| c.ident == *sym),
+        PreviewSource::Line(line) => chunks
+            .into_iter()
+            .find(|c| c.start_line <= *line && *line <= c.end_line),
+        PreviewSource::Last => chunks.into_iter().max_by_key(|c| c.start_line),
+        PreviewSource::None => return None,
+    }?;
+
+    Some(
+        chunk
+            .content
+            .lines()
+            .take(PREVIEW_LINES)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// Ensure the index exists, creating it if necessary (auto-index).
@@ -430,5 +459,149 @@ mod tests {
         assert_eq!(result.files_indexed, 1);
         assert_eq!(result.skipped_non_utf8, 1);
         assert_eq!(result.files_skipped, 1);
+    }
+
+    // ─── Preview tests ──────────────────────────────────────────────
+
+    /// Line inside the `helper` function in SAMPLE_SOURCE.
+    const HELPER_LINE: u32 = 6;
+    /// Line far beyond any file — used to test "not found" case.
+    const NONEXISTENT_LINE: u32 = 999;
+    /// Number of lines in the long function test (must exceed PREVIEW_LINES).
+    const LONG_FN_LINES: usize = 20;
+
+    fn setup_indexed_project(source: &str) -> (TempDir, Config, Database) {
+        let tmp = TempDir::new().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("main.rs"), source).unwrap();
+        let config = Config::new(tmp.path());
+        run_index(&config).unwrap();
+        let db = Database::open(&config.db_path).unwrap();
+        (tmp, config, db)
+    }
+
+    const SAMPLE_SOURCE: &str = "\
+fn main() {
+    println!(\"hello\");
+}
+
+fn helper(x: i32) -> i32 {
+    x * 2
+}
+
+fn another() -> bool {
+    true
+}
+";
+
+    #[test]
+    fn preview_symbol_returns_matching_chunk() {
+        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
+        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Symbol("helper"));
+        assert!(preview.is_some());
+        let p = preview.unwrap();
+        assert!(p.contains("helper"));
+        assert!(p.contains("x * 2"));
+    }
+
+    #[test]
+    fn preview_symbol_not_found_returns_none() {
+        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
+        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Symbol("nonexistent"));
+        assert!(preview.is_none());
+    }
+
+    #[test]
+    fn preview_symbol_wrong_file_returns_none() {
+        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
+        let preview = find_preview(&db, "src/other.rs", &PreviewSource::Symbol("helper"));
+        assert!(preview.is_none());
+    }
+
+    #[test]
+    fn preview_line_returns_containing_chunk() {
+        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
+        // helper is at lines 5-7, so line 6 should find it
+        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Line(HELPER_LINE));
+        assert!(preview.is_some());
+        let p = preview.unwrap();
+        assert!(p.contains("helper"));
+    }
+
+    #[test]
+    fn preview_line_outside_chunks_returns_none() {
+        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
+        // Line 999 doesn't exist in any chunk
+        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Line(NONEXISTENT_LINE));
+        assert!(preview.is_none());
+    }
+
+    #[test]
+    fn preview_none_returns_none() {
+        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
+        let preview = find_preview(&db, "src/main.rs", &PreviewSource::None);
+        assert!(preview.is_none());
+    }
+
+    #[test]
+    fn preview_last_returns_last_chunk() {
+        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
+        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Last);
+        assert!(preview.is_some());
+        // SAMPLE_SOURCE has main, helper, another — "another" is the last chunk
+        let p = preview.unwrap();
+        assert!(p.contains("another"));
+    }
+
+    #[test]
+    fn preview_truncates_long_chunks() {
+        let long_fn = (0..LONG_FN_LINES)
+            .map(|i| format!("    let x{i} = {i};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let source = format!("fn long_func() {{\n{long_fn}\n}}\n");
+        let (_tmp, _config, db) = setup_indexed_project(&source);
+        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Symbol("long_func"));
+        assert!(preview.is_some());
+        let p = preview.unwrap();
+        let line_count = p.lines().count();
+        assert_eq!(line_count, PREVIEW_LINES);
+    }
+
+    #[test]
+    fn reindex_with_result_includes_preview_for_symbol() {
+        let (_tmp, config, db) = setup_indexed_project(SAMPLE_SOURCE);
+        let json =
+            reindex_with_result(&db, &config, "src/main.rs", PreviewSource::Symbol("helper"));
+        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(val["ok"], true);
+        assert!(val["preview"].is_string());
+        assert!(val["preview"].as_str().unwrap().contains("helper"));
+    }
+
+    #[test]
+    fn reindex_with_result_no_preview_for_none() {
+        let (_tmp, config, db) = setup_indexed_project(SAMPLE_SOURCE);
+        let json = reindex_with_result(&db, &config, "src/main.rs", PreviewSource::None);
+        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(val["ok"], true);
+        assert!(val["preview"].is_null());
+    }
+
+    #[test]
+    fn reindex_with_result_includes_preview_for_line() {
+        let (_tmp, config, db) = setup_indexed_project(SAMPLE_SOURCE);
+        // Line 6 is inside helper
+        let json = reindex_with_result(
+            &db,
+            &config,
+            "src/main.rs",
+            PreviewSource::Line(HELPER_LINE),
+        );
+        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(val["ok"], true);
+        assert!(val["preview"].is_string());
+        assert!(val["preview"].as_str().unwrap().contains("helper"));
     }
 }

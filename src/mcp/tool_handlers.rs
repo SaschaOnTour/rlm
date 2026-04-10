@@ -30,10 +30,10 @@ fn write_result_with_reindex(
     db: &Database,
     project_root: &std::path::Path,
     rel_path: &str,
-    symbol: Option<&str>,
+    source: indexer::PreviewSource<'_>,
 ) -> String {
     let config = crate::config::Config::new(project_root);
-    indexer::reindex_with_result(db, &config, rel_path, symbol)
+    indexer::reindex_with_result(db, &config, rel_path, source)
 }
 
 /// Resolve the index config, validating that any custom path is within project_root.
@@ -253,8 +253,12 @@ pub fn handle_replace(
         match replacer::replace_symbol(db, &params.path, &params.symbol, &params.code, project_root)
         {
             Ok(outcome) => {
-                let result_json =
-                    write_result_with_reindex(db, project_root, &params.path, Some(&params.symbol));
+                let result_json = write_result_with_reindex(
+                    db,
+                    project_root,
+                    &params.path,
+                    indexer::PreviewSource::Symbol(&params.symbol),
+                );
                 if let Ok(entry) = savings::alternative_replace_entry(
                     db,
                     &params.path,
@@ -284,7 +288,8 @@ pub fn handle_insert(
     match inserter::insert_code(project_root, path, position, code, &guard) {
         Ok(_) => match db {
             Some(db) => {
-                let result_json = write_result_with_reindex(db, project_root, path, None);
+                let result_json =
+                    write_result_with_reindex(db, project_root, path, position.preview_source());
                 if let Ok(entry) =
                     savings::alternative_insert_entry(db, path, code.len(), result_json.len())
                 {

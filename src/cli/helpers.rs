@@ -55,9 +55,9 @@ pub fn print_write_result(
     db: &Database,
     config: &Config,
     rel_path: &str,
-    symbol: Option<&str>,
+    source: indexer::PreviewSource<'_>,
 ) -> String {
-    let json = indexer::reindex_with_result(db, config, rel_path, symbol);
+    let json = indexer::reindex_with_result(db, config, rel_path, source);
     print_json(&json);
     json
 }

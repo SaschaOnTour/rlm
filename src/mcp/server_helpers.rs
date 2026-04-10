@@ -18,8 +18,8 @@ use crate::operations::savings;
 
 use super::server::RlmServer;
 
-/// MCP output char limit (~25K tokens at 2 bytes/token for JSON).
-const MAX_MCP_OUTPUT_CHARS: usize = 50_000;
+/// MCP output byte limit (~25K tokens at 2 bytes/token for JSON).
+const MAX_MCP_OUTPUT_BYTES: usize = 50_000;
 
 // -- Helper functions --------------------------------------------------------
 
@@ -114,14 +114,14 @@ impl RlmServer {
 /// replaces oversized results with a truncation notice so the agent can
 /// narrow its query instead of receiving silently incomplete data.
 fn guard_output(text: String) -> String {
-    if text.len() <= MAX_MCP_OUTPUT_CHARS {
+    if text.len() <= MAX_MCP_OUTPUT_BYTES {
         return text;
     }
     let actual = text.len();
     serde_json::json!({
         "truncated": true,
-        "actual_chars": actual,
-        "limit_chars": MAX_MCP_OUTPUT_CHARS,
+        "actual_bytes": actual,
+        "limit_bytes": MAX_MCP_OUTPUT_BYTES,
         "hint": "Result exceeded 25K token MCP limit. Narrow your query with path or symbol filters."
     })
     .to_string()
@@ -201,15 +201,15 @@ mod tests {
 
     #[test]
     fn guard_output_truncates_large_result() {
-        let large = "x".repeat(MAX_MCP_OUTPUT_CHARS + 1);
+        let large = "x".repeat(MAX_MCP_OUTPUT_BYTES + 1);
         let result = guard_output(large);
         assert!(result.contains("\"truncated\":true"));
-        assert!(result.len() < MAX_MCP_OUTPUT_CHARS);
+        assert!(result.len() < MAX_MCP_OUTPUT_BYTES);
     }
 
     #[test]
     fn guard_output_boundary() {
-        let exact = "x".repeat(MAX_MCP_OUTPUT_CHARS);
+        let exact = "x".repeat(MAX_MCP_OUTPUT_BYTES);
         let result = guard_output(exact.clone());
         assert_eq!(result, exact);
     }

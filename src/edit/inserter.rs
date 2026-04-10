@@ -41,6 +41,30 @@ impl std::str::FromStr for InsertPosition {
     }
 }
 
+impl InsertPosition {
+    /// Approximate target line (1-based) for preview lookup after insertion.
+    ///
+    /// Returns `None` for `Bottom` since the exact line depends on file length.
+    #[must_use]
+    pub fn target_line(&self) -> Option<u32> {
+        match self {
+            Self::Top => Some(1),
+            Self::Bottom => None,
+            Self::BeforeLine(n) => Some(*n),
+            Self::AfterLine(n) => Some(n.saturating_add(1)),
+        }
+    }
+
+    /// Build the appropriate preview source for this insert position.
+    #[must_use]
+    pub fn preview_source(&self) -> crate::indexer::PreviewSource<'static> {
+        match self.target_line() {
+            Some(line) => crate::indexer::PreviewSource::Line(line),
+            None => crate::indexer::PreviewSource::Last,
+        }
+    }
+}
+
 impl TryFrom<String> for InsertPosition {
     type Error = String;
     fn try_from(s: String) -> std::result::Result<Self, Self::Error> {
@@ -278,5 +302,46 @@ mod tests {
             format!("{}", result.unwrap_err()).contains("path traversal"),
             "should reject .. traversal"
         );
+    }
+
+    #[test]
+    fn target_line_top() {
+        assert_eq!(InsertPosition::Top.target_line(), Some(1));
+    }
+
+    #[test]
+    fn target_line_bottom() {
+        assert_eq!(InsertPosition::Bottom.target_line(), None);
+    }
+
+    #[test]
+    fn target_line_before() {
+        assert_eq!(InsertPosition::BeforeLine(10).target_line(), Some(10));
+    }
+
+    #[test]
+    fn target_line_after() {
+        assert_eq!(InsertPosition::AfterLine(10).target_line(), Some(11));
+    }
+
+    #[test]
+    fn target_line_after_zero_saturates() {
+        assert_eq!(InsertPosition::AfterLine(0).target_line(), Some(1));
+    }
+
+    #[test]
+    fn preview_source_bottom_is_last() {
+        assert!(matches!(
+            InsertPosition::Bottom.preview_source(),
+            crate::indexer::PreviewSource::Last
+        ));
+    }
+
+    #[test]
+    fn preview_source_after_is_line() {
+        assert!(matches!(
+            InsertPosition::AfterLine(5).preview_source(),
+            crate::indexer::PreviewSource::Line(6)
+        ));
     }
 }
