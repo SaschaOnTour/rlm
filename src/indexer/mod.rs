@@ -269,6 +269,47 @@ pub fn reindex_single_file(
     tx_result
 }
 
+/// Max lines to include in the post-write preview.
+const PREVIEW_LINES: usize = 10;
+
+/// Re-index a file after write and build the JSON result with optional preview.
+///
+/// Shared by MCP and CLI write handlers to avoid duplicating reindex + preview logic.
+pub fn reindex_with_result(
+    db: &Database,
+    config: &Config,
+    rel_path: &str,
+    symbol: Option<&str>,
+) -> String {
+    match reindex_single_file(db, config, rel_path) {
+        Ok((chunks, refs)) => {
+            let preview = symbol.and_then(|sym| {
+                db.get_chunks_by_ident(sym).ok().and_then(|cs| {
+                    let file = db.get_file_by_path(rel_path).ok().flatten();
+                    file.and_then(|f| cs.into_iter().find(|c| c.file_id == f.id))
+                        .map(|c| {
+                            c.content
+                                .lines()
+                                .take(PREVIEW_LINES)
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                })
+            });
+            let mut result =
+                serde_json::json!({"ok": true, "reindexed": true, "chunks": chunks, "refs": refs});
+            if let Some(p) = preview {
+                result["preview"] = serde_json::Value::String(p);
+            }
+            result.to_string()
+        }
+        Err(e) => {
+            serde_json::json!({"ok": true, "reindexed": false, "hint": format!("reindex failed: {e}")})
+                .to_string()
+        }
+    }
+}
+
 /// Ensure the index exists, creating it if necessary (auto-index).
 // qual:allow(iosp) reason: "check-then-act: ensure index exists before opening"
 pub fn ensure_index(config: &Config) -> Result<Database> {

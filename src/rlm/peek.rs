@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
-use crate::models::token_estimate::{estimate_tokens, TokenEstimate};
+use crate::models::token_estimate::{estimate_json_tokens, TokenEstimate};
 
 /// A peek result: structure only, no content. Minimal tokens.
 #[derive(Debug, Clone, Serialize)]
@@ -90,7 +90,7 @@ pub fn peek(db: &Database, path_filter: Option<&str>) -> Result<PeekResult> {
 
     // Estimate output tokens
     let output_str = serde_json::to_string(&peek_files).unwrap_or_default();
-    let out_tokens = estimate_tokens(output_str.len());
+    let out_tokens = estimate_json_tokens(output_str.len());
 
     Ok(PeekResult {
         files: peek_files,

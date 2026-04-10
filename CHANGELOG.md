@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-04-10
+
+### Fixed
+
+- **Context savings accuracy**: `context` now tracks actual file count for `alt_calls`
+  (was hardcoded to 0, undercounting CC alternative cost)
+- **JSON token estimation**: rlm output tokens now estimated at 2 bytes/token
+  (matching CC's JSON tokenization) instead of 4 bytes/token
+- **MCP output guard**: Responses exceeding 25K tokens (~50K chars) are now
+  truncated with `{"truncated":true}` instead of being silently cut by CC
+
+### Added
+
+- **Parallel tool execution**: Read-only MCP tools now declare `readOnlyHint`
+  annotation, enabling Claude Code to run them in parallel
+- **CLI concurrency info**: Commands show `[read-only]` / `[write]` in help text;
+  `CLAUDE.md` documents which commands are parallel-safe
+- **Replace/insert preview**: Write responses now include a 10-line content preview
+  of the modified symbol
+- **Error recovery suggestions**: Error messages now include actionable next steps
+  (available sections, search suggestions, index hints)
+
 ## [0.3.3] - 2026-04-10
 
 ### Changed

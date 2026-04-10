@@ -51,18 +51,13 @@ pub fn format_chunks_json(
 /// Build and print a write result with reindex status, matching MCP output format.
 ///
 /// Returns the result JSON string so callers can use its length for savings.
-pub fn print_write_result(db: &Database, config: &Config, rel_path: &str) -> String {
-    let json = match indexer::reindex_single_file(db, config, rel_path) {
-        Ok((chunks, refs)) => {
-            serde_json::json!({"ok": true, "reindexed": true, "chunks": chunks, "refs": refs})
-                .to_string()
-        }
-        Err(e) => {
-            eprintln!("warning: reindex failed: {e}");
-            serde_json::json!({"ok": true, "reindexed": false, "hint": format!("reindex failed: {e}")})
-                .to_string()
-        }
-    };
+pub fn print_write_result(
+    db: &Database,
+    config: &Config,
+    rel_path: &str,
+    symbol: Option<&str>,
+) -> String {
+    let json = indexer::reindex_with_result(db, config, rel_path, symbol);
     print_json(&json);
     json
 }

@@ -30,18 +30,10 @@ fn write_result_with_reindex(
     db: &Database,
     project_root: &std::path::Path,
     rel_path: &str,
+    symbol: Option<&str>,
 ) -> String {
     let config = crate::config::Config::new(project_root);
-    match indexer::reindex_single_file(db, &config, rel_path) {
-        Ok((chunks, refs)) => {
-            serde_json::json!({"ok": true, "reindexed": true, "chunks": chunks, "refs": refs})
-                .to_string()
-        }
-        Err(e) => {
-            serde_json::json!({"ok": true, "reindexed": false, "hint": format!("reindex failed: {e}")})
-                .to_string()
-        }
-    }
+    indexer::reindex_with_result(db, &config, rel_path, symbol)
 }
 
 /// Resolve the index config, validating that any custom path is within project_root.
@@ -148,7 +140,9 @@ fn handle_read_symbol(db: &Database, params: &ReadParams) -> Result<CallToolResu
     };
 
     if chunks.is_empty() {
-        return Ok(RlmServer::error_text(format!("symbol not found: {sym}")));
+        return Ok(RlmServer::error_text(format!(
+            "Symbol not found: {sym}. Use 'search' to find similar symbols, or check the 'path' parameter."
+        )));
     }
 
     let file_chunks = filter_chunks_by_path(db, &chunks, &params.path);
@@ -169,14 +163,23 @@ fn handle_read_section(db: &Database, params: &ReadParams) -> Result<CallToolRes
                     let json = savings::record_file_op(db, "read_section", c, &params.path);
                     Ok(RlmServer::success_text(json))
                 }
-                None => Ok(RlmServer::error_text(format!(
-                    "section not found: {heading}"
-                ))),
+                None => {
+                    let available: Vec<&str> = chunks.iter().map(|c| c.ident.as_str()).collect();
+                    let hint = if available.is_empty() {
+                        format!("Section not found: {heading}. File has no sections.")
+                    } else {
+                        format!(
+                            "Section not found: {heading}. Available: {}",
+                            available.join(", ")
+                        )
+                    };
+                    Ok(RlmServer::error_text(hint))
+                }
             },
             Err(e) => Ok(RlmServer::error_text(e.to_string())),
         },
         Ok(None) => Ok(RlmServer::error_text(format!(
-            "file not found: {}",
+            "File not found: {}. Run 'index' to update, or check 'files' for available paths.",
             params.path
         ))),
         Err(e) => Ok(RlmServer::error_text(e.to_string())),
@@ -250,7 +253,8 @@ pub fn handle_replace(
         match replacer::replace_symbol(db, &params.path, &params.symbol, &params.code, project_root)
         {
             Ok(outcome) => {
-                let result_json = write_result_with_reindex(db, project_root, &params.path);
+                let result_json =
+                    write_result_with_reindex(db, project_root, &params.path, Some(&params.symbol));
                 if let Ok(entry) = savings::alternative_replace_entry(
                     db,
                     &params.path,
@@ -280,7 +284,7 @@ pub fn handle_insert(
     match inserter::insert_code(project_root, path, position, code, &guard) {
         Ok(_) => match db {
             Some(db) => {
-                let result_json = write_result_with_reindex(db, project_root, path);
+                let result_json = write_result_with_reindex(db, project_root, path, None);
                 if let Ok(entry) =
                     savings::alternative_insert_entry(db, path, code.len(), result_json.len())
                 {

@@ -174,7 +174,7 @@ pub enum Command {
     /// Start MCP server (stdio transport)
     Mcp,
 
-    /// Inspect parse quality issues
+    /// [read-only, write with --clear] Inspect parse quality issues
     Quality {
         /// Show only unknown issues (without tests)
         #[arg(long)]
@@ -207,7 +207,7 @@ pub enum Command {
         indexed_only: bool,
     },
 
-    /// [read-only] Verify index integrity and report issues.
+    /// [read-only, write with --fix] Verify index integrity and report issues.
     ///
     /// Checks for:
     /// - `SQLite` database integrity

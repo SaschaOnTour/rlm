@@ -29,7 +29,7 @@ const LINE_OVERHEAD_DIVISOR: u64 = 10;
 
 /// Add Claude Code's line-number overhead (`N\t` prefix, ~10%) to a base token count.
 fn with_line_overhead(base: u64) -> u64 {
-    base + base / LINE_OVERHEAD_DIVISOR
+    base.saturating_add(base / LINE_OVERHEAD_DIVISOR)
 }
 
 /// CC calls for Grep→Read→Edit (replace).
@@ -345,12 +345,12 @@ pub fn record_file_op<T: serde::Serialize>(
     let json = serde_json::to_string(result)
         .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
     let out_tokens = estimate_json_tokens(json.len());
-    // Fall back to out_tokens if file missing or DB error (conservative: CC ≥ rlm output).
+    // Fall back to plaintext estimate if file missing (CC Read returns plain text at 4 bytes/token).
     let alt_tokens = alternative_single_file(db, path).unwrap_or(0);
     let alt_tokens = if alt_tokens > 0 {
         alt_tokens
     } else {
-        out_tokens
+        estimate_tokens(json.len())
     };
     let entry = SavingsEntry {
         command: command.to_string(),

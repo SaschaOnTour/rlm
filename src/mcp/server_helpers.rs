@@ -117,9 +117,11 @@ fn guard_output(text: String) -> String {
     if text.len() <= MAX_MCP_OUTPUT_CHARS {
         return text;
     }
+    let actual = text.len();
     serde_json::json!({
         "truncated": true,
-        "truncated_at_chars": MAX_MCP_OUTPUT_CHARS,
+        "actual_chars": actual,
+        "limit_chars": MAX_MCP_OUTPUT_CHARS,
         "hint": "Result exceeded 25K token MCP limit. Narrow your query with path or symbol filters."
     })
     .to_string()

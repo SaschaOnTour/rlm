@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::{Result, RlmError};
-use crate::models::token_estimate::{estimate_tokens, TokenEstimate};
+use crate::models::token_estimate::{estimate_json_tokens, TokenEstimate};
 
 /// A condensed summary of a file.
 #[derive(Debug, Clone, Serialize)]
@@ -62,7 +62,7 @@ pub fn summarize(db: &Database, file_path: &str) -> Result<Summary> {
     let description = generate_description(&file.lang, &symbols);
 
     let output_str = serde_json::to_string(&symbols).unwrap_or_default();
-    let out_tokens = estimate_tokens(output_str.len() + description.len());
+    let out_tokens = estimate_json_tokens(output_str.len() + description.len());
 
     Ok(Summary {
         file: file_path.to_string(),
