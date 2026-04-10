@@ -27,7 +27,7 @@ const LINE_OVERHEAD_DIVISOR: u64 = 10;
 
 /// Add Claude Code's line-number overhead (`N\t` prefix, ~10%) to a base token count.
 fn with_line_overhead(base: u64) -> u64 {
-    base + base / LINE_OVERHEAD_DIVISOR
+    base.saturating_add(base / LINE_OVERHEAD_DIVISOR)
 }
 
 /// CC calls for Grep→Read→Edit (replace).
