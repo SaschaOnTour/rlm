@@ -1044,5 +1044,4 @@ mod tests {
         )) + SNIPPET_TOKENS;
         assert_eq!(cmd.alternative, expected_alt);
     }
-
 }
