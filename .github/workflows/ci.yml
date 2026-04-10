@@ -46,3 +46,43 @@ jobs:
 
       - name: Test
         run: cargo nextest run
+
+  # Auto-tag when version in Cargo.toml changes on main
+  auto-tag:
+    name: Auto-tag release
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check version change
+        id: version
+        run: |
+          CURRENT=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          PREVIOUS=$(git show HEAD~1:Cargo.toml 2>/dev/null | grep -m1 '^version' | cut -d'"' -f2 || echo "")
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
+          if [ "$CURRENT" != "$PREVIOUS" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Version changed: $PREVIOUS → $CURRENT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ Version unchanged: $CURRENT"
+          fi
+
+      - name: Create tag
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          TAG="v${{ steps.version.outputs.current }}"
+          git tag "$TAG"
+          git push origin "$TAG"
