@@ -25,6 +25,11 @@ const OVERHEAD_COST_PER_M: u64 = 15;
 /// Line number overhead ratio (cat -n adds ~10% tokens).
 const LINE_OVERHEAD_DIVISOR: u64 = 10;
 
+/// Add Claude Code's line-number overhead (`N\t` prefix, ~10%) to a base token count.
+fn with_line_overhead(base: u64) -> u64 {
+    base.saturating_add(base / LINE_OVERHEAD_DIVISOR)
+}
+
 /// CC calls for Grep→Read→Edit (replace).
 const CC_CALLS_REPLACE: u64 = 3;
 
@@ -161,18 +166,9 @@ pub struct CommandSavings {
 /// Returns the estimated token count for reading the full file.
 pub fn alternative_single_file(db: &Database, path: &str) -> Result<u64> {
     match db.get_file_by_path(path)? {
-        Some(f) => Ok(estimate_tokens_from_bytes(f.size_bytes)),
+        Some(f) => Ok(with_line_overhead(estimate_tokens_from_bytes(f.size_bytes))),
         None => Ok(0),
     }
-}
-
-/// Estimate what Claude Code would need for reading all files in scope.
-///
-/// Used for operations like `peek`, `map`, `tree` where Claude Code would
-/// need to Glob + Read every file to get symbol information.
-pub fn alternative_scoped_files(db: &Database, path_prefix: Option<&str>) -> Result<u64> {
-    let total_bytes = db.get_scoped_file_sizes(path_prefix)?;
-    Ok(estimate_tokens_from_bytes(total_bytes))
 }
 
 /// Estimate what Claude Code would need for a symbol-related operation.
@@ -181,7 +177,7 @@ pub fn alternative_scoped_files(db: &Database, path_prefix: Option<&str>) -> Res
 /// Claude Code would need to Grep for the symbol, then Read all involved files.
 pub fn alternative_symbol_files(db: &Database, symbol: &str) -> Result<u64> {
     let total_bytes = db.get_symbol_file_sizes(symbol)?;
-    Ok(estimate_tokens_from_bytes(total_bytes))
+    Ok(with_line_overhead(estimate_tokens_from_bytes(total_bytes)))
 }
 
 // ─── Write operation cost helpers ───────────────────────────────
@@ -201,8 +197,7 @@ pub fn alternative_replace_entry(
         .unwrap_or(0);
     let pre_edit_bytes =
         (post_edit_bytes + old_code_len as u64).saturating_sub(new_code_len as u64);
-    let file_tokens = estimate_tokens_from_bytes(pre_edit_bytes);
-    let line_overhead = file_tokens / LINE_OVERHEAD_DIVISOR;
+    let file_tokens_with_lines = with_line_overhead(estimate_tokens_from_bytes(pre_edit_bytes));
     let old_tokens = estimate_tokens(old_code_len);
     let new_tokens = estimate_tokens(new_code_len);
 
@@ -216,7 +211,7 @@ pub fn alternative_replace_entry(
         // Parameter tokens only; per-call overhead is accounted for via alt_calls.
         alt_input: old_tokens + new_tokens, // Edit: old_string + new_string
         alt_output: SNIPPET_TOKENS            // Grep result (file matches)
-            + file_tokens + line_overhead     // Read result (full file + line numbers)
+            + file_tokens_with_lines          // Read result (full file + line numbers)
             + SNIPPET_TOKENS, // Edit result (patch + snippet)
         alt_calls: CC_CALLS_REPLACE,
         files_touched: 1,
@@ -236,8 +231,7 @@ pub fn alternative_insert_entry(
         .map(|f| f.size_bytes)
         .unwrap_or(0);
     let pre_edit_bytes = post_edit_bytes.saturating_sub(new_code_len as u64);
-    let file_tokens = estimate_tokens_from_bytes(pre_edit_bytes);
-    let line_overhead = file_tokens / LINE_OVERHEAD_DIVISOR;
+    let file_tokens_with_lines = with_line_overhead(estimate_tokens_from_bytes(pre_edit_bytes));
     let new_tokens = estimate_tokens(new_code_len);
 
     Ok(SavingsEntry {
@@ -246,7 +240,7 @@ pub fn alternative_insert_entry(
         rlm_output: estimate_tokens(rlm_result_len),
         rlm_calls: 1,
         alt_input: new_tokens, // Edit: new_string (Read has negligible path param)
-        alt_output: file_tokens + line_overhead + SNIPPET_TOKENS, // Read result + Edit result
+        alt_output: file_tokens_with_lines + SNIPPET_TOKENS, // Read result + Edit result
         alt_calls: CC_CALLS_INSERT,
         files_touched: 1,
     })
@@ -320,7 +314,8 @@ fn serialize_and_record_entry<T: serde::Serialize>(
     alt_calls: u64,
     files_touched: u64,
 ) -> String {
-    let json = serde_json::to_string(result).unwrap_or_default();
+    let json = serde_json::to_string(result)
+        .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
     let out_tokens = estimate_tokens(json.len());
     let entry = SavingsEntry {
         command: command.to_string(),
@@ -345,7 +340,8 @@ pub fn record_file_op<T: serde::Serialize>(
     result: &T,
     path: &str,
 ) -> String {
-    let json = serde_json::to_string(result).unwrap_or_default();
+    let json = serde_json::to_string(result)
+        .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
     let out_tokens = estimate_tokens(json.len());
     // Fall back to out_tokens if file missing or DB error (conservative: CC ≥ rlm output).
     let alt_tokens = alternative_single_file(db, path).unwrap_or(0);
@@ -391,18 +387,18 @@ pub fn record_symbol_op<T: serde::Serialize>(
 
 /// Record savings for a scoped overview operation and return the serialized JSON.
 ///
-/// CC would need Glob + Read×N files to get the same symbol info. `alt_output`
-/// uses total file content (accurate payload), but `alt_calls` is conservative
-/// at 1 since we don't track file count here. Net effect: call overhead is
-/// undercounted but payload savings are accurate.
+/// CC would need Glob + Read×N files to get the same symbol info.
 pub fn record_scoped_op<T: serde::Serialize>(
     db: &Database,
     command: &str,
     result: &T,
     path_prefix: Option<&str>,
 ) -> String {
-    let alt_tokens = alternative_scoped_files(db, path_prefix).unwrap_or(0);
-    serialize_and_record_entry(db, command, result, alt_tokens, 1, 0)
+    let (total_bytes, file_count) = db.get_scoped_file_stats(path_prefix).unwrap_or((0, 0));
+    let alt_tokens =
+        with_line_overhead(estimate_tokens_from_bytes(total_bytes)).saturating_add(SNIPPET_TOKENS); // Glob result + Read results
+    let alt_calls = 1 + file_count; // Glob + Read×N
+    serialize_and_record_entry(db, command, result, alt_tokens, alt_calls, file_count)
 }
 
 /// Multiplier to convert a ratio to a percentage.
@@ -635,7 +631,7 @@ mod tests {
         db.upsert_file(&file).unwrap();
 
         let alt = alternative_single_file(&db, "src/main.rs").unwrap();
-        assert_eq!(alt, 1000); // 4000 / 4
+        assert_eq!(alt, 1100); // 4000 / 4 = 1000 + 10% line-number overhead
     }
 
     #[test]
@@ -643,50 +639,6 @@ mod tests {
         let db = test_db();
         let alt = alternative_single_file(&db, "nonexistent.rs").unwrap();
         assert_eq!(alt, 0);
-    }
-
-    #[test]
-    fn alternative_scoped_files_all() {
-        let db = test_db();
-        let f1 = FileRecord::new(
-            "src/a.rs".into(),
-            "a".into(),
-            "rust".into(),
-            SCOPED_FILE_SIZE_A,
-        );
-        let f2 = FileRecord::new(
-            "src/b.rs".into(),
-            "b".into(),
-            "rust".into(),
-            SCOPED_FILE_SIZE_B,
-        );
-        db.upsert_file(&f1).unwrap();
-        db.upsert_file(&f2).unwrap();
-
-        let alt = alternative_scoped_files(&db, None).unwrap();
-        assert_eq!(alt, 300); // (SCOPED_FILE_SIZE_A + SCOPED_FILE_SIZE_B) / 4
-    }
-
-    #[test]
-    fn alternative_scoped_files_filtered() {
-        let db = test_db();
-        let f1 = FileRecord::new(
-            "src/a.rs".into(),
-            "a".into(),
-            "rust".into(),
-            SCOPED_FILE_SIZE_A,
-        );
-        let f2 = FileRecord::new(
-            "tests/t.rs".into(),
-            "b".into(),
-            "rust".into(),
-            SCOPED_FILE_SIZE_B,
-        );
-        db.upsert_file(&f1).unwrap();
-        db.upsert_file(&f2).unwrap();
-
-        let alt = alternative_scoped_files(&db, Some("src/")).unwrap();
-        assert_eq!(alt, 100); // SCOPED_FILE_SIZE_A / 4
     }
 
     #[test]
@@ -740,7 +692,7 @@ mod tests {
         db.insert_ref(&r).unwrap();
 
         let alt = alternative_symbol_files(&db, "my_fn").unwrap();
-        assert_eq!(alt, 300); // (SCOPED_FILE_SIZE_A + SCOPED_FILE_SIZE_B) / 4
+        assert_eq!(alt, 330); // (400 + 800) / 4 = 300 + 10% line-number overhead
     }
 
     #[test]
@@ -1060,5 +1012,38 @@ mod tests {
         assert_eq!(report.total_saved, 1950);
         // No division by zero
         assert!(report.total_pct > 0.0);
+    }
+
+    #[test]
+    fn scoped_op_counts_files_for_alt_calls() {
+        let db = test_db();
+        let f1 = FileRecord::new(
+            "src/a.rs".into(),
+            "a".into(),
+            "rust".into(),
+            SCOPED_FILE_SIZE_A,
+        );
+        let f2 = FileRecord::new(
+            "src/b.rs".into(),
+            "b".into(),
+            "rust".into(),
+            SCOPED_FILE_SIZE_B,
+        );
+        db.upsert_file(&f1).unwrap();
+        db.upsert_file(&f2).unwrap();
+
+        let data = serde_json::json!({"test": true});
+        record_scoped_op(&db, "overview", &data, Some("src/"));
+
+        let report = get_savings_report(&db, None).unwrap();
+        let cmd = &report.by_cmd[0];
+        assert_eq!(cmd.alt_calls, 3); // Glob + Read×2
+
+        // alt_tokens = with_line_overhead(total_bytes/4) + SNIPPET_TOKENS
+        // Both files are in src/: 400+800=1200 bytes → 300 tokens → +10% = 330 → +200 snippet = 530
+        let expected_alt = with_line_overhead(estimate_tokens_from_bytes(
+            SCOPED_FILE_SIZE_A + SCOPED_FILE_SIZE_B,
+        )) + SNIPPET_TOKENS;
+        assert_eq!(cmd.alternative, expected_alt);
     }
 }

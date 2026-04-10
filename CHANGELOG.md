@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-04-10
+
+### Changed
+
+- **Savings accuracy**: Alternative token estimators now include ~10% line-number
+  overhead (`N\t` prefix) matching Claude Code's actual Read output
+- **Overview savings**: `record_scoped_op` now counts actual indexed files for
+  `alt_calls` (Glob + Read×N) instead of hardcoded 1
+- **CLI read_section**: Uses `record_file_op` (V2 tracking) instead of legacy `record()`
+
 ## [0.3.2] - 2026-04-10
 
 ### Changed

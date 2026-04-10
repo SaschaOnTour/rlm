@@ -6,6 +6,7 @@ use crate::db::schema::{CREATE_SCHEMA, MIGRATE_SAVINGS_V2};
 use crate::error::Result;
 
 /// Database wrapper for the rlm index.
+// qual:allow(srp_lcom4) reason: "facade for 6 query modules — LCOM4 reflects domain boundaries, not SRP violation"
 pub struct Database {
     conn: Connection,
 }

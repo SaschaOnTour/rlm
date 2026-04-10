@@ -91,13 +91,9 @@ fn cmd_read_section(path: &str, heading: &str) -> CmdResult {
     let file = db.get_file_by_path(path).map_err(map_err)?;
     let file = file.ok_or_else(|| map_err(format!("file not found: {path}")))?;
     let chunks = db.get_chunks_for_file(file.id).map_err(map_err)?;
-    let section_chunk = chunks.iter().find(|c| c.ident == heading);
-    match section_chunk {
+    match chunks.iter().find(|c| c.ident == heading) {
         Some(c) => {
-            let json = output::format_json(c);
-            let out_tokens = estimate_tokens(json.len());
-            let alt_tokens = savings::alternative_single_file(&db, path).unwrap_or(out_tokens);
-            savings::record(&db, "read_section", out_tokens, alt_tokens, 1);
+            let json = savings::record_file_op(&db, "read_section", c, path);
             print_json(&json);
         }
         None => return Err(map_err(format!("section not found: {heading}"))),
