@@ -125,13 +125,25 @@ pub fn handle_context(
                             context: &ctx_result,
                             callgraph: &graph,
                         };
-                        let json = savings::record_symbol_op(db, "context", &combined, symbol, 0);
+                        let json = savings::record_symbol_op(
+                            db,
+                            "context",
+                            &combined,
+                            symbol,
+                            ctx_result.file_count as u64,
+                        );
                         Ok(RlmServer::success_text(json))
                     }
                     Err(e) => Ok(RlmServer::error_text(e.to_string())),
                 }
             } else {
-                let json = savings::record_symbol_op(db, "context", &ctx_result, symbol, 0);
+                let json = savings::record_symbol_op(
+                    db,
+                    "context",
+                    &ctx_result,
+                    symbol,
+                    ctx_result.file_count as u64,
+                );
                 Ok(RlmServer::success_text(json))
             }
         }

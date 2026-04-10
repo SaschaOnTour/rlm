@@ -1,7 +1,10 @@
 use serde::Serialize;
 
-/// Approximate token count using the ~4 chars per token heuristic.
+/// Approximate token count using the ~4 chars per token heuristic (plain text).
 const CHARS_PER_TOKEN: f64 = 4.0;
+
+/// Bytes per token for JSON content (Claude Code uses denser tokenization for JSON).
+const JSON_CHARS_PER_TOKEN: f64 = 2.0;
 
 /// Token usage estimate for an operation.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -39,6 +42,12 @@ pub fn estimate_tokens(char_count: usize) -> u64 {
 #[must_use]
 pub fn estimate_tokens_str(s: &str) -> u64 {
     estimate_tokens(s.len())
+}
+
+/// Estimate tokens for JSON content (CC uses 2 bytes/token for JSON).
+#[must_use]
+pub fn estimate_json_tokens(char_count: usize) -> u64 {
+    (char_count as f64 / JSON_CHARS_PER_TOKEN).ceil() as u64
 }
 
 /// Estimate tokens from a byte count (file size).
@@ -82,5 +91,14 @@ mod tests {
         assert_eq!(estimate_tokens_from_bytes(4), 1);
         assert_eq!(estimate_tokens_from_bytes(1024), 256);
         assert_eq!(estimate_tokens_from_bytes(5), 2); // ceil(5/4) = 2
+    }
+
+    #[test]
+    fn estimate_json_tokens_uses_tighter_ratio() {
+        // CC tokenizes JSON at 2 bytes/token (denser than plain text at 4)
+        assert_eq!(estimate_json_tokens(0), 0);
+        assert_eq!(estimate_json_tokens(2), 1);
+        assert_eq!(estimate_json_tokens(400), 200);
+        assert_eq!(estimate_json_tokens(1), 1); // ceil(1/2)
     }
 }

@@ -11,7 +11,7 @@ use crate::cli::output;
 use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
-use crate::models::token_estimate::estimate_tokens;
+use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
 use crate::rlm::{partition, peek, summarize};
@@ -35,7 +35,7 @@ pub fn cmd_search(query: &str, limit: usize) -> CmdResult {
     let db = get_db(&config)?;
     let result = operations::search_chunks(&db, query, limit).map_err(map_err)?;
     let json = output::format_json(&result);
-    let out_tokens = estimate_tokens(json.len());
+    let out_tokens = estimate_json_tokens(json.len());
     let file_count = result.results.len() as u64;
     let alt_tokens = result.tokens.output.max(out_tokens);
     savings::record(&db, "search", out_tokens, alt_tokens, file_count);
@@ -212,16 +212,17 @@ pub fn cmd_context(symbol: &str, graph: bool) -> CmdResult {
     let db = get_db(&config)?;
     let result = operations::build_context(&db, symbol).map_err(map_err)?;
 
+    let file_count = result.file_count as u64;
     if graph {
         let callgraph = operations::build_callgraph(&db, symbol).map_err(map_err)?;
         let combined = serde_json::json!({
             "context": result,
             "callgraph": callgraph,
         });
-        let json = savings::record_symbol_op(&db, "context", &combined, symbol, 0);
+        let json = savings::record_symbol_op(&db, "context", &combined, symbol, file_count);
         print_json(&json);
     } else {
-        let json = savings::record_symbol_op(&db, "context", &result, symbol, 0);
+        let json = savings::record_symbol_op(&db, "context", &result, symbol, file_count);
         print_json(&json);
     }
     Ok(())

@@ -26,6 +26,9 @@ pub struct ContextResult {
     /// Names of callees.
     #[serde(rename = "callees")]
     pub callee_names: Vec<String>,
+    /// Number of distinct files containing this symbol.
+    #[serde(rename = "fc")]
+    pub file_count: usize,
 }
 
 /// Build complete context for understanding a symbol.
@@ -44,6 +47,11 @@ pub fn build_context(db: &Database, symbol: &str) -> Result<ContextResult> {
         callees.extend(refs);
     }
 
+    let file_count = chunks
+        .iter()
+        .map(|c| c.file_id)
+        .collect::<HashSet<_>>()
+        .len();
     let bodies: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
     let sigs: Vec<String> = chunks.iter().filter_map(|c| c.signature.clone()).collect();
     let callee_names: Vec<String> = callees
@@ -60,6 +68,7 @@ pub fn build_context(db: &Database, symbol: &str) -> Result<ContextResult> {
         signatures: sigs,
         caller_count: callers_refs.len(),
         callee_names,
+        file_count,
     })
 }
 
@@ -262,6 +271,7 @@ mod tests {
         assert_eq!(result.symbol, "new");
         assert_eq!(result.body.len(), 2);
         assert_eq!(result.signatures.len(), 2);
+        assert_eq!(result.file_count, 2); // defined in 2 distinct files
     }
 
     #[test]

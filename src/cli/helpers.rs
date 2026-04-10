@@ -7,7 +7,7 @@ use crate::cli::output;
 use crate::config::Config;
 use crate::db::Database;
 use crate::indexer;
-use crate::models::token_estimate::estimate_tokens;
+use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations::savings;
 
 pub type CmdResult = Result<(), Box<dyn std::fmt::Display>>;
@@ -69,7 +69,7 @@ pub fn print_write_result(db: &Database, config: &Config, rel_path: &str) -> Str
 
 /// Emit a read_symbol result and record savings (integration: calls only).
 pub fn emit_read_symbol(db: &Database, path: &str, json: &str) {
-    let out_tokens = estimate_tokens(json.len());
+    let out_tokens = estimate_json_tokens(json.len());
     savings::record_read_symbol(db, out_tokens, path);
     print_json(json);
 }

@@ -72,7 +72,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Full-text search across indexed chunks (symbols and content). Returns matching chunks with content."
+        description = "Full-text search across indexed chunks (symbols and content). Returns matching chunks with content.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn search(&self, params: Parameters<SearchParams>) -> Result<CallToolResult, McpError> {
@@ -85,7 +86,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Read a specific symbol (function, struct, etc.) or markdown section from a file. Requires 'symbol' or 'section'. Use metadata=true with symbol to include kind/signature/visibility/call-count. For full-file or line-range reads, use Claude Code's native Read tool."
+        description = "Read a specific symbol (function, struct, etc.) or markdown section from a file. Requires 'symbol' or 'section'. Use metadata=true with symbol to include kind/signature/visibility/call-count. For full-file or line-range reads, use Claude Code's native Read tool.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn read(&self, params: Parameters<ReadParams>) -> Result<CallToolResult, McpError> {
@@ -94,7 +96,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Project structure overview at three detail levels. 'minimal': symbol names/kinds/lines only (~50 tokens). 'standard' (default): file map with language, line count, public symbols, descriptions. 'tree': directory hierarchy with symbol annotations. Optional path prefix filter."
+        description = "Project structure overview at three detail levels. 'minimal': symbol names/kinds/lines only (~50 tokens). 'standard' (default): file map with language, line count, public symbols, descriptions. 'tree': directory hierarchy with symbol annotations. Optional path prefix filter.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn overview(
@@ -108,7 +111,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Find all usages of a symbol and analyze impact: shows every location that would need updating if the symbol changes. Returns file, containing symbol, line, and reference kind."
+        description = "Find all usages of a symbol and analyze impact: shows every location that would need updating if the symbol changes. Returns file, containing symbol, line, and reference kind.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn refs(&self, params: Parameters<RefsParams>) -> Result<CallToolResult, McpError> {
@@ -143,7 +147,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Get indexing statistics: file count, chunk count, reference count, total bytes, language breakdown, and index age."
+        description = "Get indexing statistics: file count, chunk count, reference count, total bytes, language breakdown, and index age.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn stats(&self) -> Result<CallToolResult, McpError> {
@@ -152,7 +157,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Split a file into chunks using a strategy: 'semantic' (AST boundaries), 'uniform:N' (N lines each), or 'keyword:PATTERN' (regex split)."
+        description = "Split a file into chunks using a strategy: 'semantic' (AST boundaries), 'uniform:N' (N lines each), or 'keyword:PATTERN' (regex split).",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     // qual:allow(dry) reason: "rmcp #[tool] wrapper boilerplate — all tool methods follow same pattern"
@@ -167,7 +173,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Generate a condensed summary of a file: language, line count, symbols with descriptions."
+        description = "Generate a condensed summary of a file: language, line count, symbols with descriptions.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn summarize(
@@ -179,7 +186,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Compare the indexed version of a file/symbol with the current disk version. Shows if content has changed since last index."
+        description = "Compare the indexed version of a file/symbol with the current disk version. Shows if content has changed since last index.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn diff(&self, params: Parameters<DiffParams>) -> Result<CallToolResult, McpError> {
@@ -190,7 +198,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Complete understanding of a symbol: body content, signatures, caller count, and callee names. Use graph=true to include full callgraph with caller/callee names."
+        description = "Complete understanding of a symbol: body content, signatures, caller count, and callee names. Use graph=true to include full callgraph with caller/callee names.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn context(&self, params: Parameters<ContextParams>) -> Result<CallToolResult, McpError> {
@@ -199,7 +208,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "File dependency analysis: lists all imports/use declarations found in the specified file."
+        description = "File dependency analysis: lists all imports/use declarations found in the specified file.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn deps(&self, params: Parameters<DepsParams>) -> Result<CallToolResult, McpError> {
@@ -208,7 +218,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Show what symbols are visible at a specific line in a file. Lists containing scopes and all symbols defined before that line."
+        description = "Show what symbols are visible at a specific line in a file. Lists containing scopes and all symbols defined before that line.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn scope(&self, params: Parameters<ScopeParams>) -> Result<CallToolResult, McpError> {
@@ -217,7 +228,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "List ALL files in the project (indexed + skipped). Unlike overview/search, this shows files with unsupported extensions (.cshtml, .kt, etc.). Use skipped_only=true to find files that need your own tools."
+        description = "List ALL files in the project (indexed + skipped). Unlike overview/search, this shows files with unsupported extensions (.cshtml, .kt, etc.). Use skipped_only=true to find files that need your own tools.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn files(&self, params: Parameters<FilesParams>) -> Result<CallToolResult, McpError> {
@@ -231,7 +243,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Verify index integrity. Checks for SQLite corruption, orphan chunks/refs, and files that no longer exist on disk. Use fix=true to auto-repair issues."
+        description = "Verify index integrity. Checks for SQLite corruption, orphan chunks/refs, and files that no longer exist on disk. Use fix=true to auto-repair issues.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn verify(&self, params: Parameters<VerifyParams>) -> Result<CallToolResult, McpError> {
@@ -240,7 +253,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Show token savings report: how many tokens rlm saved compared to Claude Code's native tools (Read/Grep/Glob). Optionally filter by date."
+        description = "Show token savings report: how many tokens rlm saved compared to Claude Code's native tools (Read/Grep/Glob). Optionally filter by date.",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     async fn savings(&self, params: Parameters<SavingsParams>) -> Result<CallToolResult, McpError> {
@@ -249,7 +263,8 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "List all supported file extensions with their language and parser type (tree-sitter, structural, semantic, plaintext)."
+        description = "List all supported file extensions with their language and parser type (tree-sitter, structural, semantic, plaintext).",
+        annotations(read_only_hint = true)
     )]
     // qual:api
     // qual:allow(srp) reason: "rmcp #[tool_router] requires &self on all #[tool] methods"

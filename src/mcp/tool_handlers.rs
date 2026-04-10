@@ -14,7 +14,7 @@ use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
-use crate::models::token_estimate::estimate_tokens;
+use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
 use crate::search::tree;
@@ -97,7 +97,7 @@ pub fn handle_search(db: &Database, query: &str, limit: usize) -> Result<CallToo
     match operations::search_chunks(db, query, limit) {
         Ok(result) => {
             let json = RlmServer::to_json(&result);
-            let out_tokens = estimate_tokens(json.len());
+            let out_tokens = estimate_json_tokens(json.len());
             let alt_tokens = result.tokens.output.max(out_tokens);
             savings::record(
                 db,

@@ -12,11 +12,14 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::db::Database;
-use crate::models::token_estimate::estimate_tokens;
+use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
 
 use super::server::RlmServer;
+
+/// MCP output char limit (~25K tokens at 2 bytes/token for JSON).
+const MAX_MCP_OUTPUT_CHARS: usize = 50_000;
 
 // -- Helper functions --------------------------------------------------------
 
@@ -44,7 +47,7 @@ impl RlmServer {
     }
 
     pub(crate) fn success_text(text: String) -> CallToolResult {
-        CallToolResult::success(vec![Content::text(text)])
+        CallToolResult::success(vec![Content::text(guard_output(text))])
     }
 
     pub(crate) fn error_text(msg: String) -> CallToolResult {
@@ -64,7 +67,7 @@ impl RlmServer {
         val: &T,
     ) -> Result<CallToolResult, McpError> {
         let json = Self::to_json(val);
-        let out_tokens = estimate_tokens(json.len());
+        let out_tokens = estimate_json_tokens(json.len());
         savings::record_read_symbol(db, out_tokens, path);
         Ok(Self::success_text(json))
     }
@@ -103,6 +106,23 @@ impl RlmServer {
 
         Self::serialize_and_record(db, &params.path, chunks)
     }
+}
+
+/// Guard against MCP output truncation by Claude Code.
+///
+/// CC silently truncates MCP results exceeding 25K tokens. This function
+/// replaces oversized results with a truncation notice so the agent can
+/// narrow its query instead of receiving silently incomplete data.
+fn guard_output(text: String) -> String {
+    if text.len() <= MAX_MCP_OUTPUT_CHARS {
+        return text;
+    }
+    serde_json::json!({
+        "truncated": true,
+        "truncated_at_chars": MAX_MCP_OUTPUT_CHARS,
+        "hint": "Result exceeded 25K token MCP limit. Narrow your query with path or symbol filters."
+    })
+    .to_string()
 }
 
 // -- Server startup ----------------------------------------------------------
@@ -168,5 +188,27 @@ mod tests {
             .map(|t| t.text.clone())
             .unwrap_or_default();
         assert!(text.contains("disk full"));
+    }
+
+    #[test]
+    fn guard_output_passes_small_result() {
+        let small = "{\"ok\":true}".to_string();
+        let result = guard_output(small.clone());
+        assert_eq!(result, small);
+    }
+
+    #[test]
+    fn guard_output_truncates_large_result() {
+        let large = "x".repeat(MAX_MCP_OUTPUT_CHARS + 1);
+        let result = guard_output(large);
+        assert!(result.contains("\"truncated\":true"));
+        assert!(result.len() < MAX_MCP_OUTPUT_CHARS);
+    }
+
+    #[test]
+    fn guard_output_boundary() {
+        let exact = "x".repeat(MAX_MCP_OUTPUT_CHARS);
+        let result = guard_output(exact.clone());
+        assert_eq!(result, exact);
     }
 }

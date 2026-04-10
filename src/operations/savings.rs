@@ -8,7 +8,9 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
-use crate::models::token_estimate::{estimate_tokens, estimate_tokens_from_bytes};
+use crate::models::token_estimate::{
+    estimate_json_tokens, estimate_tokens, estimate_tokens_from_bytes,
+};
 
 /// Per-call overhead in tokens (tool_use block structure).
 const CALL_OVERHEAD: u64 = 30;
@@ -316,7 +318,7 @@ fn serialize_and_record_entry<T: serde::Serialize>(
 ) -> String {
     let json = serde_json::to_string(result)
         .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
-    let out_tokens = estimate_tokens(json.len());
+    let out_tokens = estimate_json_tokens(json.len());
     let entry = SavingsEntry {
         command: command.to_string(),
         rlm_input: 0, // read-only ops have negligible params
@@ -342,7 +344,7 @@ pub fn record_file_op<T: serde::Serialize>(
 ) -> String {
     let json = serde_json::to_string(result)
         .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
-    let out_tokens = estimate_tokens(json.len());
+    let out_tokens = estimate_json_tokens(json.len());
     // Fall back to out_tokens if file missing or DB error (conservative: CC ≥ rlm output).
     let alt_tokens = alternative_single_file(db, path).unwrap_or(0);
     let alt_tokens = if alt_tokens > 0 {
