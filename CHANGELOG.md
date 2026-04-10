@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-04-10
+
+### Changed
+
+- **CI auto-release**: Merge to main automatically tags and builds release
+  binaries when `Cargo.toml` version has no matching tag
+
 ## [0.3.1] - 2026-04-09
 
 ### Added
