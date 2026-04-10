@@ -65,10 +65,10 @@ impl RlmServer {
         path: &str,
         val: &T,
     ) -> Result<CallToolResult, McpError> {
-        let json = Self::to_json(val);
+        let json = guard_output(Self::to_json(val));
         let out_tokens = estimate_json_tokens(json.len());
         savings::record_read_symbol(db, out_tokens, path);
-        Ok(Self::success_text(json))
+        Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
     /// Build the read-symbol response, optionally enriching with metadata (integration: calls only).

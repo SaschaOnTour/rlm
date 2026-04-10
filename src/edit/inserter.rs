@@ -28,12 +28,18 @@ impl std::str::FromStr for InsertPosition {
                 let n: u32 = s[7..]
                     .parse()
                     .map_err(|e| format!("invalid line number: {e}"))?;
+                if n == 0 {
+                    return Err("line number must be >= 1 (1-based)".into());
+                }
                 Ok(Self::BeforeLine(n))
             }
             s if s.starts_with("after:") => {
                 let n: u32 = s[6..]
                     .parse()
                     .map_err(|e| format!("invalid line number: {e}"))?;
+                if n == 0 {
+                    return Err("line number must be >= 1 (1-based)".into());
+                }
                 Ok(Self::AfterLine(n))
             }
             _ => Err("position must be: top, bottom, before:N, or after:N".into()),
@@ -325,8 +331,13 @@ mod tests {
     }
 
     #[test]
-    fn target_line_after_zero_saturates() {
-        assert_eq!(InsertPosition::AfterLine(0).target_line(), Some(1));
+    fn parse_before_zero_rejected() {
+        assert!("before:0".parse::<InsertPosition>().is_err());
+    }
+
+    #[test]
+    fn parse_after_zero_rejected() {
+        assert!("after:0".parse::<InsertPosition>().is_err());
     }
 
     #[test]

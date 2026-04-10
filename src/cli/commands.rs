@@ -8,8 +8,9 @@ use crate::edit::inserter::InsertPosition;
     version,
     about = "The Context Broker - semantic code exploration for AI agents",
     after_help = "CONCURRENCY: Commands marked [read-only] can be run concurrently via parallel \
-                  Bash calls. Commands marked [write] modify files or the index and must run \
-                  sequentially.\n\n\
+                  Bash calls once the index exists. If the index is missing, the first read-only \
+                  command will create it (a write operation). Commands marked [write] modify files \
+                  or the index and must run sequentially.\n\n\
                   NOTE: Most commands only show files with supported extensions. To see ALL files \
                   including skipped ones, use 'rlm files'."
 )]
