@@ -207,7 +207,7 @@ pub fn alternative_replace_entry(
         command: "replace".to_string(),
         // Parameter tokens only; per-call overhead is accounted for via rlm_calls.
         rlm_input: new_tokens,
-        rlm_output: estimate_tokens(rlm_result_len),
+        rlm_output: estimate_json_tokens(rlm_result_len),
         rlm_calls: 1,
         // CC: Grep(symbol) → Read(file) → Edit(old, new)
         // Parameter tokens only; per-call overhead is accounted for via alt_calls.
@@ -239,7 +239,7 @@ pub fn alternative_insert_entry(
     Ok(SavingsEntry {
         command: "insert".to_string(),
         rlm_input: new_tokens,
-        rlm_output: estimate_tokens(rlm_result_len),
+        rlm_output: estimate_json_tokens(rlm_result_len),
         rlm_calls: 1,
         alt_input: new_tokens, // Edit: new_string (Read has negligible path param)
         alt_output: file_tokens_with_lines + SNIPPET_TOKENS, // Read result + Edit result
@@ -525,7 +525,7 @@ mod tests {
     const V2_NEW_CODE_LEN: usize = 200;
     const V2_RESULT_LEN: usize = 10;
     const V2_RLM_INPUT: u64 = 50; // ceil(200/4) = new_tokens only (no call overhead)
-    const V2_RLM_OUTPUT: u64 = 3;
+    const V2_RLM_OUTPUT: u64 = 5; // ceil(10/2) = JSON result at 2 bytes/token
     const V2_ALT_INPUT_REPLACE: u64 = 75; // ceil(100/4) + ceil(200/4) = old_tokens + new_tokens
     const V2_ALT_OUTPUT_REPLACE: u64 = 1472; // pre-edit: (4000+100-200)/4=975, overhead=97, 200+975+97+200
     const V2_ALT_INPUT_INSERT: u64 = 50; // ceil(200/4) = new_tokens only
@@ -861,19 +861,19 @@ mod tests {
 
         let report = get_savings_report(&db, None).unwrap();
         assert_eq!(report.ops, 1);
-        // rlm_total = 50 + 3 + 30 = 83
-        assert_eq!(report.rlm_total, 83);
+        // rlm_total = 50 + 5 + 30 = 85
+        assert_eq!(report.rlm_total, 85);
         // alt_total = 75 + 1472 + 90 = 1637
         assert_eq!(report.alt_total, 1637);
-        assert_eq!(report.total_saved, 1554);
+        assert_eq!(report.total_saved, 1552);
         assert!(report.total_pct > 90.0);
         assert_eq!(report.input_saved, 25); // 75 - 50
-        assert_eq!(report.result_saved, 1469); // 1472 - 3
+        assert_eq!(report.result_saved, 1467); // 1472 - 5
         assert_eq!(report.calls_saved, 2); // 3 - 1
 
         let cmd = &report.by_cmd[0];
         assert_eq!(cmd.alt_calls, CC_CALLS_REPLACE);
-        assert_eq!(cmd.rlm_total, 83);
+        assert_eq!(cmd.rlm_total, 85);
         assert_eq!(cmd.alt_total, 1637);
     }
 
