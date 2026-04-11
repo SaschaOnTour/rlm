@@ -5,7 +5,7 @@
 //!
 //! Utility handlers live in `tool_handlers_util`.
 
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
 
 use crate::config::Config;
@@ -89,7 +89,7 @@ pub fn handle_index(
 pub fn handle_search(db: &Database, query: &str, limit: usize) -> Result<CallToolResult, McpError> {
     match operations::search_chunks(db, query, limit) {
         Ok(result) => {
-            let json = RlmServer::to_json(&result);
+            let json = super::server_helpers::guard_output(RlmServer::to_json(&result));
             let out_tokens = estimate_json_tokens(json.len());
             let alt_tokens = result.tokens.output.max(out_tokens);
             savings::record(
@@ -99,7 +99,7 @@ pub fn handle_search(db: &Database, query: &str, limit: usize) -> Result<CallToo
                 alt_tokens,
                 result.results.len() as u64,
             );
-            Ok(RlmServer::success_text(json))
+            Ok(CallToolResult::success(vec![Content::text(json)]))
         }
         Err(e) => Ok(RlmServer::error_text(e.to_string())),
     }
