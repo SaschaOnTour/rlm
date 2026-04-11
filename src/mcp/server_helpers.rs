@@ -112,6 +112,12 @@ impl RlmServer {
 /// CC silently truncates MCP results exceeding 25K tokens. This function
 /// replaces oversized results with a truncation notice so the agent can
 /// narrow its query instead of receiving silently incomplete data.
+///
+/// **Known limitation:** Some savings recording functions (`record_file_op`,
+/// `record_scoped_op`, `record_symbol_op`) estimate tokens from the pre-guard
+/// JSON. If the guard truncates, recorded savings for that operation are slightly
+/// overstated. This only affects responses >50K bytes (rare) and has negligible
+/// impact on aggregate reports.
 pub(crate) fn guard_output(text: String) -> String {
     if text.len() <= MAX_MCP_OUTPUT_BYTES {
         return text;

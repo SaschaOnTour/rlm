@@ -1,7 +1,7 @@
 use serde::Serialize;
 
-/// Approximate token count using the ~4 chars per token heuristic (plain text).
-const CHARS_PER_TOKEN: f64 = 4.0;
+/// Bytes per token for plain text (~4 bytes/token heuristic).
+const BYTES_PER_TOKEN: f64 = 4.0;
 
 /// Bytes per token for JSON content (Claude Code uses denser tokenization for JSON).
 const JSON_BYTES_PER_TOKEN: f64 = 2.0;
@@ -38,7 +38,7 @@ impl TokenEstimate {
 /// For ASCII-dominated source code, bytes ≈ chars.
 #[must_use]
 pub fn estimate_tokens(byte_count: usize) -> u64 {
-    (byte_count as f64 / CHARS_PER_TOKEN).ceil() as u64
+    (byte_count as f64 / BYTES_PER_TOKEN).ceil() as u64
 }
 
 /// Estimate tokens from a string's byte length.
@@ -60,7 +60,7 @@ pub fn estimate_json_tokens(byte_count: usize) -> u64 {
 /// Uses the same ~4 chars/token heuristic as `estimate_tokens`.
 #[must_use]
 pub fn estimate_tokens_from_bytes(size_bytes: u64) -> u64 {
-    (size_bytes as f64 / CHARS_PER_TOKEN).ceil() as u64
+    (size_bytes as f64 / BYTES_PER_TOKEN).ceil() as u64
 }
 
 #[cfg(test)]
