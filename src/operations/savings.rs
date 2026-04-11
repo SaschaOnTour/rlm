@@ -345,9 +345,12 @@ pub fn record_file_op<T: serde::Serialize>(
     let json = serde_json::to_string(result)
         .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
     let out_tokens = estimate_json_tokens(json.len());
-    // Fall back to out_tokens if file missing from DB (no savings assumed — we can't
-    // estimate CC's Read cost without knowing the actual file size).
-    let alt_tokens = alternative_single_file(db, path).unwrap_or(out_tokens);
+    // Fall back to out_tokens if file missing from DB or size unknown (no savings
+    // assumed — we can't estimate CC's Read cost without knowing the actual file size).
+    let alt_tokens = match alternative_single_file(db, path) {
+        Ok(alt) if alt > 0 => alt,
+        _ => out_tokens,
+    };
     let entry = SavingsEntry {
         command: command.to_string(),
         rlm_input: 0,
