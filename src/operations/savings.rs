@@ -8,7 +8,9 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
-use crate::models::token_estimate::{estimate_tokens, estimate_tokens_from_bytes};
+use crate::models::token_estimate::{
+    estimate_json_tokens, estimate_tokens, estimate_tokens_from_bytes,
+};
 
 /// Per-call overhead in tokens (tool_use block structure).
 const CALL_OVERHEAD: u64 = 30;
@@ -205,7 +207,7 @@ pub fn alternative_replace_entry(
         command: "replace".to_string(),
         // Parameter tokens only; per-call overhead is accounted for via rlm_calls.
         rlm_input: new_tokens,
-        rlm_output: estimate_tokens(rlm_result_len),
+        rlm_output: estimate_json_tokens(rlm_result_len),
         rlm_calls: 1,
         // CC: Grep(symbol) → Read(file) → Edit(old, new)
         // Parameter tokens only; per-call overhead is accounted for via alt_calls.
@@ -237,7 +239,7 @@ pub fn alternative_insert_entry(
     Ok(SavingsEntry {
         command: "insert".to_string(),
         rlm_input: new_tokens,
-        rlm_output: estimate_tokens(rlm_result_len),
+        rlm_output: estimate_json_tokens(rlm_result_len),
         rlm_calls: 1,
         alt_input: new_tokens, // Edit: new_string (Read has negligible path param)
         alt_output: file_tokens_with_lines + SNIPPET_TOKENS, // Read result + Edit result
@@ -316,7 +318,7 @@ fn serialize_and_record_entry<T: serde::Serialize>(
 ) -> String {
     let json = serde_json::to_string(result)
         .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
-    let out_tokens = estimate_tokens(json.len());
+    let out_tokens = estimate_json_tokens(json.len());
     let entry = SavingsEntry {
         command: command.to_string(),
         rlm_input: 0, // read-only ops have negligible params
@@ -342,13 +344,12 @@ pub fn record_file_op<T: serde::Serialize>(
 ) -> String {
     let json = serde_json::to_string(result)
         .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
-    let out_tokens = estimate_tokens(json.len());
-    // Fall back to out_tokens if file missing or DB error (conservative: CC ≥ rlm output).
-    let alt_tokens = alternative_single_file(db, path).unwrap_or(0);
-    let alt_tokens = if alt_tokens > 0 {
-        alt_tokens
-    } else {
-        out_tokens
+    let out_tokens = estimate_json_tokens(json.len());
+    // Fall back to out_tokens if file missing from DB or size unknown (no savings
+    // assumed — we can't estimate CC's Read cost without knowing the actual file size).
+    let alt_tokens = match alternative_single_file(db, path) {
+        Ok(alt) if alt > 0 => alt,
+        _ => out_tokens,
     };
     let entry = SavingsEntry {
         command: command.to_string(),
@@ -524,7 +525,7 @@ mod tests {
     const V2_NEW_CODE_LEN: usize = 200;
     const V2_RESULT_LEN: usize = 10;
     const V2_RLM_INPUT: u64 = 50; // ceil(200/4) = new_tokens only (no call overhead)
-    const V2_RLM_OUTPUT: u64 = 3;
+    const V2_RLM_OUTPUT: u64 = 5; // ceil(10/2) = JSON result at 2 bytes/token
     const V2_ALT_INPUT_REPLACE: u64 = 75; // ceil(100/4) + ceil(200/4) = old_tokens + new_tokens
     const V2_ALT_OUTPUT_REPLACE: u64 = 1472; // pre-edit: (4000+100-200)/4=975, overhead=97, 200+975+97+200
     const V2_ALT_INPUT_INSERT: u64 = 50; // ceil(200/4) = new_tokens only
@@ -860,19 +861,19 @@ mod tests {
 
         let report = get_savings_report(&db, None).unwrap();
         assert_eq!(report.ops, 1);
-        // rlm_total = 50 + 3 + 30 = 83
-        assert_eq!(report.rlm_total, 83);
+        // rlm_total = 50 + 5 + 30 = 85
+        assert_eq!(report.rlm_total, 85);
         // alt_total = 75 + 1472 + 90 = 1637
         assert_eq!(report.alt_total, 1637);
-        assert_eq!(report.total_saved, 1554);
+        assert_eq!(report.total_saved, 1552);
         assert!(report.total_pct > 90.0);
         assert_eq!(report.input_saved, 25); // 75 - 50
-        assert_eq!(report.result_saved, 1469); // 1472 - 3
+        assert_eq!(report.result_saved, 1467); // 1472 - 5
         assert_eq!(report.calls_saved, 2); // 3 - 1
 
         let cmd = &report.by_cmd[0];
         assert_eq!(cmd.alt_calls, CC_CALLS_REPLACE);
-        assert_eq!(cmd.rlm_total, 83);
+        assert_eq!(cmd.rlm_total, 85);
         assert_eq!(cmd.alt_total, 1637);
     }
 

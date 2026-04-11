@@ -12,11 +12,14 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::db::Database;
-use crate::models::token_estimate::estimate_tokens;
+use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
 
 use super::server::RlmServer;
+
+/// MCP output byte limit (~25K tokens at 2 bytes/token for JSON).
+const MAX_MCP_OUTPUT_BYTES: usize = 50_000;
 
 // -- Helper functions --------------------------------------------------------
 
@@ -44,13 +47,12 @@ impl RlmServer {
     }
 
     pub(crate) fn success_text(text: String) -> CallToolResult {
-        CallToolResult::success(vec![Content::text(text)])
+        CallToolResult::success(vec![Content::text(guard_output(text))])
     }
 
     pub(crate) fn error_text(msg: String) -> CallToolResult {
-        CallToolResult::error(vec![Content::text(
-            serde_json::json!({"error": msg}).to_string(),
-        )])
+        let json = serde_json::json!({"error": msg}).to_string();
+        CallToolResult::error(vec![Content::text(guard_output(json))])
     }
 }
 
@@ -63,10 +65,10 @@ impl RlmServer {
         path: &str,
         val: &T,
     ) -> Result<CallToolResult, McpError> {
-        let json = Self::to_json(val);
-        let out_tokens = estimate_tokens(json.len());
+        let json = guard_output(Self::to_json(val));
+        let out_tokens = estimate_json_tokens(json.len());
         savings::record_read_symbol(db, out_tokens, path);
-        Ok(Self::success_text(json))
+        Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
     /// Build the read-symbol response, optionally enriching with metadata (integration: calls only).
@@ -103,6 +105,31 @@ impl RlmServer {
 
         Self::serialize_and_record(db, &params.path, chunks)
     }
+}
+
+/// Guard against MCP output truncation by Claude Code.
+///
+/// CC silently truncates MCP results exceeding 25K tokens. This function
+/// replaces oversized results with a truncation notice so the agent can
+/// narrow its query instead of receiving silently incomplete data.
+///
+/// **Known limitation:** Some savings recording functions (`record_file_op`,
+/// `record_scoped_op`, `record_symbol_op`) estimate tokens from the pre-guard
+/// JSON. If the guard truncates, recorded savings for that operation are slightly
+/// overstated. This only affects responses >50K bytes (rare) and has negligible
+/// impact on aggregate reports.
+pub(crate) fn guard_output(text: String) -> String {
+    if text.len() <= MAX_MCP_OUTPUT_BYTES {
+        return text;
+    }
+    let actual = text.len();
+    serde_json::json!({
+        "truncated": true,
+        "actual_bytes": actual,
+        "limit_bytes": MAX_MCP_OUTPUT_BYTES,
+        "hint": "Result exceeded 25K token MCP limit. Narrow your query with path or symbol filters."
+    })
+    .to_string()
 }
 
 // -- Server startup ----------------------------------------------------------
@@ -168,5 +195,27 @@ mod tests {
             .map(|t| t.text.clone())
             .unwrap_or_default();
         assert!(text.contains("disk full"));
+    }
+
+    #[test]
+    fn guard_output_passes_small_result() {
+        let small = "{\"ok\":true}".to_string();
+        let result = guard_output(small.clone());
+        assert_eq!(result, small);
+    }
+
+    #[test]
+    fn guard_output_truncates_large_result() {
+        let large = "x".repeat(MAX_MCP_OUTPUT_BYTES + 1);
+        let result = guard_output(large);
+        assert!(result.contains("\"truncated\":true"));
+        assert!(result.len() < MAX_MCP_OUTPUT_BYTES);
+    }
+
+    #[test]
+    fn guard_output_boundary() {
+        let exact = "x".repeat(MAX_MCP_OUTPUT_BYTES);
+        let result = guard_output(exact.clone());
+        assert_eq!(result, exact);
     }
 }

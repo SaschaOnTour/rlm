@@ -7,9 +7,12 @@ use crate::edit::inserter::InsertPosition;
     name = "rlm",
     version,
     about = "The Context Broker - semantic code exploration for AI agents",
-    after_help = "NOTE: Most commands (overview, search, refs, etc.) only show files with \
-                  supported extensions. To see ALL files including skipped ones (.cshtml, .kt, etc.), \
-                  use 'rlm files'. To see only skipped files: 'rlm files --skipped-only'."
+    after_help = "CONCURRENCY: Commands marked [read-only] can be run concurrently via parallel \
+                  Bash calls once the index exists. If the index is missing, the first read-only \
+                  command will create it (a write operation). Commands marked [write] modify files \
+                  or the index and must run sequentially.\n\n\
+                  NOTE: Most commands only show files with supported extensions. To see ALL files \
+                  including skipped ones, use 'rlm files'."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -18,7 +21,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Scan and index the codebase into .rlm/index.db.
+    /// [write] Scan and index the codebase into .rlm/index.db.
     ///
     /// Respects .gitignore and skips hidden files/directories.
     /// Common build directories (`node_modules`, target, dist, etc.) are excluded.
@@ -31,7 +34,7 @@ pub enum Command {
         path: String,
     },
 
-    /// Full-text search across indexed symbols and content
+    /// [read-only] Full-text search across indexed symbols and content
     Search {
         /// Search query
         query: String,
@@ -40,7 +43,7 @@ pub enum Command {
         limit: usize,
     },
 
-    /// Read a specific symbol or markdown section from a file.
+    /// [read-only] Read a specific symbol or markdown section from a file.
     ///
     /// Requires --symbol or --section. For full-file or line-range reads,
     /// use Claude Code's native Read tool.
@@ -59,7 +62,7 @@ pub enum Command {
         metadata: bool,
     },
 
-    /// Project structure overview at three detail levels.
+    /// [read-only] Project structure overview at three detail levels.
     ///
     /// 'minimal': symbol names/kinds/lines only (~50 tokens).
     /// 'standard' (default): file map with language, line count, public symbols, descriptions.
@@ -73,7 +76,7 @@ pub enum Command {
         path: Option<String>,
     },
 
-    /// Find all usages of a symbol and analyze impact.
+    /// [read-only] Find all usages of a symbol and analyze impact.
     ///
     /// Shows every location that would need updating if the symbol changes.
     /// Returns file, containing symbol, line, and reference kind.
@@ -82,7 +85,7 @@ pub enum Command {
         symbol: String,
     },
 
-    /// Replace an AST node by identifier
+    /// [write] Replace an AST node by identifier
     Replace {
         /// File path
         path: String,
@@ -97,7 +100,7 @@ pub enum Command {
         preview: bool,
     },
 
-    /// Insert code at a position in a file
+    /// [write] Insert code at a position in a file
     Insert {
         /// File path
         path: String,
@@ -109,7 +112,7 @@ pub enum Command {
         position: InsertPosition,
     },
 
-    /// Show indexing statistics (files, chunks, refs, languages, parse quality warnings)
+    /// [read-only] Show indexing statistics (files, chunks, refs, languages, parse quality warnings)
     Stats {
         /// Show token savings report
         #[arg(long)]
@@ -119,7 +122,7 @@ pub enum Command {
         since: Option<String>,
     },
 
-    /// Partition a file into chunks
+    /// [read-only] Partition a file into chunks
     Partition {
         /// File path
         path: String,
@@ -128,13 +131,13 @@ pub enum Command {
         strategy: String,
     },
 
-    /// Condensed file summary (symbols + description)
+    /// [read-only] Condensed file summary (symbols + description)
     Summarize {
         /// File path
         path: String,
     },
 
-    /// Show diff between indexed and current content
+    /// [read-only] Show diff between indexed and current content
     Diff {
         /// File path
         path: String,
@@ -143,7 +146,7 @@ pub enum Command {
         symbol: Option<String>,
     },
 
-    /// Complete understanding of a symbol: body + callers + callees + types.
+    /// [read-only] Complete understanding of a symbol: body + callers + callees + types.
     ///
     /// Use --graph to include full callgraph with caller/callee names.
     Context {
@@ -154,13 +157,13 @@ pub enum Command {
         graph: bool,
     },
 
-    /// File/module dependency graph
+    /// [read-only] File/module dependency graph
     Deps {
         /// File path
         path: String,
     },
 
-    /// What's visible at a location
+    /// [read-only] What's visible at a location
     Scope {
         /// File path
         path: String,
@@ -172,7 +175,7 @@ pub enum Command {
     /// Start MCP server (stdio transport)
     Mcp,
 
-    /// Inspect parse quality issues
+    /// [read-only, write with --clear] Inspect parse quality issues
     Quality {
         /// Show only unknown issues (without tests)
         #[arg(long)]
@@ -188,7 +191,7 @@ pub enum Command {
         summary: bool,
     },
 
-    /// List ALL files in the project (indexed + skipped).
+    /// [read-only] List ALL files in the project (indexed + skipped).
     ///
     /// Unlike `overview`, this shows files that were skipped during
     /// indexing due to unsupported extensions. Useful for AI agents that
@@ -205,7 +208,7 @@ pub enum Command {
         indexed_only: bool,
     },
 
-    /// Verify index integrity and report issues.
+    /// [read-only, write with --fix] Verify index integrity and report issues.
     ///
     /// Checks for:
     /// - `SQLite` database integrity
@@ -218,6 +221,6 @@ pub enum Command {
         fix: bool,
     },
 
-    /// List all supported file extensions and their parser types.
+    /// [read-only] List all supported file extensions and their parser types.
     Supported,
 }

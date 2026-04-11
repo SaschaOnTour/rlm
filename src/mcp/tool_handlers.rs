@@ -5,7 +5,7 @@
 //!
 //! Utility handlers live in `tool_handlers_util`.
 
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
 
 use crate::config::Config;
@@ -14,7 +14,8 @@ use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
-use crate::models::token_estimate::estimate_tokens;
+use crate::models::chunk::Chunk;
+use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
 use crate::search::tree;
@@ -30,18 +31,10 @@ fn write_result_with_reindex(
     db: &Database,
     project_root: &std::path::Path,
     rel_path: &str,
+    source: indexer::PreviewSource<'_>,
 ) -> String {
     let config = crate::config::Config::new(project_root);
-    match indexer::reindex_single_file(db, &config, rel_path) {
-        Ok((chunks, refs)) => {
-            serde_json::json!({"ok": true, "reindexed": true, "chunks": chunks, "refs": refs})
-                .to_string()
-        }
-        Err(e) => {
-            serde_json::json!({"ok": true, "reindexed": false, "hint": format!("reindex failed: {e}")})
-                .to_string()
-        }
-    }
+    indexer::reindex_with_result(db, &config, rel_path, source)
 }
 
 /// Resolve the index config, validating that any custom path is within project_root.
@@ -96,8 +89,8 @@ pub fn handle_index(
 pub fn handle_search(db: &Database, query: &str, limit: usize) -> Result<CallToolResult, McpError> {
     match operations::search_chunks(db, query, limit) {
         Ok(result) => {
-            let json = RlmServer::to_json(&result);
-            let out_tokens = estimate_tokens(json.len());
+            let json = super::server_helpers::guard_output(RlmServer::to_json(&result));
+            let out_tokens = estimate_json_tokens(json.len());
             let alt_tokens = result.tokens.output.max(out_tokens);
             savings::record(
                 db,
@@ -106,7 +99,7 @@ pub fn handle_search(db: &Database, query: &str, limit: usize) -> Result<CallToo
                 alt_tokens,
                 result.results.len() as u64,
             );
-            Ok(RlmServer::success_text(json))
+            Ok(CallToolResult::success(vec![Content::text(json)]))
         }
         Err(e) => Ok(RlmServer::error_text(e.to_string())),
     }
@@ -148,7 +141,9 @@ fn handle_read_symbol(db: &Database, params: &ReadParams) -> Result<CallToolResu
     };
 
     if chunks.is_empty() {
-        return Ok(RlmServer::error_text(format!("symbol not found: {sym}")));
+        return Ok(RlmServer::error_text(format!(
+            "Symbol not found: {sym}. Use 'search' to find similar symbols, or check the 'path' parameter."
+        )));
     }
 
     let file_chunks = filter_chunks_by_path(db, &chunks, &params.path);
@@ -160,27 +155,58 @@ fn handle_read_symbol(db: &Database, params: &ReadParams) -> Result<CallToolResu
     }
 }
 
+fn section_not_found_hint(heading: &str, chunks: &[Chunk]) -> String {
+    let total = chunks.len();
+    let shown: Vec<&str> = chunks
+        .iter()
+        .take(MAX_HINT_SECTIONS)
+        .map(|c| c.ident.as_str())
+        .collect();
+    if shown.is_empty() {
+        format!("Section not found: {heading}. File has no sections.")
+    } else if total > shown.len() {
+        format!(
+            "Section not found: {heading}. Available ({total} total, first {MAX_HINT_SECTIONS}): {}",
+            shown.join(", ")
+        )
+    } else {
+        format!(
+            "Section not found: {heading}. Available: {}",
+            shown.join(", ")
+        )
+    }
+}
+
+/// Max sections to show in "not found" error hints.
+const MAX_HINT_SECTIONS: usize = 10;
+
 fn handle_read_section(db: &Database, params: &ReadParams) -> Result<CallToolResult, McpError> {
     let heading = params.section.as_deref().unwrap_or_default();
-    match db.get_file_by_path(&params.path) {
-        Ok(Some(file)) => match db.get_chunks_for_file(file.id) {
-            Ok(chunks) => match chunks.iter().find(|c| c.ident == *heading) {
-                Some(c) => {
-                    let json = savings::record_file_op(db, "read_section", c, &params.path);
-                    Ok(RlmServer::success_text(json))
-                }
-                None => Ok(RlmServer::error_text(format!(
-                    "section not found: {heading}"
-                ))),
-            },
-            Err(e) => Ok(RlmServer::error_text(e.to_string())),
-        },
-        Ok(None) => Ok(RlmServer::error_text(format!(
-            "file not found: {}",
-            params.path
-        ))),
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+
+    let file = match db.get_file_by_path(&params.path) {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            return Ok(RlmServer::error_text(format!(
+                "File not found: {}. Run 'index' to update, or check 'files' for available paths.",
+                params.path
+            )));
+        }
+        Err(e) => return Ok(RlmServer::error_text(e.to_string())),
+    };
+
+    let chunks = match db.get_chunks_for_file(file.id) {
+        Ok(c) => c,
+        Err(e) => return Ok(RlmServer::error_text(e.to_string())),
+    };
+
+    if let Some(c) = chunks.iter().find(|c| c.ident == *heading) {
+        let json = savings::record_file_op(db, "read_section", c, &params.path);
+        return Ok(RlmServer::success_text(json));
     }
+
+    Ok(RlmServer::error_text(section_not_found_hint(
+        heading, &chunks,
+    )))
 }
 
 /// Handle the `overview` tool: project structure at three detail levels.
@@ -250,7 +276,12 @@ pub fn handle_replace(
         match replacer::replace_symbol(db, &params.path, &params.symbol, &params.code, project_root)
         {
             Ok(outcome) => {
-                let result_json = write_result_with_reindex(db, project_root, &params.path);
+                let result_json = write_result_with_reindex(
+                    db,
+                    project_root,
+                    &params.path,
+                    indexer::PreviewSource::Symbol(&params.symbol),
+                );
                 if let Ok(entry) = savings::alternative_replace_entry(
                     db,
                     &params.path,
@@ -280,7 +311,8 @@ pub fn handle_insert(
     match inserter::insert_code(project_root, path, position, code, &guard) {
         Ok(_) => match db {
             Some(db) => {
-                let result_json = write_result_with_reindex(db, project_root, path);
+                let result_json =
+                    write_result_with_reindex(db, project_root, path, position.preview_source());
                 if let Ok(entry) =
                     savings::alternative_insert_entry(db, path, code.len(), result_json.len())
                 {

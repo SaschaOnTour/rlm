@@ -28,15 +28,45 @@ impl std::str::FromStr for InsertPosition {
                 let n: u32 = s[7..]
                     .parse()
                     .map_err(|e| format!("invalid line number: {e}"))?;
+                if n == 0 {
+                    return Err("line number must be >= 1 (1-based)".into());
+                }
                 Ok(Self::BeforeLine(n))
             }
             s if s.starts_with("after:") => {
                 let n: u32 = s[6..]
                     .parse()
                     .map_err(|e| format!("invalid line number: {e}"))?;
+                if n == 0 {
+                    return Err("line number must be >= 1 (1-based)".into());
+                }
                 Ok(Self::AfterLine(n))
             }
             _ => Err("position must be: top, bottom, before:N, or after:N".into()),
+        }
+    }
+}
+
+impl InsertPosition {
+    /// Approximate target line (1-based) for preview lookup after insertion.
+    ///
+    /// Returns `None` for `Bottom` since the exact line depends on file length.
+    #[must_use]
+    pub fn target_line(&self) -> Option<u32> {
+        match self {
+            Self::Top => Some(1),
+            Self::Bottom => None,
+            Self::BeforeLine(n) => Some(*n),
+            Self::AfterLine(n) => Some(n.saturating_add(1)),
+        }
+    }
+
+    /// Build the appropriate preview source for this insert position.
+    #[must_use]
+    pub fn preview_source(&self) -> crate::indexer::PreviewSource<'static> {
+        match self.target_line() {
+            Some(line) => crate::indexer::PreviewSource::Line(line),
+            None => crate::indexer::PreviewSource::Last,
         }
     }
 }
@@ -278,5 +308,51 @@ mod tests {
             format!("{}", result.unwrap_err()).contains("path traversal"),
             "should reject .. traversal"
         );
+    }
+
+    #[test]
+    fn target_line_top() {
+        assert_eq!(InsertPosition::Top.target_line(), Some(1));
+    }
+
+    #[test]
+    fn target_line_bottom() {
+        assert_eq!(InsertPosition::Bottom.target_line(), None);
+    }
+
+    #[test]
+    fn target_line_before() {
+        assert_eq!(InsertPosition::BeforeLine(10).target_line(), Some(10));
+    }
+
+    #[test]
+    fn target_line_after() {
+        assert_eq!(InsertPosition::AfterLine(10).target_line(), Some(11));
+    }
+
+    #[test]
+    fn parse_before_zero_rejected() {
+        assert!("before:0".parse::<InsertPosition>().is_err());
+    }
+
+    #[test]
+    fn parse_after_zero_rejected() {
+        assert!("after:0".parse::<InsertPosition>().is_err());
+    }
+
+    #[test]
+    fn preview_source_bottom_is_last() {
+        assert!(matches!(
+            InsertPosition::Bottom.preview_source(),
+            crate::indexer::PreviewSource::Last
+        ));
+    }
+
+    #[test]
+    fn preview_source_after_is_line() {
+        assert!(matches!(
+            InsertPosition::AfterLine(5).preview_source(),
+            crate::indexer::PreviewSource::Line(6)
+        ));
     }
 }
