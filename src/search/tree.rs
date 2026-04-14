@@ -11,7 +11,7 @@ use crate::models::chunk::Chunk;
 pub struct TreeNode {
     #[serde(rename = "n")]
     pub name: String,
-    #[serde(rename = "p")]
+    #[serde(rename = "f")]
     pub path: String,
     #[serde(rename = "dir")]
     pub is_dir: bool,

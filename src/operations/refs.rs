@@ -31,6 +31,7 @@ pub struct RefHit {
     #[serde(rename = "l")]
     pub line: u32,
     /// The column number.
+    #[serde(rename = "co")]
     pub col: u32,
     /// The chunk ID containing this reference.
     /// Note: Using `cid` for consistency (was inconsistent between CLI/MCP before).

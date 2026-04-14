@@ -20,6 +20,7 @@ pub struct ScopeResult {
     #[serde(rename = "in")]
     pub containing: Vec<String>,
     /// Symbols visible at this location.
+    #[serde(rename = "vis")]
     pub visible: Vec<String>,
 }
 

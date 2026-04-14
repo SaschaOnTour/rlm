@@ -2,12 +2,13 @@ use serde::Serialize;
 
 /// Format a result as minified JSON with token estimates.
 pub fn format_json<T: Serialize>(result: &T) -> String {
-    serde_json::to_string(result).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
+    serde_json::to_string(result)
+        .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string())
 }
 
-/// Format an error as JSON.
+/// Format an error as JSON (guaranteed valid via serde).
 pub fn format_error(err: &dyn std::fmt::Display) -> String {
-    format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\""))
+    serde_json::json!({"error": err.to_string()}).to_string()
 }
 
 /// Quality warning for parse results.
@@ -24,7 +25,6 @@ pub struct QualityWarning {
 mod tests {
     use super::*;
 
-    /// Arbitrary test value used as a representative integer payload.
     const TEST_VALUE: i32 = 42;
 
     #[derive(Serialize)]
@@ -50,5 +50,13 @@ mod tests {
         let json = format_error(&err);
         assert!(json.contains("\"error\""));
         assert!(json.contains("something went wrong"));
+    }
+
+    #[test]
+    fn format_error_escapes_quotes_and_newlines() {
+        let msg = "error with \"quotes\" and\nnewlines";
+        let json = format_error(&msg);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["error"].as_str().unwrap(), msg);
     }
 }

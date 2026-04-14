@@ -17,6 +17,7 @@ pub struct FileDiffResult {
     #[serde(rename = "f")]
     pub file: String,
     /// Whether the file has changed since indexing.
+    #[serde(rename = "ch")]
     pub changed: bool,
 }
 
@@ -36,6 +37,7 @@ pub struct SymbolDiffResult {
     #[serde(rename = "cur")]
     pub current: String,
     /// Whether the content has changed.
+    #[serde(rename = "ch")]
     pub changed: bool,
 }
 

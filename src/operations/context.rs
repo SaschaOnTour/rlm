@@ -15,16 +15,16 @@ pub struct ContextResult {
     #[serde(rename = "s")]
     pub symbol: String,
     /// Full body content of each definition.
-    #[serde(rename = "body")]
+    #[serde(rename = "b")]
     pub body: Vec<String>,
     /// Signatures of each definition.
     #[serde(rename = "sig")]
     pub signatures: Vec<String>,
     /// Number of callers.
-    #[serde(rename = "callers")]
+    #[serde(rename = "cr")]
     pub caller_count: usize,
     /// Names of callees.
-    #[serde(rename = "callees")]
+    #[serde(rename = "ce")]
     pub callee_names: Vec<String>,
     /// Number of distinct files containing this symbol.
     #[serde(rename = "fc")]

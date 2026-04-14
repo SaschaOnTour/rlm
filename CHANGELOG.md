@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-04-14
+
+### Fixed
+
+- **read --section**: Now correctly filters by ChunkKind — code symbols (structs,
+  functions) are no longer returned when using `--section`
+- **CLI error format**: `format_error` uses `serde_json::json!` for guaranteed valid JSON
+  escaping (previously broke on quotes/newlines in error messages)
+
+### Changed
+
+- **Key unification**: Consistent serde renames across all Serialize structs — no more
+  mixing of renamed and unrenamed fields within a struct
+  - PeekFile/TreeNode: `"p"` → `"f"` (consistent file path key)
+  - RefHit: `col` → `"co"`
+  - DepsResult: `imports` → `"im"`
+  - ScopeResult: `visible` → `"vis"`
+  - ContextResult: `body`/`callers`/`callees` → `"b"`/`"cr"`/`"ce"`
+  - CallgraphResult: `callers`/`callees` → `"cr"`/`"ce"`
+  - SignatureResult: `refs` → `"rc"`
+  - DiffResults: `changed` → `"ch"`
+
 ## [0.3.4] - 2026-04-10
 
 ### Fixed

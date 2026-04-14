@@ -92,7 +92,10 @@ fn cmd_read_section(path: &str, heading: &str) -> CmdResult {
     let file = db.get_file_by_path(path).map_err(map_err)?;
     let file = file.ok_or_else(|| map_err(format!("file not found: {path}")))?;
     let chunks = db.get_chunks_for_file(file.id).map_err(map_err)?;
-    match chunks.iter().find(|c| c.ident == heading) {
+    match chunks
+        .iter()
+        .find(|c| c.kind.is_section() && c.ident == heading)
+    {
         Some(c) => {
             let json = savings::record_file_op(&db, "read_section", c, path);
             print_json(&json);

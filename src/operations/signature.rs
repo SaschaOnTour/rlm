@@ -17,7 +17,7 @@ pub struct SignatureResult {
     #[serde(rename = "sig")]
     pub signatures: Vec<String>,
     /// The count of all call sites.
-    #[serde(rename = "refs")]
+    #[serde(rename = "rc")]
     pub ref_count: usize,
 }
 

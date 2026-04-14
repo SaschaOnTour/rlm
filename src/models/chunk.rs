@@ -39,6 +39,12 @@ impl ChunkKind {
         }
     }
 
+    /// Whether this kind represents a document section (not a code symbol).
+    #[must_use]
+    pub fn is_section(&self) -> bool {
+        matches!(self, Self::Section | Self::Page)
+    }
+
     #[must_use]
     // qual:allow(dry) reason: "inverse of as_str — same match arms but opposite direction (deserialize vs serialize)"
     pub fn parse(s: &str) -> Self {

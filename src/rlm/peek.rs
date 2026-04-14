@@ -18,7 +18,7 @@ pub struct PeekResult {
 #[derive(Debug, Clone, Serialize)]
 pub struct PeekFile {
     /// File path.
-    #[serde(rename = "p")]
+    #[serde(rename = "f")]
     pub path: String,
     /// Language.
     #[serde(rename = "l")]

@@ -15,8 +15,10 @@ pub struct CallgraphResult {
     #[serde(rename = "s")]
     pub symbol: String,
     /// Functions/methods that call this symbol.
+    #[serde(rename = "cr")]
     pub callers: Vec<String>,
     /// Functions/methods that this symbol calls.
+    #[serde(rename = "ce")]
     pub callees: Vec<String>,
 }
 

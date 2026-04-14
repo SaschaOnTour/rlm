@@ -163,15 +163,15 @@ fn section_not_found_hint(heading: &str, chunks: &[Chunk]) -> String {
         .map(|c| c.ident.as_str())
         .collect();
     if shown.is_empty() {
-        format!("Section not found: {heading}. File has no sections.")
+        format!("section not found: {heading}. File has no sections.")
     } else if total > shown.len() {
         format!(
-            "Section not found: {heading}. Available ({total} total, first {MAX_HINT_SECTIONS}): {}",
+            "section not found: {heading}. Available ({total} total, first {MAX_HINT_SECTIONS}): {}",
             shown.join(", ")
         )
     } else {
         format!(
-            "Section not found: {heading}. Available: {}",
+            "section not found: {heading}. Available: {}",
             shown.join(", ")
         )
     }
@@ -199,13 +199,15 @@ fn handle_read_section(db: &Database, params: &ReadParams) -> Result<CallToolRes
         Err(e) => return Ok(RlmServer::error_text(e.to_string())),
     };
 
-    if let Some(c) = chunks.iter().find(|c| c.ident == *heading) {
+    let sections: Vec<_> = chunks.into_iter().filter(|c| c.kind.is_section()).collect();
+
+    if let Some(c) = sections.iter().find(|c| c.ident == *heading) {
         let json = savings::record_file_op(db, "read_section", c, &params.path);
         return Ok(RlmServer::success_text(json));
     }
 
     Ok(RlmServer::error_text(section_not_found_hint(
-        heading, &chunks,
+        heading, &sections,
     )))
 }
 

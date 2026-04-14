@@ -162,6 +162,20 @@ fn e2e_read_markdown_section() {
         .stdout(predicate::str::contains("install"));
 }
 
+#[test]
+fn e2e_read_section_rejects_code_symbols() {
+    let dir = setup_rust_project();
+    // "helper" is a function in sample.rs — --section should NOT return it
+    rlm(&dir)
+        .arg("read")
+        .arg("sample.rs")
+        .arg("--section")
+        .arg("helper")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("section not found"));
+}
+
 // ─── rlm overview ───────────────────────────────────────────────────────────
 
 #[test]
@@ -335,7 +349,7 @@ fn e2e_diff_unchanged() {
         .arg("sample.rs")
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"changed\":false"));
+        .stdout(predicate::str::contains("\"ch\":false"));
 }
 
 #[test]
@@ -348,7 +362,7 @@ fn e2e_diff_symbol() {
         .arg("helper")
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"changed\":false"));
+        .stdout(predicate::str::contains("\"ch\":false"));
 }
 
 // ─── rlm context ────────────────────────────────────────────────────────────
@@ -361,7 +375,9 @@ fn e2e_context() {
         .arg("helper")
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"s\":\"helper\"").and(predicate::str::contains("body")));
+        .stdout(
+            predicate::str::contains("\"s\":\"helper\"").and(predicate::str::contains("\"b\":")),
+        );
 }
 
 #[test]

@@ -18,6 +18,7 @@ pub struct DepsResult {
     #[serde(rename = "f")]
     pub file: String,
     /// The list of imports/dependencies.
+    #[serde(rename = "im")]
     pub imports: Vec<String>,
 }
 
