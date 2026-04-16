@@ -10,7 +10,6 @@ const JSON_BYTES_PER_TOKEN: f64 = 2.0;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TokenEstimate {
     /// Estimated input tokens consumed.
-    #[serde(rename = "input")]
     pub input: u64,
     /// Estimated output tokens produced.
     pub output: u64,
@@ -62,31 +61,36 @@ pub fn estimate_tokens_from_bytes(size_bytes: u64) -> u64 {
     (size_bytes as f64 / BYTES_PER_TOKEN).ceil() as u64
 }
 
-/// Estimate output tokens for a Serialize result via two-pass serialization.
+/// Estimate output tokens for a Serialize result by iterating to a fixed point.
 ///
 /// The result's own `tokens.output` field contributes to the JSON payload
 /// length, but its value is derived from that length — a circular dependency
 /// that causes a systematic undercount when callers overwrite a default
-/// (1-digit "0") placeholder with a multi-digit estimate.
+/// (1-digit "0") placeholder with a multi-digit estimate. A simple two-pass
+/// also drifts by one at digit boundaries (e.g., 99 → 100 adds a digit).
 ///
-/// Pass 1 measures the payload as-is. Pass 2 substitutes the pass-1 estimate
-/// into `tokens.output` and remeasures, so the returned count matches the
-/// digit length the caller will actually emit. Returns `TokenEstimate` with
-/// `input=0` and `output` set to the stabilized JSON token count.
+/// Solution: substitute the running estimate into `tokens.output` and remeasure
+/// until the estimate stabilizes. Digit counts change only at 10x boundaries so
+/// convergence is fast — 2-3 iterations in practice. `MAX_ITERATIONS` guards
+/// against pathological inputs.
 #[must_use]
 pub fn estimate_output_tokens<T: serde::Serialize>(result: &T) -> TokenEstimate {
-    let json_pass1 = serde_json::to_string(result).unwrap_or_default();
-    let pass1_estimate = estimate_json_tokens(json_pass1.len());
+    const MAX_ITERATIONS: u32 = 5;
 
     let mut value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
-    if let Some(tokens) = value.get_mut("tokens").and_then(|v| v.as_object_mut()) {
-        tokens.insert("output".to_string(), serde_json::json!(pass1_estimate));
+    let mut estimate: u64 = 0;
+    for _ in 0..MAX_ITERATIONS {
+        if let Some(tokens) = value.get_mut("tokens").and_then(|v| v.as_object_mut()) {
+            tokens.insert("output".to_string(), serde_json::json!(estimate));
+        }
+        let bytes = serde_json::to_string(&value).map(|s| s.len()).unwrap_or(0);
+        let next = estimate_json_tokens(bytes);
+        if next == estimate {
+            break;
+        }
+        estimate = next;
     }
-    let pass2_bytes = serde_json::to_string(&value)
-        .map(|s| s.len())
-        .unwrap_or(json_pass1.len());
-
-    TokenEstimate::new(0, estimate_json_tokens(pass2_bytes))
+    TokenEstimate::new(0, estimate)
 }
 
 #[cfg(test)]

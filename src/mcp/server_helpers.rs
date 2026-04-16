@@ -129,14 +129,13 @@ pub(crate) fn guard_output(text: String) -> String {
     if text.len() <= MAX_MCP_OUTPUT_BYTES {
         return text;
     }
-    let actual = text.len();
-    serde_json::json!({
+    let notice = serde_json::json!({
         "truncated": true,
-        "actual_bytes": actual,
+        "actual_bytes": text.len(),
         "limit_bytes": MAX_MCP_OUTPUT_BYTES,
         "hint": "Result exceeded 25K token MCP limit. Narrow your query with path or symbol filters."
-    })
-    .to_string()
+    });
+    crate::output::serialize(&notice)
 }
 
 // -- Server startup ----------------------------------------------------------

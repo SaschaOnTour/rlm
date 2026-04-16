@@ -80,15 +80,12 @@ impl Default for IndexingSettings {
 pub struct OutputSettings {
     /// Output format: "json" (default), "pretty", or "toon".
     pub format: String,
-    /// Whether to include token estimates in output.
-    pub include_tokens: bool,
 }
 
 impl Default for OutputSettings {
     fn default() -> Self {
         Self {
             format: "json".into(),
-            include_tokens: true,
         }
     }
 }
@@ -309,7 +306,6 @@ mod tests {
 
         // Check output defaults
         assert_eq!(settings.output.format, "json");
-        assert!(settings.output.include_tokens);
 
         // Check quality defaults
         assert!(!settings.quality.log_all_issues);
