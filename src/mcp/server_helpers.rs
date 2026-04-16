@@ -61,9 +61,10 @@ impl RlmServer {
     }
 
     pub(crate) fn error_text(msg: String) -> CallToolResult {
-        // error_text already formats via serialize_error, so any guard must
-        // happen on the pre-formatted JSON. serialize_error emits minified JSON
-        // for error paths, so we only need to guard after — not reformat.
+        // Build raw JSON first, then guard it, then reformat. This matches
+        // success_text: guard_output stays format-agnostic, while the
+        // caller-configured formatter applies uniformly to the payload and
+        // any truncation notice.
         let json = crate::output::to_json(&serde_json::json!({"error": msg}));
         let guarded = guard_output(json);
         let cow = crate::output::reformat_str(&guarded);
