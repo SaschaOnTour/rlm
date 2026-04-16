@@ -64,13 +64,29 @@ pub fn estimate_tokens_from_bytes(size_bytes: u64) -> u64 {
 
 /// Estimate output tokens for a Serialize result via two-pass serialization.
 ///
-/// Serializes the result to JSON, measures the byte length, and returns a
-/// `TokenEstimate` with `input=0` and `output` set to the JSON token count.
-/// Used by operation functions to fill the `tokens` field on result structs.
+/// The result's own `tokens.output` field contributes to the JSON payload
+/// length, but its value is derived from that length — a circular dependency
+/// that causes a systematic undercount when callers overwrite a default
+/// (1-digit "0") placeholder with a multi-digit estimate.
+///
+/// Pass 1 measures the payload as-is. Pass 2 substitutes the pass-1 estimate
+/// into `tokens.output` and remeasures, so the returned count matches the
+/// digit length the caller will actually emit. Returns `TokenEstimate` with
+/// `input=0` and `output` set to the stabilized JSON token count.
 #[must_use]
 pub fn estimate_output_tokens<T: serde::Serialize>(result: &T) -> TokenEstimate {
-    let json = serde_json::to_string(result).unwrap_or_default();
-    TokenEstimate::new(0, estimate_json_tokens(json.len()))
+    let json_pass1 = serde_json::to_string(result).unwrap_or_default();
+    let pass1_estimate = estimate_json_tokens(json_pass1.len());
+
+    let mut value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
+    if let Some(tokens) = value.get_mut("tokens").and_then(|v| v.as_object_mut()) {
+        tokens.insert("output".to_string(), serde_json::json!(pass1_estimate));
+    }
+    let pass2_bytes = serde_json::to_string(&value)
+        .map(|s| s.len())
+        .unwrap_or(json_pass1.len());
+
+    TokenEstimate::new(0, estimate_json_tokens(pass2_bytes))
 }
 
 #[cfg(test)]
@@ -115,5 +131,35 @@ mod tests {
         assert_eq!(estimate_json_tokens(2), 1);
         assert_eq!(estimate_json_tokens(400), 200);
         assert_eq!(estimate_json_tokens(1), 1); // ceil(1/2)
+    }
+
+    #[test]
+    fn estimate_output_tokens_accounts_for_its_own_digit_length() {
+        // Regression test: a naive single-pass estimate undercounts because
+        // tokens.output's digit length (e.g., "0" → "275") changes the JSON
+        // payload size after the caller writes the estimate back.
+        #[derive(serde::Serialize)]
+        struct Wrapper {
+            data: String,
+            tokens: TokenEstimate,
+        }
+
+        let w = Wrapper {
+            data: "x".repeat(500),
+            tokens: TokenEstimate::default(),
+        };
+        let estimate = estimate_output_tokens(&w);
+
+        // Simulate the final output the caller will emit: write the estimate
+        // back into tokens and re-serialize. The estimate must exactly match
+        // the token count of that final payload.
+        let final_w = Wrapper {
+            data: w.data,
+            tokens: TokenEstimate::new(estimate.input, estimate.output),
+        };
+        let final_json = serde_json::to_string(&final_w).unwrap();
+        let actual_tokens = estimate_json_tokens(final_json.len());
+
+        assert_eq!(estimate.output, actual_tokens);
     }
 }
