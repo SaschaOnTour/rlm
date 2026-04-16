@@ -143,6 +143,37 @@ fn setup_merges_with_existing_user_config() {
 }
 
 #[test]
+fn setup_refuses_to_overwrite_invalid_json() {
+    // Regression: invalid user JSON must not be silently replaced.
+    let dir = make_project();
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    let invalid = "{ not valid json,,,";
+    fs::write(dir.path().join(".claude/settings.json"), invalid).unwrap();
+
+    let result = run_setup(dir.path(), SetupMode::Apply);
+    assert!(result.is_err(), "setup must error on invalid JSON");
+
+    // Original content preserved.
+    let after = fs::read_to_string(dir.path().join(".claude/settings.json")).unwrap();
+    assert_eq!(after, invalid);
+}
+
+#[test]
+fn setup_refuses_non_object_json() {
+    // Regression: a JSON array / string / etc. is not a settings object.
+    let dir = make_project();
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::write(
+        dir.path().join(".claude/settings.json"),
+        "[\"array\", \"not\", \"object\"]",
+    )
+    .unwrap();
+
+    let result = run_setup(dir.path(), SetupMode::Apply);
+    assert!(result.is_err(), "setup must error on non-object JSON root");
+}
+
+#[test]
 fn setup_preserves_markdown_outside_markers() {
     let dir = make_project();
     let pre = "# Project\n\nExisting notes.\n\n## Todo\n- Item\n";

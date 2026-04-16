@@ -176,11 +176,11 @@ fn classify_settings_action(
     }
 }
 
-/// Read a settings file, returning an empty object for missing/empty/invalid.
+/// Read and parse a settings file. Returns `{}` for missing or empty files.
 ///
-/// Invalid JSON emits a stderr warning but does not fail — we don't want to
-/// lose user config silently, but we also can't parse what we can't parse.
-/// Returning `{}` means the merge produces a fresh rlm fragment.
+/// Refuses unparseable or non-object JSON with an error — overwriting a broken
+/// user file would destroy their config. The caller (user) must fix the file
+/// before re-running setup. Both parse steps share a single `from_slice` call.
 fn read_settings(path: &Path) -> Result<Value> {
     if !path.exists() {
         return Ok(Value::Object(Map::new()));
@@ -190,25 +190,23 @@ fn read_settings(path: &Path) -> Result<Value> {
         return Ok(Value::Object(Map::new()));
     }
     match serde_json::from_slice::<Value>(&bytes) {
-        Ok(Value::Object(_)) => Ok(serde_json::from_slice(&bytes)?),
-        Ok(_) => {
-            eprintln!(
-                "rlm: {} is not a JSON object, treating as empty",
-                path.display()
-            );
-            Ok(Value::Object(Map::new()))
-        }
-        Err(e) => {
-            eprintln!(
-                "rlm: {} is not valid JSON ({e}), treating as empty",
-                path.display()
-            );
-            Ok(Value::Object(Map::new()))
-        }
+        Ok(value @ Value::Object(_)) => Ok(value),
+        Ok(_) => Err(RlmError::Other(format!(
+            "{} is not a JSON object — rlm refuses to overwrite it. Remove or replace the file before re-running setup.",
+            path.display()
+        ))),
+        Err(e) => Err(RlmError::Other(format!(
+            "{} is not valid JSON ({e}) — rlm refuses to overwrite it. Fix the file before re-running setup.",
+            path.display()
+        ))),
     }
 }
 
 /// Atomic write via tempfile + rename. Emits pretty-printed JSON for hand-editability.
+///
+/// Cross-platform: Unix `rename` atomically replaces. Windows `rename` fails
+/// when the target exists, so we remove the target first (brief non-atomic
+/// window, acceptable for per-project config files).
 fn write_settings_atomic(path: &Path, v: &Value) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
@@ -222,7 +220,7 @@ fn write_settings_atomic(path: &Path, v: &Value) -> Result<()> {
     ));
     let body = serde_json::to_string_pretty(v)?;
     std::fs::write(&temp, body)?;
-    if let Err(e) = std::fs::rename(&temp, path) {
+    if let Err(e) = replace_file(&temp, path) {
         let _ = std::fs::remove_file(&temp);
         return Err(e.into());
     }
@@ -540,11 +538,23 @@ fn write_text_atomic(path: &Path, content: &str) -> Result<()> {
             .unwrap_or(0)
     ));
     std::fs::write(&temp, content)?;
-    if let Err(e) = std::fs::rename(&temp, path) {
+    if let Err(e) = replace_file(&temp, path) {
         let _ = std::fs::remove_file(&temp);
         return Err(RlmError::Io(e));
     }
     Ok(())
+}
+
+/// Cross-platform file replacement: Unix `rename` atomically overwrites,
+/// Windows `rename` requires explicit target removal first.
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        if to.exists() {
+            std::fs::remove_file(to)?;
+        }
+    }
+    std::fs::rename(from, to)
 }
 
 /// The rlm-managed block, marker-wrapped.
@@ -565,8 +575,10 @@ fn render_claude_local_md_section() -> String {
 - Use `--preview` for non-trivial edits
 
 ### Concurrency
-- Read-only rlm tools are parallel-safe (readOnlyHint=true)
-- `replace` / `insert` / `index` run sequentially
+- Read-only rlm tools are parallel-friendly (`readOnlyHint=true`), but the
+  self-healing refresh may trigger index-DB writes to reconcile drift.
+- For strict parallel read-only usage, set `RLM_SKIP_REFRESH=1`.
+- `replace` / `insert` / `index` always run sequentially.
 
 ### Quality Check
 - Inspect the `q` field; if `fallback_recommended: true`, fall back to native \

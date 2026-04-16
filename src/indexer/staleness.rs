@@ -139,23 +139,51 @@ fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
 }
 
 /// Apply a `ChangeSet` to the index: delete removed files, reindex changed/new.
+///
+/// Per-file atomicity comes from `reindex_single_file` (which wraps each file
+/// in its own SQLite transaction). Wrapping the whole batch in one outer
+/// transaction would require nested `BEGIN` which SQLite doesn't support.
+///
+/// Continues on error rather than bailing early: a broken file must not block
+/// reconciliation of others. Failures are logged to stderr with the file path
+/// so silent drift is visible; failed files stay flagged as drifted and get
+/// retried on the next tool call (eventual consistency).
 // qual:allow(iosp) reason: "sequential application of three category groups"
 fn apply_changes(db: &Database, config: &Config, changes: ChangeSet) -> Result<ChangeReport> {
     let mut report = ChangeReport::default();
+    let mut failures: Vec<String> = Vec::new();
 
     for id in changes.deleted_ids {
-        db.delete_file(id)?;
-        report.deleted += 1;
+        match db.delete_file(id) {
+            Ok(()) => report.deleted += 1,
+            Err(e) => failures.push(format!("delete file id={id}: {e}")),
+        }
     }
 
     for path in changes.modified {
-        reindex_single_file(db, config, &path)?;
-        report.reindexed += 1;
+        match reindex_single_file(db, config, &path) {
+            Ok(_) => report.reindexed += 1,
+            Err(e) => failures.push(format!("reindex modified {path}: {e}")),
+        }
     }
 
     for path in changes.added {
-        reindex_single_file(db, config, &path)?;
-        report.added += 1;
+        match reindex_single_file(db, config, &path) {
+            Ok(_) => report.added += 1,
+            Err(e) => failures.push(format!("reindex added {path}: {e}")),
+        }
+    }
+
+    if !failures.is_empty() {
+        let succeeded = report.reindexed + report.added + report.deleted;
+        eprintln!(
+            "rlm: staleness check partially succeeded ({} applied, {} failed)",
+            succeeded,
+            failures.len()
+        );
+        for msg in &failures {
+            eprintln!("  - {msg}");
+        }
     }
 
     Ok(report)
