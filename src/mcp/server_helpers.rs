@@ -43,16 +43,37 @@ impl RlmServer {
     }
 
     pub(crate) fn to_json<T: Serialize>(val: &T) -> String {
-        serde_json::to_string(val).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
+        crate::output::to_json(val)
     }
 
     pub(crate) fn success_text(text: String) -> CallToolResult {
-        CallToolResult::success(vec![Content::text(guard_output(text))])
+        // Guard first (on raw JSON), then reformat. This keeps guard_output
+        // format-agnostic and lets the caller-configured format apply uniformly
+        // to both the payload and any truncation notice.
+        let guarded = guard_output(text);
+        let cow = crate::output::reformat_str(&guarded);
+        let formatted = if matches!(cow, std::borrow::Cow::Borrowed(_)) {
+            guarded
+        } else {
+            cow.into_owned()
+        };
+        CallToolResult::success(vec![Content::text(formatted)])
     }
 
     pub(crate) fn error_text(msg: String) -> CallToolResult {
-        let json = serde_json::json!({"error": msg}).to_string();
-        CallToolResult::error(vec![Content::text(guard_output(json))])
+        // Build raw JSON first, then guard it, then reformat. This matches
+        // success_text: guard_output stays format-agnostic, while the
+        // caller-configured formatter applies uniformly to the payload and
+        // any truncation notice.
+        let json = crate::output::to_json(&serde_json::json!({"error": msg}));
+        let guarded = guard_output(json);
+        let cow = crate::output::reformat_str(&guarded);
+        let formatted = if matches!(cow, std::borrow::Cow::Borrowed(_)) {
+            guarded
+        } else {
+            cow.into_owned()
+        };
+        CallToolResult::error(vec![Content::text(formatted)])
     }
 }
 
@@ -65,10 +86,10 @@ impl RlmServer {
         path: &str,
         val: &T,
     ) -> Result<CallToolResult, McpError> {
-        let json = guard_output(Self::to_json(val));
+        let json = Self::to_json(val);
         let out_tokens = estimate_json_tokens(json.len());
         savings::record_read_symbol(db, out_tokens, path);
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(Self::success_text(json))
     }
 
     /// Build the read-symbol response, optionally enriching with metadata (integration: calls only).
@@ -122,10 +143,9 @@ pub(crate) fn guard_output(text: String) -> String {
     if text.len() <= MAX_MCP_OUTPUT_BYTES {
         return text;
     }
-    let actual = text.len();
     serde_json::json!({
         "truncated": true,
-        "actual_bytes": actual,
+        "actual_bytes": text.len(),
         "limit_bytes": MAX_MCP_OUTPUT_BYTES,
         "hint": "Result exceeded 25K token MCP limit. Narrow your query with path or symbol filters."
     })
@@ -151,6 +171,12 @@ pub async fn start_mcp_server() -> crate::error::Result<()> {
 
     // Determine project root from current working directory
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // Initialize output format from config (MCP has no CLI flag)
+    let config = crate::config::Config::new(&project_root);
+    crate::output::init(crate::output::OutputFormat::from_str_loose(
+        &config.settings.output.format,
+    ));
 
     let server = RlmServer::new(project_root);
 

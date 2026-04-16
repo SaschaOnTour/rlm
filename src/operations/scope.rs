@@ -6,21 +6,21 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of getting scope information.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScopeResult {
     /// The file path.
-    #[serde(rename = "f")]
     pub file: String,
     /// The line number.
-    #[serde(rename = "l")]
     pub line: u32,
     /// Symbols that contain this line (scopes we're inside of).
-    #[serde(rename = "in")]
     pub containing: Vec<String>,
     /// Symbols visible at this location.
     pub visible: Vec<String>,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Get what symbols are visible at a specific line in a file.
@@ -45,12 +45,15 @@ pub fn get_scope(db: &Database, path: &str, line: u32) -> Result<ScopeResult> {
         .map(|c| format!("{}:{}", c.kind.as_str(), c.ident))
         .collect();
 
-    Ok(ScopeResult {
+    let mut result = ScopeResult {
         file: path.to_string(),
         line,
         containing,
         visible,
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]

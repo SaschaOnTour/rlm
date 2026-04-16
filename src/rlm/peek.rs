@@ -2,45 +2,36 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
-use crate::models::token_estimate::{estimate_json_tokens, TokenEstimate};
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// A peek result: structure only, no content. Minimal tokens.
 #[derive(Debug, Clone, Serialize)]
 pub struct PeekResult {
     /// File entries with symbol summaries.
-    #[serde(rename = "f")]
     pub files: Vec<PeekFile>,
     /// Token estimate for this response.
-    #[serde(rename = "t")]
     pub tokens: TokenEstimate,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PeekFile {
     /// File path.
-    #[serde(rename = "p")]
     pub path: String,
     /// Language.
-    #[serde(rename = "l")]
     pub lang: String,
     /// Line count of the file (approximated from chunks).
-    #[serde(rename = "lc")]
     pub line_count: u32,
     /// Symbols in this file.
-    #[serde(rename = "s")]
     pub symbols: Vec<PeekSymbol>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PeekSymbol {
     /// Symbol kind (fn, struct, class, etc.).
-    #[serde(rename = "k")]
     pub kind: String,
     /// Symbol name.
-    #[serde(rename = "n")]
     pub name: String,
     /// Line number.
-    #[serde(rename = "l")]
     pub line: u32,
 }
 
@@ -88,14 +79,12 @@ pub fn peek(db: &Database, path_filter: Option<&str>) -> Result<PeekResult> {
         peek_files.push(build_peek_file(&file.path, &file.lang, &chunks));
     }
 
-    // Estimate output tokens
-    let output_str = serde_json::to_string(&peek_files).unwrap_or_default();
-    let out_tokens = estimate_json_tokens(output_str.len());
-
-    Ok(PeekResult {
+    let mut result = PeekResult {
         files: peek_files,
-        tokens: TokenEstimate::new(0, out_tokens),
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]

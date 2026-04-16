@@ -4,10 +4,9 @@
 //! Shared helpers live in `cli::helpers`.
 
 use crate::cli::helpers::{
-    cmd_single_file_op, emit_read_symbol, format_chunks_json, get_config, get_db, map_err,
-    parse_strategy, print_json, print_write_result, CmdResult,
+    cmd_single_file_op, emit_read_symbol, format_chunks, get_config, get_db, map_err,
+    parse_strategy, print_str, print_write_result, CmdResult,
 };
-use crate::cli::output;
 use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
@@ -15,6 +14,7 @@ use crate::indexer;
 use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
+use crate::output;
 use crate::rlm::{partition, peek, summarize};
 use crate::search::tree;
 
@@ -25,9 +25,17 @@ pub fn cmd_index(path: &str) -> CmdResult {
         crate::config::Config::new(path)
     };
 
-    let result = crate::indexer::run_index(&config).map_err(map_err)?;
+    let progress = |current: usize, total: usize| {
+        if current.is_multiple_of(output::PROGRESS_INTERVAL) || current == total {
+            eprint!("\rIndexing... {current}/{total} files");
+        }
+    };
+    let result = crate::indexer::run_index(&config, Some(&progress)).map_err(map_err)?;
+    if result.files_scanned > 0 {
+        eprintln!();
+    }
     let output: operations::IndexOutput = result.into();
-    println!("{}", output::format_json(&output));
+    output::print(&output);
     Ok(())
 }
 
@@ -35,12 +43,13 @@ pub fn cmd_search(query: &str, limit: usize) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let result = operations::search_chunks(&db, query, limit).map_err(map_err)?;
-    let json = output::format_json(&result);
-    let out_tokens = estimate_json_tokens(json.len());
+    // Estimate tokens from JSON (savings always tracks JSON cost, regardless of output format)
+    let json_for_savings = output::to_json(&result);
+    let out_tokens = estimate_json_tokens(json_for_savings.len());
     let file_count = result.results.len() as u64;
     let alt_tokens = result.tokens.output.max(out_tokens);
     savings::record(&db, "search", out_tokens, alt_tokens, file_count);
-    print_json(&json);
+    output::print(&result);
     Ok(())
 }
 
@@ -80,7 +89,7 @@ fn cmd_read_symbol(path: &str, sym: &str, metadata: bool) -> CmdResult {
         serde_json::json!(file_chunks)
     };
 
-    let json = format_chunks_json(&db, sym, &target_json, metadata);
+    let json = format_chunks(&db, sym, &target_json, metadata);
     emit_read_symbol(&db, path, &json);
     Ok(())
 }
@@ -92,10 +101,13 @@ fn cmd_read_section(path: &str, heading: &str) -> CmdResult {
     let file = db.get_file_by_path(path).map_err(map_err)?;
     let file = file.ok_or_else(|| map_err(format!("file not found: {path}")))?;
     let chunks = db.get_chunks_for_file(file.id).map_err(map_err)?;
-    match chunks.iter().find(|c| c.ident == heading) {
+    match chunks
+        .iter()
+        .find(|c| c.kind.is_section() && c.ident == heading)
+    {
         Some(c) => {
             let json = savings::record_file_op(&db, "read_section", c, path);
-            print_json(&json);
+            print_str(&json);
         }
         None => return Err(map_err(format!("section not found: {heading}"))),
     }
@@ -110,17 +122,17 @@ pub fn cmd_overview(detail: &str, path: Option<&str>) -> CmdResult {
         "minimal" => {
             let result = peek::peek(&db, path).map_err(map_err)?;
             let json = savings::record_scoped_op(&db, "overview", &result, path);
-            print_json(&json);
+            print_str(&json);
         }
         "standard" => {
             let entries = operations::build_map(&db, path).map_err(map_err)?;
             let json = savings::record_scoped_op(&db, "overview", &entries, path);
-            print_json(&json);
+            print_str(&json);
         }
         "tree" => {
             let nodes = tree::build_tree(&db, path).map_err(map_err)?;
             let json = savings::record_scoped_op(&db, "overview", &nodes, path);
-            print_json(&json);
+            print_str(&json);
         }
         other => {
             return Err(map_err(format!(
@@ -136,7 +148,7 @@ pub fn cmd_refs(symbol: &str) -> CmdResult {
     let db = get_db(&config)?;
     let result = operations::analyze_impact(&db, symbol).map_err(map_err)?;
     let json = savings::record_symbol_op(&db, "refs", &result, symbol, result.count as u64);
-    print_json(&json);
+    print_str(&json);
     Ok(())
 }
 
@@ -146,7 +158,7 @@ pub fn cmd_replace(path: &str, symbol: &str, code: &str, preview: bool) -> CmdRe
 
     if preview {
         let diff = replacer::preview_replace(&db, path, symbol, code).map_err(map_err)?;
-        print_json(&output::format_json(&diff));
+        output::print(&diff);
     } else {
         let outcome = replacer::replace_symbol(&db, path, symbol, code, &config.project_root)
             .map_err(map_err)?;
@@ -184,7 +196,7 @@ pub fn cmd_partition(path: &str, strategy_str: &str) -> CmdResult {
     let result =
         partition::partition_file(&db, path, &strategy, &config.project_root).map_err(map_err)?;
     let json = savings::record_file_op(&db, "partition", &result, path);
-    print_json(&json);
+    print_str(&json);
     Ok(())
 }
 
@@ -200,11 +212,11 @@ pub fn cmd_diff(path: &str, symbol: Option<&str>) -> CmdResult {
         let result =
             operations::diff_symbol(&db, path, sym, &config.project_root).map_err(map_err)?;
         let json = savings::record_file_op(&db, "diff", &result, path);
-        print_json(&json);
+        print_str(&json);
     } else {
         let result = operations::diff_file(&db, path, &config.project_root).map_err(map_err)?;
         let json = savings::record_file_op(&db, "diff", &result, path);
-        print_json(&json);
+        print_str(&json);
     }
     Ok(())
 }
@@ -222,10 +234,10 @@ pub fn cmd_context(symbol: &str, graph: bool) -> CmdResult {
             "callgraph": callgraph,
         });
         let json = savings::record_symbol_op(&db, "context", &combined, symbol, file_count);
-        print_json(&json);
+        print_str(&json);
     } else {
         let json = savings::record_symbol_op(&db, "context", &result, symbol, file_count);
-        print_json(&json);
+        print_str(&json);
     }
     Ok(())
 }

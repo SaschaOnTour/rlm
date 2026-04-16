@@ -50,7 +50,7 @@ fn internal() {
 
     // Index the project
     let config = Config::new(tmp.path());
-    indexer::run_index(&config).expect("index project");
+    indexer::run_index(&config, None).expect("index project");
 
     let server = RlmServer::new(tmp.path().to_path_buf());
     (tmp, server)

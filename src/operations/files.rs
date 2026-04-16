@@ -19,13 +19,10 @@ const TOKEN_ESTIMATE_BASE_OVERHEAD: usize = 20;
 #[derive(Debug, Clone, Serialize)]
 pub struct FilesResult {
     /// The list of discovered files.
-    #[serde(rename = "r")]
     pub results: Vec<DiscoveredFile>,
     /// Summary statistics.
-    #[serde(rename = "s")]
     pub summary: FilesSummary,
     /// Token usage estimate.
-    #[serde(rename = "t")]
     pub tokens: TokenEstimate,
 }
 
@@ -58,7 +55,7 @@ pub fn list_files(project_root: &Path, filter: FilesFilter) -> Result<FilesResul
 
     // Apply filters
     if let Some(prefix) = &filter.path_prefix {
-        files.retain(|f| f.relative_path.starts_with(prefix));
+        files.retain(|f| f.path.starts_with(prefix));
     }
     if filter.skipped_only {
         files.retain(|f| !f.supported);
@@ -68,7 +65,7 @@ pub fn list_files(project_root: &Path, filter: FilesFilter) -> Result<FilesResul
     }
 
     // Sort by path for consistent output
-    files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    files.sort_by(|a, b| a.path.cmp(&b.path));
 
     // Calculate summary
     let total = files.len();
@@ -123,7 +120,7 @@ mod tests {
         };
         let result = list_files(tmp.path(), filter).unwrap();
         assert_eq!(result.summary.total, 1);
-        assert!(result.results[0].relative_path.starts_with("src"));
+        assert!(result.results[0].path.starts_with("src"));
     }
 
     #[test]

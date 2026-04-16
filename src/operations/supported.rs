@@ -5,12 +5,15 @@
 use serde::Serialize;
 
 use crate::ingest::scanner::{ext_to_lang, is_supported_extension};
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of listing supported extensions.
 #[derive(Debug, Clone, Serialize)]
 pub struct SupportedResult {
     /// The list of supported extensions.
     pub extensions: Vec<ExtensionInfo>,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Information about a supported extension.
@@ -104,7 +107,12 @@ pub fn list_supported() -> SupportedResult {
     // Sort by extension
     infos.sort_by(|a, b| a.ext.cmp(&b.ext));
 
-    SupportedResult { extensions: infos }
+    let mut result = SupportedResult {
+        extensions: infos,
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    result
 }
 
 #[cfg(test)]

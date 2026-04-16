@@ -2,36 +2,27 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::{Result, RlmError};
-use crate::models::token_estimate::{estimate_json_tokens, TokenEstimate};
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// A condensed summary of a file.
 #[derive(Debug, Clone, Serialize)]
 pub struct Summary {
-    #[serde(rename = "f")]
     pub file: String,
-    #[serde(rename = "l")]
     pub lang: String,
-    #[serde(rename = "lc")]
     pub line_count: u32,
-    #[serde(rename = "s")]
     pub symbols: Vec<SymbolSummary>,
-    #[serde(rename = "d")]
     pub description: String,
-    #[serde(rename = "t")]
     pub tokens: TokenEstimate,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolSummary {
-    #[serde(rename = "k")]
     pub kind: String,
-    #[serde(rename = "n")]
     pub name: String,
-    #[serde(rename = "sig", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
-    #[serde(rename = "v", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub visibility: Option<String>,
-    #[serde(rename = "lc")]
     pub line_count: u32,
 }
 
@@ -61,17 +52,16 @@ pub fn summarize(db: &Database, file_path: &str) -> Result<Summary> {
     // Generate a brief description based on the symbols
     let description = generate_description(&file.lang, &symbols);
 
-    let output_str = serde_json::to_string(&symbols).unwrap_or_default();
-    let out_tokens = estimate_json_tokens(output_str.len() + description.len());
-
-    Ok(Summary {
+    let mut result = Summary {
         file: file_path.to_string(),
         lang: file.lang,
         line_count: max_line,
         symbols,
         description,
-        tokens: TokenEstimate::new(0, out_tokens),
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 fn generate_description(lang: &str, symbols: &[SymbolSummary]) -> String {

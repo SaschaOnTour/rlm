@@ -16,10 +16,8 @@ const MIN_FTS_TOKEN_LENGTH: u64 = 4;
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
     /// The search results.
-    #[serde(rename = "r")]
     pub results: Vec<SearchHit>,
     /// Token usage estimate.
-    #[serde(rename = "t")]
     pub tokens: TokenEstimate,
 }
 
@@ -29,16 +27,12 @@ pub struct SearchHit {
     /// The chunk ID.
     pub id: i64,
     /// The kind of the chunk.
-    #[serde(rename = "k")]
     pub kind: String,
     /// The symbol name.
-    #[serde(rename = "n")]
     pub name: String,
     /// The line range [start, end].
-    #[serde(rename = "l")]
     pub lines: (u32, u32),
     /// The content of the chunk.
-    #[serde(rename = "c")]
     pub content: String,
 }
 

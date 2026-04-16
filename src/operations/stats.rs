@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of getting index statistics.
 #[derive(Debug, Clone, Serialize)]
@@ -26,6 +27,8 @@ pub struct StatsResult {
     /// Newest indexed timestamp (ISO 8601).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub newest_indexed: Option<String>,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Quality information for files.
@@ -41,10 +44,8 @@ pub struct QualityInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct QualityFileInfo {
     /// The file path.
-    #[serde(rename = "p")]
     pub path: String,
     /// The quality status.
-    #[serde(rename = "q")]
     pub quality: String,
 }
 
@@ -52,7 +53,7 @@ pub struct QualityFileInfo {
 pub fn get_stats(db: &Database) -> Result<StatsResult> {
     let stats = db.stats()?;
 
-    Ok(StatsResult {
+    let mut result = StatsResult {
         files: stats.file_count,
         chunks: stats.chunk_count,
         refs: stats.ref_count,
@@ -60,7 +61,10 @@ pub fn get_stats(db: &Database) -> Result<StatsResult> {
         languages: stats.languages,
         oldest_indexed: stats.oldest_indexed,
         newest_indexed: stats.newest_indexed,
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 /// Get quality information for files with parse issues.

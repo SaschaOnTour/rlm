@@ -5,7 +5,7 @@
 //!
 //! Utility handlers live in `tool_handlers_util`.
 
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 
 use crate::config::Config;
@@ -69,13 +69,23 @@ pub fn handle_index(
     path: Option<&str>,
     project_root: &std::path::Path,
 ) -> Result<CallToolResult, McpError> {
+    handle_index_with_progress(path, project_root, None)
+}
+
+/// Handle index with optional progress callback (used by MCP async handler).
+// qual:api
+pub fn handle_index_with_progress(
+    path: Option<&str>,
+    project_root: &std::path::Path,
+    progress: Option<&indexer::ProgressCallback>,
+) -> Result<CallToolResult, McpError> {
     let config = resolve_index_config(path, project_root)?;
 
     if let Err(e) = config.ensure_rlm_dir() {
         return Ok(RlmServer::error_text(e.to_string()));
     }
 
-    match indexer::run_index(&config) {
+    match indexer::run_index(&config, progress) {
         Ok(result) => {
             let output: operations::IndexOutput = result.into();
             Ok(RlmServer::success_text(RlmServer::to_json(&output)))
@@ -89,7 +99,7 @@ pub fn handle_index(
 pub fn handle_search(db: &Database, query: &str, limit: usize) -> Result<CallToolResult, McpError> {
     match operations::search_chunks(db, query, limit) {
         Ok(result) => {
-            let json = super::server_helpers::guard_output(RlmServer::to_json(&result));
+            let json = RlmServer::to_json(&result);
             let out_tokens = estimate_json_tokens(json.len());
             let alt_tokens = result.tokens.output.max(out_tokens);
             savings::record(
@@ -99,7 +109,7 @@ pub fn handle_search(db: &Database, query: &str, limit: usize) -> Result<CallToo
                 alt_tokens,
                 result.results.len() as u64,
             );
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            Ok(RlmServer::success_text(json))
         }
         Err(e) => Ok(RlmServer::error_text(e.to_string())),
     }
@@ -163,15 +173,15 @@ fn section_not_found_hint(heading: &str, chunks: &[Chunk]) -> String {
         .map(|c| c.ident.as_str())
         .collect();
     if shown.is_empty() {
-        format!("Section not found: {heading}. File has no sections.")
+        format!("section not found: {heading}. File has no sections.")
     } else if total > shown.len() {
         format!(
-            "Section not found: {heading}. Available ({total} total, first {MAX_HINT_SECTIONS}): {}",
+            "section not found: {heading}. Available ({total} total, first {MAX_HINT_SECTIONS}): {}",
             shown.join(", ")
         )
     } else {
         format!(
-            "Section not found: {heading}. Available: {}",
+            "section not found: {heading}. Available: {}",
             shown.join(", ")
         )
     }
@@ -199,13 +209,15 @@ fn handle_read_section(db: &Database, params: &ReadParams) -> Result<CallToolRes
         Err(e) => return Ok(RlmServer::error_text(e.to_string())),
     };
 
-    if let Some(c) = chunks.iter().find(|c| c.ident == *heading) {
+    let sections: Vec<_> = chunks.into_iter().filter(|c| c.kind.is_section()).collect();
+
+    if let Some(c) = sections.iter().find(|c| c.ident == *heading) {
         let json = savings::record_file_op(db, "read_section", c, &params.path);
         return Ok(RlmServer::success_text(json));
     }
 
     Ok(RlmServer::error_text(section_not_found_hint(
-        heading, &chunks,
+        heading, &sections,
     )))
 }
 

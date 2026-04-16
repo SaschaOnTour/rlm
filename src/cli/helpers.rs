@@ -3,17 +3,17 @@
 //! Extracted from `handlers.rs` for SRP compliance. Contains common
 //! error-mapping, config/db access, and reusable sub-operations.
 
-use crate::cli::output;
 use crate::config::Config;
 use crate::db::Database;
 use crate::indexer;
 use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations::savings;
+use crate::output;
 
 pub type CmdResult = Result<(), Box<dyn std::fmt::Display>>;
 
-pub fn print_json(json: &str) {
-    println!("{json}");
+pub fn print_str(s: &str) {
+    output::print_str(s);
 }
 
 pub fn map_err(e: impl std::fmt::Display + 'static) -> Box<dyn std::fmt::Display> {
@@ -28,8 +28,11 @@ pub fn get_db(config: &Config) -> Result<Database, Box<dyn std::fmt::Display>> {
     indexer::ensure_index(config).map_err(map_err)
 }
 
-/// Format chunks as JSON, optionally including metadata (integration: calls only).
-pub fn format_chunks_json(
+/// Serialize chunks as JSON, optionally including metadata.
+///
+/// Returns JSON (not TOON/Pretty) because the result is used for savings token estimation.
+/// The output format is applied later via `print_str`.
+pub fn format_chunks(
     db: &Database,
     sym: &str,
     chunks: &serde_json::Value,
@@ -38,13 +41,13 @@ pub fn format_chunks_json(
     if metadata {
         let type_info = crate::operations::get_type_info(db, sym).ok();
         let signature = crate::operations::get_signature(db, sym).ok();
-        output::format_json(&serde_json::json!({
+        output::to_json(&serde_json::json!({
             "chunks": chunks,
             "type_info": type_info,
             "signature": signature,
         }))
     } else {
-        output::format_json(chunks)
+        output::to_json(chunks)
     }
 }
 
@@ -58,7 +61,7 @@ pub fn print_write_result(
     source: indexer::PreviewSource<'_>,
 ) -> String {
     let json = indexer::reindex_with_result(db, config, rel_path, source);
-    print_json(&json);
+    print_str(&json);
     json
 }
 
@@ -66,7 +69,7 @@ pub fn print_write_result(
 pub fn emit_read_symbol(db: &Database, path: &str, json: &str) {
     let out_tokens = estimate_json_tokens(json.len());
     savings::record_read_symbol(db, out_tokens, path);
-    print_json(json);
+    print_str(json);
 }
 
 /// Generic handler for commands that operate on a single file with savings recording.
@@ -79,7 +82,7 @@ pub fn cmd_single_file_op<T: serde::Serialize>(
     let db = get_db(&config)?;
     let result = op(&db, path).map_err(map_err)?;
     let json = savings::record_file_op(&db, command, &result, path);
-    print_json(&json);
+    print_str(&json);
     Ok(())
 }
 

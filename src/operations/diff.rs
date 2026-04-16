@@ -9,34 +9,34 @@ use serde::Serialize;
 use crate::db::Database;
 use crate::error::Result;
 use crate::ingest::hasher;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of comparing a file with its indexed version.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileDiffResult {
     /// The file path.
-    #[serde(rename = "f")]
     pub file: String,
     /// Whether the file has changed since indexing.
     pub changed: bool,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Result of comparing a symbol with its indexed version.
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolDiffResult {
     /// The file path.
-    #[serde(rename = "f")]
     pub file: String,
     /// The symbol name.
-    #[serde(rename = "s")]
     pub symbol: String,
     /// The indexed content.
-    #[serde(rename = "idx")]
     pub indexed: String,
     /// The current content.
-    #[serde(rename = "cur")]
     pub current: String,
     /// Whether the content has changed.
     pub changed: bool,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Compare a file's current state with its indexed version.
@@ -55,10 +55,13 @@ pub fn diff_file(db: &Database, path: &str, project_root: &Path) -> Result<FileD
     // Unified logic: changed if file not indexed OR hash differs
     let changed = file.is_none_or(|f| f.hash != current_hash);
 
-    Ok(FileDiffResult {
+    let mut result = FileDiffResult {
         file: path.to_string(),
         changed,
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 /// Compare a symbol's current state with its indexed version.
@@ -87,13 +90,16 @@ pub fn diff_symbol(
 
     let changed = chunk.content.trim() != current_content.trim();
 
-    Ok(SymbolDiffResult {
+    let mut result = SymbolDiffResult {
         file: path.to_string(),
         symbol: symbol.to_string(),
         indexed: chunk.content.clone(),
         current: current_content,
         changed,
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]

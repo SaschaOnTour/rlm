@@ -78,17 +78,14 @@ impl Default for IndexingSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OutputSettings {
-    /// Output format: "minified" (default), "pretty", or "jsonl".
+    /// Output format: "json" (default), "pretty", or "toon".
     pub format: String,
-    /// Whether to include token estimates in output.
-    pub include_tokens: bool,
 }
 
 impl Default for OutputSettings {
     fn default() -> Self {
         Self {
-            format: "minified".into(),
-            include_tokens: true,
+            format: "json".into(),
         }
     }
 }
@@ -308,8 +305,7 @@ mod tests {
             .contains(&"target/".to_string()));
 
         // Check output defaults
-        assert_eq!(settings.output.format, "minified");
-        assert!(settings.output.include_tokens);
+        assert_eq!(settings.output.format, "json");
 
         // Check quality defaults
         assert!(!settings.quality.log_all_issues);

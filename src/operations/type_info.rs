@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Priority value assigned to chunks whose file record is unknown,
 /// ensuring they sort below src/ (0), default (1), and fixtures/tests (2).
@@ -16,20 +17,17 @@ const UNKNOWN_FILE_PRIORITY: i32 = 3;
 #[derive(Debug, Clone, Serialize)]
 pub struct TypeInfoResult {
     /// The symbol name.
-    #[serde(rename = "s")]
     pub symbol: String,
     /// The kind of the symbol (fn, struct, class, etc.).
-    #[serde(rename = "k")]
     pub kind: String,
     /// The signature if available.
-    #[serde(rename = "sig")]
     pub signature: Option<String>,
     /// The full content of the symbol.
-    #[serde(rename = "c")]
     pub content: String,
     /// The file path where the symbol is defined.
-    #[serde(rename = "f")]
     pub file: String,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Get type information for a symbol.
@@ -77,13 +75,16 @@ pub fn get_type_info(db: &Database, symbol: &str) -> Result<TypeInfoResult> {
         .map(|f| f.path.clone())
         .unwrap_or_default();
 
-    Ok(TypeInfoResult {
+    let mut result = TypeInfoResult {
         symbol: symbol.to_string(),
         kind: chunk.kind.as_str().to_string(),
         signature: chunk.signature.clone(),
         content: chunk.content.clone(),
         file: file_path,
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]

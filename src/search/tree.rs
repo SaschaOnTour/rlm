@@ -5,19 +5,24 @@ use serde::Serialize;
 use crate::db::Database;
 use crate::error::Result;
 use crate::models::chunk::Chunk;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
+
+/// Wrapped tree result with token estimate.
+#[derive(Debug, Clone, Serialize)]
+pub struct TreeResult {
+    /// Tree nodes.
+    pub results: Vec<TreeNode>,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
+}
 
 /// A node in the file tree.
 #[derive(Debug, Clone, Serialize)]
 pub struct TreeNode {
-    #[serde(rename = "n")]
     pub name: String,
-    #[serde(rename = "p")]
     pub path: String,
-    #[serde(rename = "dir")]
     pub is_dir: bool,
-    #[serde(rename = "s")]
     pub symbols: Vec<SymbolInfo>,
-    #[serde(rename = "ch")]
     pub children: Vec<TreeNode>,
 }
 
@@ -37,18 +42,15 @@ impl TreeNode {
 /// Symbol summary for tree display.
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolInfo {
-    #[serde(rename = "k")]
     pub kind: String,
-    #[serde(rename = "n")]
     pub name: String,
-    #[serde(rename = "l")]
     pub line: u32,
 }
 
 /// Build a tree view of the indexed codebase with symbol annotations.
 /// When `path_filter` is set, only files whose path starts with the prefix are included.
 // qual:allow(iosp) reason: "minimal orchestration: fetch data then build tree"
-pub fn build_tree(db: &Database, path_filter: Option<&str>) -> Result<Vec<TreeNode>> {
+pub fn build_tree(db: &Database, path_filter: Option<&str>) -> Result<TreeResult> {
     let mut files = db.get_all_files()?;
     if let Some(prefix) = path_filter {
         files.retain(|f| f.path.starts_with(prefix));
@@ -83,7 +85,13 @@ pub fn build_tree(db: &Database, path_filter: Option<&str>) -> Result<Vec<TreeNo
         insert_into_tree(&mut root_children, &parts, &file.path, symbols);
     }
 
-    Ok(root_children.into_values().collect())
+    let nodes: Vec<TreeNode> = root_children.into_values().collect();
+    let mut result = TreeResult {
+        results: nodes,
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 // qual:recursive
@@ -191,35 +199,23 @@ mod tests {
         db.insert_chunk(&c).unwrap();
 
         let tree = build_tree(&db, None).unwrap();
-        assert!(!tree.is_empty());
-        let formatted = format_tree(&tree, 0);
+        assert!(!tree.results.is_empty());
+        let formatted = format_tree(&tree.results, 0);
         assert!(formatted.contains("src/"));
         assert!(formatted.contains("main.rs"));
         assert!(formatted.contains("fn:main"));
 
         // Verify structured JSON serialization
         let json = serde_json::to_string(&tree).unwrap();
+        assert!(json.contains("\"name\":"), "should have key 'name'");
+        assert!(json.contains("\"children\":"), "should have key 'children'");
+        assert!(json.contains("\"symbols\":"), "should have key 'symbols'");
+        assert!(json.contains("\"is_dir\":"), "should have 'is_dir' key");
         assert!(
-            json.contains("\"n\":"),
-            "should have short key 'n' for name"
+            json.contains("\"kind\":"),
+            "should have key 'kind' for symbol kind"
         );
-        assert!(
-            json.contains("\"ch\":"),
-            "should have short key 'ch' for children"
-        );
-        assert!(
-            json.contains("\"s\":"),
-            "should have short key 's' for symbols"
-        );
-        assert!(json.contains("\"dir\":"), "should have 'dir' key");
-        assert!(
-            json.contains("\"k\":"),
-            "should have short key 'k' for symbol kind"
-        );
-        assert!(
-            json.contains("\"l\":"),
-            "should have short key 'l' for line"
-        );
+        assert!(json.contains("\"line\":"), "should have key 'line'");
     }
 
     #[test]

@@ -57,20 +57,16 @@ pub struct ScannedFile {
 #[derive(Debug, Clone, Serialize)]
 pub struct DiscoveredFile {
     /// Relative path from project root (forward slashes)
-    #[serde(rename = "p")]
-    pub relative_path: String,
+    pub path: String,
     /// File extension (lowercase, without dot)
-    #[serde(rename = "x")]
     pub extension: String,
     /// File size in bytes
-    #[serde(rename = "sz")]
     pub size: u64,
     /// Whether the file has a supported extension for indexing
-    #[serde(rename = "i")]
     pub supported: bool,
     /// Reason why file was skipped (only set when supported=false)
-    #[serde(rename = "r", skip_serializing_if = "Option::is_none")]
-    pub skip_reason: Option<SkipReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<SkipReason>,
 }
 
 /// Parallel file scanner that respects .gitignore.
@@ -234,11 +230,11 @@ impl Scanner {
                 };
 
                 Some(DiscoveredFile {
-                    relative_path: relative,
+                    path: relative,
                     extension: ext,
                     size,
                     supported,
-                    skip_reason,
+                    reason: skip_reason,
                 })
             })
             .collect();
@@ -335,11 +331,11 @@ mod tests {
 
         let rs = files.iter().find(|f| f.extension == "rs").unwrap();
         assert!(rs.supported);
-        assert!(rs.skip_reason.is_none());
+        assert!(rs.reason.is_none());
 
         let cshtml = files.iter().find(|f| f.extension == "cshtml").unwrap();
         assert!(!cshtml.supported);
-        assert_eq!(cshtml.skip_reason, Some(SkipReason::UnsupportedExtension));
+        assert_eq!(cshtml.reason, Some(SkipReason::UnsupportedExtension));
     }
 
     #[test]
@@ -355,9 +351,9 @@ mod tests {
         let files = scanner.scan_all().unwrap();
 
         // Should not include ignored.rs (respects .gitignore)
-        assert!(!files.iter().any(|f| f.relative_path.contains("ignored.rs")));
+        assert!(!files.iter().any(|f| f.path.contains("ignored.rs")));
         // But should include main.rs
-        assert!(files.iter().any(|f| f.relative_path.contains("main.rs")));
+        assert!(files.iter().any(|f| f.path.contains("main.rs")));
     }
 
     #[test]
@@ -372,7 +368,7 @@ mod tests {
         let files = scanner.scan_all().unwrap();
 
         assert_eq!(files.len(), 1);
-        assert!(files[0].relative_path.contains("main.rs"));
+        assert!(files[0].path.contains("main.rs"));
     }
 
     #[test]
@@ -410,19 +406,13 @@ mod tests {
         // Both files should be listed
         assert_eq!(files.len(), 2);
 
-        let large = files
-            .iter()
-            .find(|f| f.relative_path.contains("large"))
-            .unwrap();
+        let large = files.iter().find(|f| f.path.contains("large")).unwrap();
         assert!(!large.supported);
-        assert_eq!(large.skip_reason, Some(SkipReason::TooLarge));
+        assert_eq!(large.reason, Some(SkipReason::TooLarge));
 
-        let small = files
-            .iter()
-            .find(|f| f.relative_path.contains("small"))
-            .unwrap();
+        let small = files.iter().find(|f| f.path.contains("small")).unwrap();
         assert!(small.supported);
-        assert!(small.skip_reason.is_none());
+        assert!(small.reason.is_none());
     }
 
     #[test]

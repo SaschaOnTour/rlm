@@ -44,6 +44,7 @@
 
 pub mod cli;
 pub mod config;
+
 pub mod db;
 pub mod edit;
 pub mod error;
@@ -52,5 +53,7 @@ pub mod ingest;
 pub mod mcp;
 pub mod models;
 pub mod operations;
+/// Centralized output formatting (JSON/Pretty/TOON). Used by CLI and MCP.
+pub mod output;
 pub mod rlm;
 pub mod search;

@@ -6,19 +6,19 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of getting a symbol's signature.
 #[derive(Debug, Clone, Serialize)]
 pub struct SignatureResult {
     /// The symbol name.
-    #[serde(rename = "s")]
     pub symbol: String,
     /// The signatures (may have multiple if symbol is defined in multiple places).
-    #[serde(rename = "sig")]
     pub signatures: Vec<String>,
     /// The count of all call sites.
-    #[serde(rename = "refs")]
     pub ref_count: usize,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Get the signature of a symbol plus the count of all call sites.
@@ -28,11 +28,14 @@ pub fn get_signature(db: &Database, symbol: &str) -> Result<SignatureResult> {
 
     let sigs: Vec<String> = chunks.iter().filter_map(|c| c.signature.clone()).collect();
 
-    Ok(SignatureResult {
+    let mut result = SignatureResult {
         symbol: symbol.to_string(),
         signatures: sigs,
         ref_count: refs.len(),
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]

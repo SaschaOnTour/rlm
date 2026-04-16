@@ -10,6 +10,7 @@ use serde::Serialize;
 use crate::db::queries::VerifyReport;
 use crate::db::Database;
 use crate::error::Result;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of fixing integrity issues.
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +23,8 @@ pub struct FixResult {
     pub orphan_refs_deleted: u64,
     /// Number of missing files removed from index.
     pub missing_files_removed: u64,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Verify index integrity and check for missing files on disk.
@@ -44,6 +47,7 @@ pub fn verify_index(db: &Database, project_root: &Path) -> Result<VerifyReport> 
         }
     }
 
+    report.tokens = estimate_output_tokens(&report);
     Ok(report)
 }
 
@@ -63,12 +67,15 @@ pub fn fix_integrity(db: &Database, report: &VerifyReport) -> Result<FixResult> 
         }
     }
 
-    Ok(FixResult {
+    let mut result = FixResult {
         fixed: true,
         orphan_chunks_deleted: chunks_fixed,
         orphan_refs_deleted: refs_fixed,
         missing_files_removed: files_removed,
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]

@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-04-15
+
+### Added
+
+- **Index progress display**: `rlm index` shows live progress on stderr
+  (`Indexing... 342/1205 files`). MCP `index` tool sends `notifications/progress`
+  to the client via rmcp for real-time progress tracking.
+- **TOON output format**: `--format toon` flag on all CLI commands produces
+  Token-Oriented Object Notation — ~30-50% fewer tokens than JSON for
+  list-heavy responses. MCP supports TOON via `format = "toon"` in config.
+  Uses the standalone [`toon-encode`](https://crates.io/crates/toon-encode)
+  crate from crates.io (not an in-repo workspace crate).
+
+### Changed
+
+- **Wrapper standardization**: `build_map` and `build_tree` now return `MapResult` /
+  `TreeResult` with token estimates, matching the `{"results": [...], "tokens": {...}}`
+  pattern used by search and files
+- **Readable keys**: All 102 short serde renames (`"f"`, `"k"`, `"n"`, `"t"`, etc.)
+  replaced with readable field names (`"file"`, `"kind"`, `"name"`, `"tokens"`, etc.).
+  JSON output is now self-documenting — no key legend needed.
+- **Token metadata everywhere**: All operation result types now include `TokenEstimate`
+  (refs, context, deps, scope, diff, type_info, signature, callgraph, impact)
+- **Accurate token estimates**: PeekResult and Summary token estimates now computed from
+  the full serialized response instead of partial serialization
+
+## [0.3.5] - 2026-04-14
+
+### Fixed
+
+- **read --section**: Now correctly filters by ChunkKind — code symbols (structs,
+  functions) are no longer returned when using `--section`
+- **CLI error format**: `format_error` uses `serde_json::json!` for guaranteed valid JSON
+  escaping (previously broke on quotes/newlines in error messages)
+
+### Changed
+
+- **Key unification**: Consistent serde renames across all Serialize structs — no more
+  mixing of renamed and unrenamed fields within a struct
+  - PeekFile/TreeNode: `"p"` → `"f"` (consistent file path key)
+  - RefHit: `col` → `"co"`
+  - DepsResult: `imports` → `"im"`
+  - ScopeResult: `visible` → `"vis"`
+  - ContextResult: `body`/`callers`/`callees` → `"b"`/`"cr"`/`"ce"`
+  - CallgraphResult: `callers`/`callees` → `"cr"`/`"ce"`
+  - SignatureResult: `refs` → `"rc"`
+  - DiffResults: `changed` → `"ch"`
+
 ## [0.3.4] - 2026-04-10
 
 ### Fixed
