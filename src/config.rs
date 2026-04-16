@@ -78,7 +78,7 @@ impl Default for IndexingSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OutputSettings {
-    /// Output format: "minified" (default), "pretty", or "jsonl".
+    /// Output format: "json" (default), "pretty", or "toon".
     pub format: String,
     /// Whether to include token estimates in output.
     pub include_tokens: bool,

@@ -10,10 +10,9 @@ const JSON_BYTES_PER_TOKEN: f64 = 2.0;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TokenEstimate {
     /// Estimated input tokens consumed.
-    #[serde(rename = "in")]
+    #[serde(rename = "input")]
     pub input: u64,
     /// Estimated output tokens produced.
-    #[serde(rename = "out")]
     pub output: u64,
 }
 
@@ -61,6 +60,17 @@ pub fn estimate_json_tokens(byte_count: usize) -> u64 {
 #[must_use]
 pub fn estimate_tokens_from_bytes(size_bytes: u64) -> u64 {
     (size_bytes as f64 / BYTES_PER_TOKEN).ceil() as u64
+}
+
+/// Estimate output tokens for a Serialize result via two-pass serialization.
+///
+/// Serializes the result to JSON, measures the byte length, and returns a
+/// `TokenEstimate` with `input=0` and `output` set to the JSON token count.
+/// Used by operation functions to fill the `tokens` field on result structs.
+#[must_use]
+pub fn estimate_output_tokens<T: serde::Serialize>(result: &T) -> TokenEstimate {
+    let json = serde_json::to_string(result).unwrap_or_default();
+    TokenEstimate::new(0, estimate_json_tokens(json.len()))
 }
 
 #[cfg(test)]

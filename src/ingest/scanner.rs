@@ -57,19 +57,16 @@ pub struct ScannedFile {
 #[derive(Debug, Clone, Serialize)]
 pub struct DiscoveredFile {
     /// Relative path from project root (forward slashes)
-    #[serde(rename = "p")]
+    #[serde(rename = "path")]
     pub relative_path: String,
     /// File extension (lowercase, without dot)
-    #[serde(rename = "x")]
     pub extension: String,
     /// File size in bytes
-    #[serde(rename = "sz")]
     pub size: u64,
     /// Whether the file has a supported extension for indexing
-    #[serde(rename = "i")]
     pub supported: bool,
     /// Reason why file was skipped (only set when supported=false)
-    #[serde(rename = "r", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "reason", skip_serializing_if = "Option::is_none")]
     pub skip_reason: Option<SkipReason>,
 }
 

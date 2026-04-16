@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-04-15
+
+### Added
+
+- **Index progress display**: `rlm index` shows live progress on stderr
+  (`Indexing... 342/1205 files`). MCP `index` tool sends `notifications/progress`
+  to the client via rmcp for real-time progress tracking.
+- **TOON output format**: `--format toon` flag on all CLI commands produces
+  Token-Oriented Object Notation — ~30-50% fewer tokens than JSON for
+  list-heavy responses. MCP supports TOON via `format = "toon"` in config.
+  Uses the new `toon-encode` crate (shared with rustqual).
+
+### Changed
+
+- **Wrapper standardization**: `build_map` and `build_tree` now return `MapResult` /
+  `TreeResult` with token estimates, matching the `{"r": [...], "t": {...}}` pattern
+  used by search and files
+- **Readable keys**: All 102 short serde renames (`"f"`, `"k"`, `"n"`, `"t"`, etc.)
+  replaced with readable field names (`"file"`, `"kind"`, `"name"`, `"tokens"`, etc.).
+  JSON output is now self-documenting — no key legend needed.
+- **Token metadata everywhere**: All operation result types now include `TokenEstimate`
+  (refs, context, deps, scope, diff, type_info, signature, callgraph, impact)
+- **Accurate token estimates**: PeekResult and Summary token estimates now computed from
+  the full serialized response instead of partial serialization
+
 ## [0.3.5] - 2026-04-14
 
 ### Fixed

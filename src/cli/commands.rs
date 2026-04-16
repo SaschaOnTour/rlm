@@ -1,6 +1,17 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::edit::inserter::InsertPosition;
+
+/// Output format for CLI commands.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum FormatArg {
+    /// Minified JSON (default)
+    Json,
+    /// Pretty-printed JSON
+    Pretty,
+    /// Token-Oriented Object Notation — compact tabular format
+    Toon,
+}
 
 #[derive(Parser)]
 #[command(
@@ -15,6 +26,9 @@ use crate::edit::inserter::InsertPosition;
                   including skipped ones, use 'rlm files'."
 )]
 pub struct Cli {
+    /// Output format (default: from config, or json)
+    #[arg(long, global = true, value_enum)]
+    pub format: Option<FormatArg>,
     #[command(subcommand)]
     pub command: Command,
 }

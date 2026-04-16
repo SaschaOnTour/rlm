@@ -6,24 +6,29 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
+
+/// Wrapped map result with token estimate.
+#[derive(Debug, Clone, Serialize)]
+pub struct MapResult {
+    /// Map entries.
+    pub results: Vec<MapEntry>,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
+}
 
 /// A single entry in the project map.
 #[derive(Debug, Clone, Serialize)]
 pub struct MapEntry {
     /// File path.
-    #[serde(rename = "f")]
     pub file: String,
     /// Language identifier.
-    #[serde(rename = "l")]
     pub lang: String,
     /// Number of lines in the file.
-    #[serde(rename = "lc")]
     pub line_count: u32,
     /// Public symbols in format "kind:name".
-    #[serde(rename = "s")]
     pub symbols: Vec<String>,
     /// Description of file contents (e.g., "3 fn, 2 struct").
-    #[serde(rename = "d")]
     pub description: String,
 }
 
@@ -34,7 +39,7 @@ pub struct MapEntry {
 /// - Line count
 /// - Public symbols
 /// - Description of contained items
-pub fn build_map(db: &Database, path_filter: Option<&str>) -> Result<Vec<MapEntry>> {
+pub fn build_map(db: &Database, path_filter: Option<&str>) -> Result<MapResult> {
     let files = db.get_all_files()?;
 
     let mut entries = Vec::new();
@@ -76,7 +81,12 @@ pub fn build_map(db: &Database, path_filter: Option<&str>) -> Result<Vec<MapEntr
         });
     }
 
-    Ok(entries)
+    let mut result = MapResult {
+        results: entries,
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -117,7 +127,7 @@ mod tests {
         let db = setup_test_db();
         let result = build_map(&db, None).unwrap();
 
-        assert!(result.is_empty());
+        assert!(result.results.is_empty());
     }
 
     #[test]
@@ -191,8 +201,8 @@ mod tests {
 
         let result = build_map(&db, None).unwrap();
 
-        assert_eq!(result.len(), 1);
-        let entry = &result[0];
+        assert_eq!(result.results.len(), 1);
+        let entry = &result.results[0];
         assert_eq!(entry.file, "src/lib.rs");
         assert_eq!(entry.lang, "rust");
         assert_eq!(entry.line_count, STRUCT_END_LINE);
@@ -263,8 +273,8 @@ mod tests {
 
         let result = build_map(&db, Some("src/")).unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].file, "src/lib.rs");
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.results[0].file, "src/lib.rs");
     }
 
     #[test]
@@ -289,8 +299,8 @@ mod tests {
 
         let result = build_map(&db, None).unwrap();
 
-        assert_eq!(result.len(), 2);
-        let files: Vec<&str> = result.iter().map(|e| e.file.as_str()).collect();
+        assert_eq!(result.results.len(), 2);
+        let files: Vec<&str> = result.results.iter().map(|e| e.file.as_str()).collect();
         assert!(files.contains(&"src/a.rs"));
         assert!(files.contains(&"src/b.rs"));
     }
@@ -347,8 +357,10 @@ mod tests {
 
         let result = build_map(&db, None).unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].symbols.len(), 1);
-        assert!(result[0].symbols.contains(&"method:process".to_string()));
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.results[0].symbols.len(), 1);
+        assert!(result.results[0]
+            .symbols
+            .contains(&"method:process".to_string()));
     }
 }

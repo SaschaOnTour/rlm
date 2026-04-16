@@ -14,16 +14,31 @@
 
 use clap::Parser;
 
-use rlm::cli::commands::{Cli, Command};
+use rlm::cli::commands::{self, Cli, Command};
 use rlm::cli::handlers;
 use rlm::cli::handlers_util;
-use rlm::cli::output;
+use rlm::output;
 
 fn main() {
     let cli = Cli::parse();
+    // MCP server sets its own format from config — don't override with CLI flag
+    if !matches!(cli.command, Command::Mcp) {
+        let format = match cli.format {
+            Some(commands::FormatArg::Pretty) => output::OutputFormat::Pretty,
+            Some(commands::FormatArg::Toon) => output::OutputFormat::Toon,
+            Some(commands::FormatArg::Json) => output::OutputFormat::Json,
+            None => {
+                // No explicit --format flag: read from config
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let config = rlm::config::Config::new(&cwd);
+                output::OutputFormat::from_str_loose(&config.settings.output.format)
+            }
+        };
+        output::init(format);
+    }
 
     if let Err(e) = run(cli) {
-        eprintln!("{}", output::format_error(&e));
+        eprintln!("{}", output::serialize_error(&e));
         std::process::exit(1);
     }
 }

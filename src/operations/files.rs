@@ -19,13 +19,10 @@ const TOKEN_ESTIMATE_BASE_OVERHEAD: usize = 20;
 #[derive(Debug, Clone, Serialize)]
 pub struct FilesResult {
     /// The list of discovered files.
-    #[serde(rename = "r")]
     pub results: Vec<DiscoveredFile>,
     /// Summary statistics.
-    #[serde(rename = "s")]
     pub summary: FilesSummary,
     /// Token usage estimate.
-    #[serde(rename = "t")]
     pub tokens: TokenEstimate,
 }
 

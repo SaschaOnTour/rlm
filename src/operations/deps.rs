@@ -10,16 +10,17 @@ use serde::Serialize;
 use crate::db::Database;
 use crate::error::Result;
 use crate::models::chunk::RefKind;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of getting dependencies for a file.
 #[derive(Debug, Clone, Serialize)]
 pub struct DepsResult {
     /// The file path.
-    #[serde(rename = "f")]
     pub file: String,
     /// The list of imports/dependencies.
-    #[serde(rename = "im")]
     pub imports: Vec<String>,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Get all imports/dependencies for a file.
@@ -46,10 +47,13 @@ pub fn get_deps(db: &Database, path: &str) -> Result<DepsResult> {
     let mut import_list: Vec<String> = imports.into_iter().collect();
     import_list.sort();
 
-    Ok(DepsResult {
+    let mut result = DepsResult {
         file: path.to_string(),
         imports: import_list,
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]

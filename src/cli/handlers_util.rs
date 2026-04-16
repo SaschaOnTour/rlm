@@ -4,10 +4,10 @@
 //! Shared helpers live in `cli::helpers`.
 
 use crate::cli::helpers::{get_config, get_db, map_err, should_filter_unknown, CmdResult};
-use crate::cli::output;
 use crate::ingest::code::quality_log;
 use crate::operations;
 use crate::operations::savings;
+use crate::output;
 
 pub fn cmd_stats(show_savings: bool, since: Option<&str>) -> CmdResult {
     let config = get_config()?;
@@ -15,16 +15,16 @@ pub fn cmd_stats(show_savings: bool, since: Option<&str>) -> CmdResult {
 
     if show_savings {
         let report = savings::get_savings_report(&db, since).map_err(map_err)?;
-        println!("{}", output::format_json(&report));
+        output::print(&report);
         return Ok(());
     }
 
     let result = operations::get_stats(&db).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
+    output::print(&result);
 
     // Check for files with quality issues (output to stderr as diagnostic info)
     if let Ok(Some(quality_info)) = operations::get_quality_info(&db) {
-        eprintln!("{}", output::format_json(&quality_info));
+        eprintln!("{}", output::serialize(&quality_info));
     }
 
     Ok(())
@@ -43,7 +43,7 @@ pub fn cmd_mcp() -> CmdResult {
 fn cmd_quality_clear(log_path: &std::path::Path) -> CmdResult {
     let logger = quality_log::QualityLogger::new(log_path, true);
     logger.clear().map_err(map_err)?;
-    println!("{{\"cleared\":true}}");
+    output::print(&serde_json::json!({"cleared": true}));
     Ok(())
 }
 
@@ -51,7 +51,7 @@ fn cmd_quality_clear(log_path: &std::path::Path) -> CmdResult {
 fn cmd_quality_display(issues: Vec<quality_log::QualityIssue>, summary: bool) {
     if summary {
         let stats = quality_log::summarize_issues(&issues);
-        println!("{}", output::format_json(&stats));
+        output::print(&stats);
     } else {
         #[derive(serde::Serialize)]
         struct QualityOutput {
@@ -59,13 +59,10 @@ fn cmd_quality_display(issues: Vec<quality_log::QualityIssue>, summary: bool) {
             issues: Vec<quality_log::QualityIssue>,
         }
 
-        println!(
-            "{}",
-            output::format_json(&QualityOutput {
-                count: issues.len(),
-                issues,
-            })
-        );
+        output::print(&QualityOutput {
+            count: issues.len(),
+            issues,
+        });
     }
 }
 
@@ -96,7 +93,7 @@ pub fn cmd_files(path_filter: Option<&str>, skipped_only: bool, indexed_only: bo
         indexed_only,
     };
     let result = operations::list_files(&config.project_root, filter).map_err(map_err)?;
-    println!("{}", output::format_json(&result));
+    output::print(&result);
     Ok(())
 }
 
@@ -112,15 +109,15 @@ pub fn cmd_verify(fix: bool) -> CmdResult {
 
     if fix && !report.is_ok() {
         let fix_result = operations::fix_integrity(&db, &report).map_err(map_err)?;
-        println!("{}", output::format_json(&fix_result));
+        output::print(&fix_result);
     } else {
-        println!("{}", output::format_json(&report));
+        output::print(&report);
     }
     Ok(())
 }
 
 pub fn cmd_supported() -> CmdResult {
     let result = operations::list_supported();
-    println!("{}", output::format_json(&result));
+    output::print(&result);
     Ok(())
 }

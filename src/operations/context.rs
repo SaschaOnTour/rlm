@@ -7,28 +7,25 @@ use serde::Serialize;
 use crate::db::Database;
 use crate::error::Result;
 use crate::models::chunk::RefKind;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Complete context information for a symbol.
 #[derive(Debug, Clone, Serialize)]
 pub struct ContextResult {
     /// The symbol being analyzed.
-    #[serde(rename = "s")]
     pub symbol: String,
     /// Full body content of each definition.
-    #[serde(rename = "b")]
     pub body: Vec<String>,
     /// Signatures of each definition.
-    #[serde(rename = "sig")]
     pub signatures: Vec<String>,
     /// Number of callers.
-    #[serde(rename = "cr")]
     pub caller_count: usize,
     /// Names of callees.
-    #[serde(rename = "ce")]
     pub callee_names: Vec<String>,
     /// Number of distinct files containing this symbol.
-    #[serde(rename = "fc")]
     pub file_count: usize,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Build complete context for understanding a symbol.
@@ -62,14 +59,17 @@ pub fn build_context(db: &Database, symbol: &str) -> Result<ContextResult> {
         .into_iter()
         .collect();
 
-    Ok(ContextResult {
+    let mut result = ContextResult {
         symbol: symbol.to_string(),
         body: bodies,
         signatures: sigs,
         caller_count: callers_refs.len(),
         callee_names,
         file_count,
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -206,6 +206,10 @@ mod tests {
         assert_eq!(result.callee_names.len(), 2);
         assert!(result.callee_names.contains(&"validate".to_string()));
         assert!(result.callee_names.contains(&"transform".to_string()));
+        assert!(
+            result.tokens.output > 0,
+            "token estimate should be non-zero for non-empty result"
+        );
     }
 
     #[test]

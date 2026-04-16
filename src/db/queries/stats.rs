@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::models::token_estimate::TokenEstimate;
 
 use super::super::Database;
 
@@ -112,6 +113,8 @@ pub struct VerifyReport {
     /// Paths of missing files.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub missing_file_paths: Vec<String>,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 // qual:api

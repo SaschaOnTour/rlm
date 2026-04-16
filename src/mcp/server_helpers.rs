@@ -43,17 +43,23 @@ impl RlmServer {
     }
 
     pub(crate) fn to_json<T: Serialize>(val: &T) -> String {
-        serde_json::to_string(val)
-            .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string())
+        crate::output::to_json(val)
     }
 
     pub(crate) fn success_text(text: String) -> CallToolResult {
-        CallToolResult::success(vec![Content::text(guard_output(text))])
+        let cow = crate::output::reformat_str(&text);
+        // Reuse the owned input when format is JSON (Cow::Borrowed), avoid clone
+        let formatted = if matches!(cow, std::borrow::Cow::Borrowed(_)) {
+            text
+        } else {
+            cow.into_owned()
+        };
+        CallToolResult::success(vec![Content::text(guard_output(formatted))])
     }
 
     pub(crate) fn error_text(msg: String) -> CallToolResult {
-        let json = serde_json::json!({"error": msg}).to_string();
-        CallToolResult::error(vec![Content::text(guard_output(json))])
+        let formatted = crate::output::serialize_error(&msg);
+        CallToolResult::error(vec![Content::text(guard_output(formatted))])
     }
 }
 
@@ -66,10 +72,10 @@ impl RlmServer {
         path: &str,
         val: &T,
     ) -> Result<CallToolResult, McpError> {
-        let json = guard_output(Self::to_json(val));
+        let json = Self::to_json(val);
         let out_tokens = estimate_json_tokens(json.len());
         savings::record_read_symbol(db, out_tokens, path);
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(Self::success_text(json))
     }
 
     /// Build the read-symbol response, optionally enriching with metadata (integration: calls only).
@@ -152,6 +158,12 @@ pub async fn start_mcp_server() -> crate::error::Result<()> {
 
     // Determine project root from current working directory
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // Initialize output format from config (MCP has no CLI flag)
+    let config = crate::config::Config::new(&project_root);
+    crate::output::init(crate::output::OutputFormat::from_str_loose(
+        &config.settings.output.format,
+    ));
 
     let server = RlmServer::new(project_root);
 

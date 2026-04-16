@@ -94,10 +94,10 @@ pub struct Chunk {
     /// UI context tag (pages, components, screens).
     pub ui_ctx: Option<String>,
     /// Doc comment preceding this item (///, /**, #, docstrings).
-    #[serde(rename = "dc", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub doc_comment: Option<String>,
     /// Attributes/decorators/annotations (e.g. #[derive(Debug)], @Override).
-    #[serde(rename = "at", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attributes: Option<String>,
     /// Full content of the chunk.
     pub content: String,

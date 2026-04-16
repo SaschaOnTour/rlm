@@ -4,21 +4,18 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// A single location that would be impacted by changing a symbol.
 #[derive(Debug, Clone, Serialize)]
 pub struct ImpactEntry {
     /// File path containing the reference.
-    #[serde(rename = "f")]
     pub file: String,
     /// Symbol containing the reference.
-    #[serde(rename = "n")]
     pub in_symbol: String,
     /// Line number of the reference.
-    #[serde(rename = "l")]
     pub line: u32,
     /// Kind of reference (call, import, `type_use`).
-    #[serde(rename = "k")]
     pub ref_kind: String,
 }
 
@@ -26,14 +23,13 @@ pub struct ImpactEntry {
 #[derive(Debug, Clone, Serialize)]
 pub struct ImpactResult {
     /// The symbol being analyzed.
-    #[serde(rename = "s")]
     pub symbol: String,
     /// List of impacted locations.
-    #[serde(rename = "i")]
     pub impacted: Vec<ImpactEntry>,
     /// Total count of impacted locations.
-    #[serde(rename = "c")]
     pub count: usize,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Analyze the impact of changing a symbol.
@@ -63,11 +59,14 @@ pub fn analyze_impact(db: &Database, symbol: &str) -> Result<ImpactResult> {
     }
 
     let count = impacted.len();
-    Ok(ImpactResult {
+    let mut result = ImpactResult {
         symbol: symbol.to_string(),
         impacted,
         count,
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]

@@ -6,36 +6,32 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of finding all references to a symbol.
 #[derive(Debug, Clone, Serialize)]
 pub struct RefsResult {
     /// The symbol name.
-    #[serde(rename = "s")]
     pub symbol: String,
     /// The list of references.
-    #[serde(rename = "r")]
     pub refs: Vec<RefHit>,
     /// Total count of references.
-    #[serde(rename = "c")]
     pub count: usize,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// A single reference hit.
 #[derive(Debug, Clone, Serialize)]
 pub struct RefHit {
     /// The kind of reference (call, import, `type_use`).
-    #[serde(rename = "k")]
     pub kind: String,
     /// The line number.
-    #[serde(rename = "l")]
     pub line: u32,
     /// The column number.
-    #[serde(rename = "co")]
     pub col: u32,
     /// The chunk ID containing this reference.
     /// Note: Using `cid` for consistency (was inconsistent between CLI/MCP before).
-    #[serde(rename = "cid")]
     pub chunk_id: i64,
 }
 
@@ -55,11 +51,14 @@ pub fn get_refs(db: &Database, symbol: &str) -> Result<RefsResult> {
 
     let count = hits.len();
 
-    Ok(RefsResult {
+    let mut result = RefsResult {
         symbol: symbol.to_string(),
         refs: hits,
         count,
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]

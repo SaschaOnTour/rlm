@@ -23,19 +23,14 @@ pub enum Strategy {
 #[derive(Debug, Clone, Serialize)]
 pub struct Partition {
     /// Partition index.
-    #[serde(rename = "i")]
     pub index: usize,
     /// Start line.
-    #[serde(rename = "sl")]
     pub start_line: u32,
     /// End line.
-    #[serde(rename = "el")]
     pub end_line: u32,
     /// Content of this partition.
-    #[serde(rename = "c")]
     pub content: String,
     /// Token estimate for this partition.
-    #[serde(rename = "t")]
     pub tokens: u64,
 }
 
@@ -56,11 +51,8 @@ impl Partition {
 /// Partition result.
 #[derive(Debug, Clone, Serialize)]
 pub struct PartitionResult {
-    #[serde(rename = "f")]
     pub file: String,
-    #[serde(rename = "p")]
     pub partitions: Vec<Partition>,
-    #[serde(rename = "t")]
     pub tokens: TokenEstimate,
 }
 

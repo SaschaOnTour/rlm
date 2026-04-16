@@ -7,19 +7,19 @@ use serde::Serialize;
 use crate::db::Database;
 use crate::error::Result;
 use crate::models::chunk::RefKind;
+use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of building a call graph for a symbol.
 #[derive(Debug, Clone, Serialize)]
 pub struct CallgraphResult {
     /// The symbol being analyzed.
-    #[serde(rename = "s")]
     pub symbol: String,
     /// Functions/methods that call this symbol.
-    #[serde(rename = "cr")]
     pub callers: Vec<String>,
     /// Functions/methods that this symbol calls.
-    #[serde(rename = "ce")]
     pub callees: Vec<String>,
+    /// Token estimate for this response.
+    pub tokens: TokenEstimate,
 }
 
 /// Build a call graph for the given symbol.
@@ -58,11 +58,14 @@ pub fn build_callgraph(db: &Database, symbol: &str) -> Result<CallgraphResult> {
         .into_iter()
         .collect();
 
-    Ok(CallgraphResult {
+    let mut result = CallgraphResult {
         symbol: symbol.to_string(),
         callers: caller_names,
         callees: callee_names,
-    })
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
 }
 
 #[cfg(test)]

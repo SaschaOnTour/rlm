@@ -193,8 +193,11 @@ fn accumulate_outcome(result: &mut IndexResult, outcome: FileOutcome) {
     }
 }
 
+/// Progress callback: (current_file_1based, total_files).
+pub type ProgressCallback = dyn Fn(usize, usize) + Send;
+
 /// Run the indexer: scan files, parse chunks, store in DB.
-pub fn run_index(config: &Config) -> Result<IndexResult> {
+pub fn run_index(config: &Config, progress: Option<&ProgressCallback>) -> Result<IndexResult> {
     config.ensure_rlm_dir()?;
 
     let db = Database::open(&config.db_path)?;
@@ -216,7 +219,11 @@ pub fn run_index(config: &Config) -> Result<IndexResult> {
     let tx_result = (|| -> Result<()> {
         result.deleted_from_index = purge_deleted_files(&db, &scanned_paths)?;
 
-        for file in &scanned {
+        let total = scanned.len();
+        for (i, file) in scanned.iter().enumerate() {
+            if let Some(cb) = &progress {
+                cb(i + 1, total);
+            }
             let outcome = process_single_file(&db, &dispatcher, file)?;
             accumulate_outcome(&mut result, outcome);
         }
@@ -353,7 +360,7 @@ fn find_preview(db: &Database, rel_path: &str, source: &PreviewSource<'_>) -> Op
 // qual:allow(iosp) reason: "check-then-act: ensure index exists before opening"
 pub fn ensure_index(config: &Config) -> Result<Database> {
     if !config.index_exists() {
-        run_index(config)?;
+        run_index(config, None)?;
     }
     Database::open(&config.db_path)
 }
@@ -379,7 +386,7 @@ mod tests {
         .unwrap();
 
         let config = Config::new(tmp.path());
-        let result = run_index(&config).unwrap();
+        let result = run_index(&config, None).unwrap();
 
         assert!(result.files_indexed > 0);
         assert!(result.chunks_created > 0);
@@ -396,11 +403,11 @@ mod tests {
         let config = Config::new(tmp.path());
 
         // First index
-        let r1 = run_index(&config).unwrap();
+        let r1 = run_index(&config, None).unwrap();
         assert!(r1.files_indexed > 0);
 
         // Second index (no changes)
-        let r2 = run_index(&config).unwrap();
+        let r2 = run_index(&config, None).unwrap();
         assert_eq!(r2.files_indexed, 0);
         assert!(r2.files_skipped > 0);
     }
@@ -414,12 +421,12 @@ mod tests {
         fs::write(&file_path, "fn main() {}").unwrap();
 
         let config = Config::new(tmp.path());
-        run_index(&config).unwrap();
+        run_index(&config, None).unwrap();
 
         // Modify file
         fs::write(&file_path, "fn main() { println!(\"changed\"); }").unwrap();
 
-        let r2 = run_index(&config).unwrap();
+        let r2 = run_index(&config, None).unwrap();
         assert!(r2.files_indexed > 0);
     }
 
@@ -434,13 +441,13 @@ mod tests {
         fs::write(src_dir.join("helper.rs"), "fn helper() {}").unwrap();
 
         let config = Config::new(tmp.path());
-        let r1 = run_index(&config).unwrap();
+        let r1 = run_index(&config, None).unwrap();
         assert_eq!(r1.files_indexed, 2);
 
         // Delete one file
         fs::remove_file(src_dir.join("helper.rs")).unwrap();
 
-        let r2 = run_index(&config).unwrap();
+        let r2 = run_index(&config, None).unwrap();
         assert_eq!(r2.deleted_from_index, 1);
         assert_eq!(r2.skipped_unchanged, 1); // main.rs unchanged
 
@@ -464,7 +471,7 @@ mod tests {
         fs::write(src_dir.join("binary.rs"), NON_UTF8_BYTES).unwrap();
 
         let config = Config::new(tmp.path());
-        let result = run_index(&config).unwrap();
+        let result = run_index(&config, None).unwrap();
 
         assert_eq!(result.files_indexed, 1);
         assert_eq!(result.skipped_non_utf8, 1);
@@ -486,7 +493,7 @@ mod tests {
         fs::create_dir_all(&src_dir).unwrap();
         fs::write(src_dir.join("main.rs"), source).unwrap();
         let config = Config::new(tmp.path());
-        run_index(&config).unwrap();
+        run_index(&config, None).unwrap();
         let db = Database::open(&config.db_path).unwrap();
         (tmp, config, db)
     }
@@ -613,5 +620,33 @@ fn another() -> bool {
         assert_eq!(val["ok"], true);
         assert!(val["preview"].is_string());
         assert!(val["preview"].as_str().unwrap().contains("helper"));
+    }
+
+    // ─── Progress callback tests ────────────────────────────────
+
+    #[test]
+    fn run_index_calls_progress_callback() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("a.rs"), "fn a() {}").unwrap();
+        fs::write(src.join("b.rs"), "fn b() {}").unwrap();
+
+        let config = Config::new(tmp.path());
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let calls_clone = calls.clone();
+        let progress = move |current: usize, total: usize| {
+            calls_clone.lock().unwrap().push((current, total));
+        };
+
+        run_index(&config, Some(&progress)).unwrap();
+
+        let recorded = calls.lock().unwrap();
+        assert!(
+            recorded.len() >= 2,
+            "should be called at least once per file"
+        );
+        let &(last_current, last_total) = recorded.last().unwrap();
+        assert_eq!(last_current, last_total, "last call should be total/total");
     }
 }

@@ -181,11 +181,10 @@ fn e2e_read_section_rejects_code_symbols() {
 #[test]
 fn e2e_overview_standard() {
     let dir = setup_rust_project();
-    rlm(&dir)
-        .arg("overview")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("sample.rs"));
+    rlm(&dir).arg("overview").assert().success().stdout(
+        predicate::str::contains("sample.rs")
+            .and(predicate::str::contains("\"tokens\":{\"input\":")),
+    );
 }
 
 #[test]
@@ -210,9 +209,10 @@ fn e2e_overview_tree() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("\"n\":\"sample.rs\"")
-                .and(predicate::str::contains("\"dir\":false"))
-                .and(predicate::str::contains("\"k\":\"fn\"")),
+            predicate::str::contains("\"name\":\"sample.rs\"")
+                .and(predicate::str::contains("\"is_dir\":false"))
+                .and(predicate::str::contains("\"kind\":\"fn\""))
+                .and(predicate::str::contains("\"tokens\":{\"input\":")),
         );
 }
 
@@ -228,6 +228,56 @@ fn e2e_overview_with_path_filter() {
         .stdout(predicate::str::contains("sample.rs"));
 }
 
+// ─── Output format tests ────────────────────────────────────────────────────
+
+#[test]
+fn e2e_format_toon_overview() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("--format")
+        .arg("toon")
+        .arg("overview")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("results:")) // TOON object key
+        .stdout(predicate::str::contains("tokens:"));
+}
+
+#[test]
+fn e2e_format_pretty_overview() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("--format")
+        .arg("pretty")
+        .arg("overview")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\n  ")); // indented JSON
+}
+
+#[test]
+fn e2e_format_default_is_json() {
+    let dir = setup_rust_project();
+    let output = rlm(&dir).arg("overview").output().expect("run rlm");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Default JSON: no newlines (minified), starts with {
+    assert!(!stdout.contains("\n  "), "default should be minified JSON");
+    assert!(stdout.starts_with('{'), "should start with {{");
+}
+
+#[test]
+fn e2e_format_toon_search() {
+    let dir = setup_rust_project();
+    rlm(&dir)
+        .arg("--format")
+        .arg("toon")
+        .arg("search")
+        .arg("helper")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("results:")); // TOON key
+}
+
 // ─── rlm refs ───────────────────────────────────────────────────────────────
 
 #[test]
@@ -238,7 +288,7 @@ fn e2e_refs() {
         .arg("helper")
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"s\":\"helper\""));
+        .stdout(predicate::str::contains("\"symbol\":\"helper\""));
 }
 
 // ─── rlm replace ────────────────────────────────────────────────────────────
@@ -349,7 +399,7 @@ fn e2e_diff_unchanged() {
         .arg("sample.rs")
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"ch\":false"));
+        .stdout(predicate::str::contains("\"changed\":false"));
 }
 
 #[test]
@@ -362,7 +412,7 @@ fn e2e_diff_symbol() {
         .arg("helper")
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"ch\":false"));
+        .stdout(predicate::str::contains("\"changed\":false"));
 }
 
 // ─── rlm context ────────────────────────────────────────────────────────────
@@ -376,7 +426,8 @@ fn e2e_context() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("\"s\":\"helper\"").and(predicate::str::contains("\"b\":")),
+            predicate::str::contains("\"symbol\":\"helper\"")
+                .and(predicate::str::contains("\"body\":")),
         );
 }
 
@@ -402,7 +453,7 @@ fn e2e_deps() {
         .arg("sample.rs")
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"f\":\"sample.rs\""));
+        .stdout(predicate::str::contains("\"file\":\"sample.rs\""));
 }
 
 // ─── rlm scope ──────────────────────────────────────────────────────────────
@@ -417,7 +468,7 @@ fn e2e_scope() {
         .arg("10")
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"f\":\"sample.rs\""));
+        .stdout(predicate::str::contains("\"file\":\"sample.rs\""));
 }
 
 // ─── Multi-language indexing ────────────────────────────────────────────────
@@ -504,7 +555,7 @@ fn e2e_files_skipped_only() {
         .success()
         .stdout(predicate::str::contains("cshtml"))
         .stdout(predicate::str::contains("kt"))
-        .stdout(predicate::str::contains("\"i\":false"));
+        .stdout(predicate::str::contains("\"supported\":false"));
 }
 
 #[test]

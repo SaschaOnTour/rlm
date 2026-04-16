@@ -10,8 +10,13 @@ use std::sync::Arc;
 
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ServerCapabilities, ServerInfo};
-use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
+use rmcp::model::{
+    CallToolResult, NumberOrString, ProgressNotificationParam, ProgressToken, ServerCapabilities,
+    ServerInfo,
+};
+use rmcp::{
+    tool, tool_handler, tool_router, ErrorData as McpError, Peer, RoleServer, ServerHandler,
+};
 
 use super::tool_handlers;
 use super::tool_handlers_util;
@@ -23,6 +28,8 @@ use super::tools::{
 
 /// Default maximum number of search results when no explicit limit is provided.
 const DEFAULT_SEARCH_LIMIT: usize = 20;
+
+use crate::output::PROGRESS_INTERVAL;
 
 // Re-export start_mcp_server from the helpers module.
 pub use super::server_helpers::start_mcp_server;
@@ -66,9 +73,62 @@ impl RlmServer {
     #[tool(
         description = "Scan and index the codebase into the .rlm/index.db database. Returns file/chunk/ref counts."
     )]
+    // qual:allow(iosp) reason: "async progress bridge requires orchestrating blocking task + channel + notifications"
     // qual:api
-    async fn index(&self, params: Parameters<IndexParams>) -> Result<CallToolResult, McpError> {
-        tool_handlers::handle_index(params.0.path.as_deref(), &self.project_root)
+    async fn index(
+        &self,
+        params: Parameters<IndexParams>,
+        peer: Peer<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let project_root = self.project_root.clone();
+        let path = params.0.path.clone();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, usize)>();
+
+        let mut handle = tokio::task::spawn_blocking(move || {
+            let progress = move |current: usize, total: usize| {
+                let _ = tx.send((current, total));
+            };
+            tool_handlers::handle_index_with_progress(
+                path.as_deref(),
+                &project_root,
+                Some(&progress),
+            )
+        });
+
+        let token_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let progress_token = ProgressToken(NumberOrString::Number(token_id));
+        loop {
+            tokio::select! {
+                biased;
+                msg = rx.recv() => {
+                    match msg {
+                        Some((current, total))
+                            if current.is_multiple_of(PROGRESS_INTERVAL) || current == total =>
+                        {
+                            let _ = peer.notify_progress(ProgressNotificationParam {
+                                progress_token: progress_token.clone(),
+                                progress: current as f64,
+                                total: Some(total as f64),
+                                message: Some(format!("Indexing... {current}/{total} files")),
+                            }).await;
+                        }
+                        Some(_) => {} // throttled — skip this update
+                        None => break,
+                    }
+                }
+                result = &mut handle => {
+                    return result.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                }
+            }
+        }
+
+        handle
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
     }
 
     #[tool(
@@ -340,7 +400,7 @@ fn internal() {
         .expect("write test file");
 
         let config = crate::config::Config::new(tmp.path());
-        crate::indexer::run_index(&config).expect("index project");
+        crate::indexer::run_index(&config, None).expect("index project");
         let db = crate::db::Database::open(&config.db_path).expect("open db");
 
         (tmp, config, db)
@@ -389,14 +449,14 @@ fn internal() {
     fn test_overview_standard_operation() {
         let (_tmp, _config, db) = setup_indexed_project();
         let result = crate::operations::build_map(&db, None).expect("map");
-        assert!(!result.is_empty());
+        assert!(!result.results.is_empty());
     }
 
     #[test]
     fn test_overview_tree_operation() {
         let (_tmp, _config, db) = setup_indexed_project();
         let result = crate::search::tree::build_tree(&db, None).expect("tree");
-        assert!(!result.is_empty());
+        assert!(!result.results.is_empty());
     }
 
     #[test]
