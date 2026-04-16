@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`rlm setup` command** (P07-01/02/04): automates Claude Code integration. Creates
+  `.claude/settings.json` with rlm permissions (16 read-only MCP tools + 3 Bash
+  patterns) and the `mcpServers.rlm` entry, appends a marker-delimited workflow
+  block to `CLAUDE.local.md`, and triggers the initial index. Existing user
+  config is preserved via dedup-merge. Flags: `--check` (dry-run), `--remove`
+  (clean removal). Idempotent — repeat runs produce byte-identical output.
+- **Self-healing index** (P07-05): rlm detects external file changes (CC native
+  Edit/Write, vim, `git pull`, ...) automatically at the canonical DB-open seam
+  (`cli::helpers::get_db` + `mcp::server_helpers::ensure_db`). Modified, added,
+  and deleted files are reconciled before each CLI command / MCP tool call. Set
+  `RLM_SKIP_REFRESH=1` to bypass for performance-sensitive scripts.
+
+### Changed
+
+- **DB-open consolidation**: extracted `Database::open_required` for the
+  "existing-index-only" path (used by `verify`). Canonical read paths now funnel
+  through `get_db` / `ensure_db`, giving a single seam for future concerns
+  (schema migration, health checks, ...).
+
 ## [0.3.6] - 2026-04-15
 
 ### Added

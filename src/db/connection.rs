@@ -90,6 +90,23 @@ impl Database {
         }
     }
 
+    /// Open an existing database, returning `RlmError::IndexNotFound` if missing.
+    ///
+    /// Raw opener — no auto-indexing, no staleness check. Used by commands like
+    /// `verify` that need an existing index and intentionally bypass the canonical
+    /// fresh-open path (which would auto-fix drift before reporting it).
+    ///
+    /// Canonical full-pipeline openers:
+    /// - CLI: `crate::cli::helpers::get_db` (auto-indexes + staleness check)
+    /// - MCP: `crate::mcp::server_helpers::ensure_db` (staleness check only)
+    // qual:allow(iosp) reason: "check-then-open is inherent to this method's purpose"
+    pub fn open_required(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            return Err(crate::error::RlmError::IndexNotFound);
+        }
+        Self::open(path)
+    }
+
     /// Create an in-memory database (for testing).
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;

@@ -25,7 +25,11 @@ pub fn get_config() -> Result<Config, Box<dyn std::fmt::Display>> {
 }
 
 pub fn get_db(config: &Config) -> Result<Database, Box<dyn std::fmt::Display>> {
-    indexer::ensure_index(config).map_err(map_err)
+    let db = indexer::ensure_index(config).map_err(map_err)?;
+    // Self-healing: pick up external edits (CC-native, vim, git pull, ...)
+    // before the caller uses the index. Set RLM_SKIP_REFRESH=1 to skip.
+    indexer::staleness::ensure_index_fresh(&db, config).map_err(map_err)?;
+    Ok(db)
 }
 
 /// Serialize chunks as JSON, optionally including metadata.

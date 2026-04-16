@@ -95,5 +95,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::fmt::Display>> {
         } => handlers_util::cmd_files(path.as_deref(), skipped_only, indexed_only),
         Command::Verify { fix } => handlers_util::cmd_verify(fix),
         Command::Supported => handlers_util::cmd_supported(),
+        Command::Setup { check, remove } => handlers_util::cmd_setup(check, remove),
     }
 }

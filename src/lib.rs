@@ -57,3 +57,4 @@ pub mod operations;
 pub mod output;
 pub mod rlm;
 pub mod search;
+pub mod setup;

@@ -1,5 +1,6 @@
 mod db_insert;
 mod file_processing;
+pub mod staleness;
 
 use std::collections::HashSet;
 
