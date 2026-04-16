@@ -111,6 +111,41 @@ fn cli_reindexes_after_external_file_deleted() {
     assert_eq!(count, 0, "deleted file's symbol must no longer be indexed");
 }
 
+#[cfg(unix)]
+#[test]
+fn cli_logs_hash_failure_instead_of_silent_drift() {
+    // Regression: when staleness can't hash a suspect file (e.g. permission
+    // denied), the failure must be logged to stderr — not silently swallowed.
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = setup_project(INITIAL_SRC);
+    let file = dir.path().join("main.rs");
+
+    // Force mtime > indexed_at so staleness will attempt to hash.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let mut content = fs::read(&file).unwrap();
+    content.push(b'\n');
+    fs::write(&file, &content).unwrap();
+
+    // Revoke read permission so hasher::hash_file fails on File::open.
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let output = rlm(&dir)
+        .arg("search")
+        .arg("main")
+        .output()
+        .expect("command ran");
+
+    // Restore before asserting so TempDir cleanup always works.
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("staleness hash failed") || stderr.contains("Permission denied"),
+        "expected hash-failure log on stderr; got stderr={stderr:?}"
+    );
+}
+
 #[test]
 fn cli_respects_skip_refresh_env() {
     let dir = setup_project(INITIAL_SRC);

@@ -125,15 +125,18 @@ fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
         &config.project_root,
         config.settings.indexing.max_file_size_mb,
     );
-    let walked = scanner.walk()?;
+    let walk = scanner.walk()?;
 
     let indexed_by_path: HashMap<&str, &IndexedFileMeta> =
         indexed.iter().map(|f| (f.path.as_str(), f)).collect();
-    let walked_paths: HashSet<&str> = walked.iter().map(|f| f.relative_path.as_str()).collect();
+    // Existence check uses `discovered` (the full pre-filtering list), not
+    // `files`. Otherwise transient metadata-read errors would drop a file
+    // from the walk output and wrongly mark an indexed entry as deleted.
+    let discovered_paths: HashSet<&str> = walk.discovered.iter().map(String::as_str).collect();
 
     let mut modified = Vec::new();
     let mut added = Vec::new();
-    for file in &walked {
+    for file in &walk.files {
         match indexed_by_path.get(file.relative_path.as_str()) {
             None => added.push(file.relative_path.clone()),
             Some(meta) => {
@@ -150,7 +153,12 @@ fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
                     Ok(fresh_hash) if fresh_hash != meta.hash => {
                         modified.push(file.relative_path.clone());
                     }
-                    _ => {} // hash error → skip; hash matches → genuinely unchanged
+                    Ok(_) => {} // hash matches → genuinely unchanged
+                    Err(e) => {
+                        // Don't silently drift: surface the path that failed.
+                        // Next tool call re-attempts (eventual consistency).
+                        eprintln!("rlm: staleness hash failed for {}: {e}", file.relative_path);
+                    }
                 }
             }
         }
@@ -158,7 +166,7 @@ fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
 
     let deleted_ids: Vec<i64> = indexed
         .iter()
-        .filter(|f| !walked_paths.contains(f.path.as_str()))
+        .filter(|f| !discovered_paths.contains(f.path.as_str()))
         .map(|f| f.id)
         .collect();
 
@@ -309,6 +317,62 @@ mod tests {
         assert_eq!(report.deleted, 1, "got {report:?}");
         assert_eq!(report.reindexed, 0);
         assert_eq!(report.added, 0);
+    }
+
+    #[test]
+    fn ensure_fresh_preserves_index_for_files_exceeding_size_limit() {
+        // Regression: a file that's been indexed and subsequently grows past
+        // the `max_file_size_mb` limit must NOT be deleted from the index.
+        // `walk()` drops it from the stat'd list, but keeps it in `discovered`
+        // so staleness can distinguish "too big now" from "truly gone".
+        const ONE_MB_BYTES: usize = 1024 * 1024;
+
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let big = src.join("big.rs");
+        fs::write(&big, "fn main() {}").unwrap();
+
+        let mut config = Config::new(tmp.path());
+        run_index(&config, None).unwrap();
+
+        // Grow the file past 1 MB, then tighten the limit so walk() drops it.
+        let large = format!("fn main() {{}}\n{}", "x".repeat(2 * ONE_MB_BYTES));
+        fs::write(&big, large).unwrap();
+        config.settings.indexing.max_file_size_mb = 1;
+
+        let db = Database::open(&config.db_path).unwrap();
+        let report = ensure_index_fresh(&db, &config).unwrap();
+        assert_eq!(
+            report.deleted, 0,
+            "oversized file must stay indexed, not be deleted; got {report:?}"
+        );
+    }
+
+    #[test]
+    fn apply_changes_continues_on_per_file_failure() {
+        // Regression: if one file's reindex fails (e.g. deleted between walk
+        // and reindex, or corrupt content), the batch must continue with the
+        // remaining files rather than bailing. Only successful files count
+        // toward the report; the failure is logged to stderr.
+        let (_tmp, config, db) = setup_indexed(&[("main.rs", "fn main() {}")]);
+
+        // Craft a ChangeSet that mixes a real file (nonexistent relative path
+        // → reindex_single_file fails on file read) with a no-op deletion.
+        let changes = ChangeSet {
+            modified: vec![],
+            added: vec!["does_not_exist.rs".to_string()],
+            deleted_ids: vec![],
+        };
+        let report = apply_changes(&db, &config, changes)
+            .expect("apply_changes must not propagate per-file errors");
+
+        assert_eq!(
+            report.added, 0,
+            "failed file must not be counted as successfully added"
+        );
+        assert_eq!(report.deleted, 0);
+        assert_eq!(report.reindexed, 0);
     }
 
     #[test]

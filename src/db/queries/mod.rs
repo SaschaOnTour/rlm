@@ -1,5 +1,5 @@
 mod chunks;
-pub mod files;
+mod files;
 mod refs;
 mod savings;
 mod search;

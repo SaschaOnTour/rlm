@@ -67,6 +67,21 @@ pub struct WalkedFile {
     pub mtime_secs: i64,
 }
 
+/// Result of `Scanner::walk`: successfully-stat'd files AND the full list of
+/// discovered relative paths (including entries whose metadata read failed or
+/// that exceed the size limit). Splitting lets staleness detect deletions
+/// from the discovered set without losing index entries to transient I/O errors.
+#[derive(Debug, Clone)]
+pub struct WalkResult {
+    /// Files that were successfully stat'd within the size limit.
+    pub files: Vec<WalkedFile>,
+    /// Relative paths of every supported file the walker confirmed exists,
+    /// even if its metadata couldn't be read. Use this to distinguish
+    /// "file truly deleted" from "file still on disk but transiently
+    /// unreadable / over the configured size limit".
+    pub discovered: Vec<String>,
+}
+
 /// A discovered file (may or may not be indexable).
 /// Used by `rlm files` to show ALL files in the project.
 #[derive(Debug, Clone, Serialize)]
@@ -156,15 +171,18 @@ impl Scanner {
     ///
     /// Same filtering rules as `scan()`: respects .gitignore, skips
     /// non-code directories, supported extensions only, `max_file_size_bytes`.
-    pub fn walk(&self) -> Result<Vec<WalkedFile>> {
+    pub fn walk(&self) -> Result<WalkResult> {
         let entries = walk_supported_paths(&self.root);
         let root = &self.root;
         let max_size = self.max_file_size_bytes;
+
+        let discovered: Vec<String> = entries.iter().map(|p| to_relative_path(p, root)).collect();
         let files: Vec<WalkedFile> = entries
             .into_par_iter()
             .filter_map(|path| build_walked_file(path, root, max_size))
             .collect();
-        Ok(files)
+
+        Ok(WalkResult { files, discovered })
     }
 
     /// Scan ALL files in the project directory, including unsupported ones.
@@ -298,11 +316,7 @@ fn build_walked_file(path: PathBuf, root: &Path, max_size: u64) -> Option<Walked
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs() as i64;
-    let relative = path
-        .strip_prefix(root)
-        .unwrap_or(&path)
-        .to_string_lossy()
-        .replace('\\', "/");
+    let relative = to_relative_path(&path, root);
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
@@ -315,6 +329,14 @@ fn build_walked_file(path: PathBuf, root: &Path, max_size: u64) -> Option<Walked
         size,
         mtime_secs,
     })
+}
+
+/// Convert an absolute path to a project-relative forward-slash path.
+fn to_relative_path(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 // Re-export language mapping functions from the dedicated lang_map module.

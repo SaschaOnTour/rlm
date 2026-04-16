@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`rlm setup` command** (P07-01/02/04): automates Claude Code integration. Creates
-  `.claude/settings.json` with rlm permissions (16 read-only MCP tools + 3 Bash
+  `.claude/settings.json` with rlm permissions (16 MCP tools — all except
+  `replace` and `insert`, which stay under explicit user control — plus 3 Bash
   patterns) and the `mcpServers.rlm` entry, appends a marker-delimited workflow
   block to `CLAUDE.local.md`, and triggers the initial index. Existing user
   config is preserved via dedup-merge. Flags: `--check` (dry-run), `--remove`

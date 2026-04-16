@@ -229,9 +229,11 @@ fn write_settings_atomic(path: &Path, v: &Value) -> Result<()> {
 
 /// Canonical JSON fragment that `rlm setup` contributes.
 ///
-/// Permissions cover the 16 read-only MCP tools + `index`, plus commonly-run
-/// CLI bash invocations. `replace` and `insert` are intentionally NOT
-/// auto-allowed — writes should stay under explicit user control.
+/// Permissions cover the default non-edit MCP tools (16 total — all except
+/// `replace` and `insert`) plus commonly-run CLI bash invocations. `index`
+/// and `verify` are included even though they can write; `replace` and
+/// `insert` are intentionally NOT auto-allowed so direct source edits stay
+/// under explicit user control.
 #[must_use]
 pub fn rlm_defaults() -> Value {
     json!({
@@ -501,16 +503,21 @@ fn remove_marker_block(existing: &str) -> String {
         _ => existing.len(), // corrupt block: drop from begin to EOF
     };
 
-    // Trim up to two preceding newlines so removal doesn't leave a blank gap.
+    // Trim up to two preceding line endings so removal doesn't leave a blank gap.
+    // Byte-level to handle both LF and CRLF — iterating chars would stop at `\r`
+    // and leave a stray byte in Windows-authored files.
     let mut cut_start = start;
     let mut trimmed = 0;
-    for ch in existing[..start].chars().rev() {
-        if ch == '\n' && trimmed < 2 {
-            trimmed += 1;
-            cut_start = cut_start.saturating_sub(1);
+    while trimmed < 2 {
+        let prefix = &existing[..cut_start];
+        if prefix.ends_with("\r\n") {
+            cut_start -= 2;
+        } else if prefix.ends_with('\n') {
+            cut_start -= 1;
         } else {
             break;
         }
+        trimmed += 1;
     }
 
     let mut out = String::with_capacity(existing.len());
@@ -790,6 +797,30 @@ mod tests {
         assert!(!out.contains(MARKER_BEGIN));
         assert!(!out.contains("broken content"));
         assert!(out.contains("# A"));
+    }
+
+    #[test]
+    fn remove_marker_block_handles_crlf_line_endings() {
+        // Regression: Windows-authored files with CRLF must not leave a
+        // stray `\r` after trimming preceding newlines.
+        let existing =
+            "# Project\r\n\r\n<!-- rlm:begin -->\r\nbody\r\n<!-- rlm:end -->\r\n\r\n# After\r\n";
+        let out = remove_marker_block(existing);
+        assert_eq!(
+            out, "# Project\r\n\r\n# After\r\n",
+            "CRLF trim must not leave stray \\r; got {out:?}"
+        );
+        // Extra sanity: no `\r` that isn't followed by `\n`.
+        let bytes = out.as_bytes();
+        for i in 0..bytes.len().saturating_sub(1) {
+            if bytes[i] == b'\r' {
+                assert_eq!(
+                    bytes[i + 1],
+                    b'\n',
+                    "orphaned \\r at byte {i} in output: {out:?}"
+                );
+            }
+        }
     }
 
     #[test]
