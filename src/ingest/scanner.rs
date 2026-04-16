@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 use rayon::prelude::*;
@@ -52,6 +52,21 @@ pub struct ScannedFile {
     pub extension: String,
 }
 
+/// Stat-only file metadata from `Scanner::walk` — no hash.
+///
+/// Used by `staleness::detect_changes` to skip SHA-256 on files whose mtime
+/// is still older than the DB's `indexed_at`. Much cheaper than `ScannedFile`
+/// for the clean-project common case.
+#[derive(Debug, Clone)]
+pub struct WalkedFile {
+    pub abs_path: PathBuf,
+    pub relative_path: String,
+    pub extension: String,
+    pub size: u64,
+    /// Last-modified time, Unix seconds since epoch.
+    pub mtime_secs: i64,
+}
+
 /// A discovered file (may or may not be indexable).
 /// Used by `rlm files` to show ALL files in the project.
 #[derive(Debug, Clone, Serialize)]
@@ -94,41 +109,7 @@ impl Scanner {
 
     /// Scan the project directory in parallel, returning all indexable files.
     pub fn scan(&self) -> Result<Vec<ScannedFile>> {
-        let entries: Vec<PathBuf> = WalkBuilder::new(&self.root)
-            .hidden(true) // skip hidden dirs like .git
-            .git_ignore(true)
-            .git_global(false)
-            .git_exclude(true)
-            .follow_links(false) // Prevent symlink loops
-            .filter_entry(|e| {
-                let name = e.file_name().to_string_lossy();
-                // Skip common non-code directories
-                !matches!(
-                    name.as_ref(),
-                    "node_modules"
-                        | "target"
-                        | ".rlm"
-                        | ".git"
-                        | "vendor"
-                        | "dist"
-                        | "build"
-                        | "__pycache__"
-                        | ".venv"
-                        | "venv"
-                )
-            })
-            .build()
-            .filter_map(std::result::Result::ok)
-            .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(is_supported_extension)
-            })
-            .map(ignore::DirEntry::into_path)
-            .collect();
-
+        let entries = walk_supported_paths(&self.root);
         let root = &self.root;
         let max_size = self.max_file_size_bytes;
         let files: Vec<ScannedFile> = entries
@@ -163,6 +144,26 @@ impl Scanner {
             })
             .collect();
 
+        Ok(files)
+    }
+
+    /// Walk supported files without hashing.
+    ///
+    /// Returns `WalkedFile` entries containing path + size + mtime only.
+    /// This is the cheap variant used by `staleness::detect_changes` to
+    /// short-circuit SHA-256 on files whose mtime matches the DB's
+    /// `indexed_at` (i.e., clean since the last index).
+    ///
+    /// Same filtering rules as `scan()`: respects .gitignore, skips
+    /// non-code directories, supported extensions only, `max_file_size_bytes`.
+    pub fn walk(&self) -> Result<Vec<WalkedFile>> {
+        let entries = walk_supported_paths(&self.root);
+        let root = &self.root;
+        let max_size = self.max_file_size_bytes;
+        let files: Vec<WalkedFile> = entries
+            .into_par_iter()
+            .filter_map(|path| build_walked_file(path, root, max_size))
+            .collect();
         Ok(files)
     }
 
@@ -241,6 +242,79 @@ impl Scanner {
 
         Ok(files)
     }
+}
+
+/// Walk the project and collect absolute paths of files with supported
+/// extensions. Respects .gitignore and skips common non-code directories.
+/// Shared filter used by `scan()` and `walk()` to avoid duplicating the
+/// `WalkBuilder` configuration.
+fn walk_supported_paths(root: &Path) -> Vec<PathBuf> {
+    WalkBuilder::new(root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(true)
+        .follow_links(false)
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !matches!(
+                name.as_ref(),
+                "node_modules"
+                    | "target"
+                    | ".rlm"
+                    | ".git"
+                    | "vendor"
+                    | "dist"
+                    | "build"
+                    | "__pycache__"
+                    | ".venv"
+                    | "venv"
+            )
+        })
+        .build()
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(is_supported_extension)
+        })
+        .map(ignore::DirEntry::into_path)
+        .collect()
+}
+
+/// Build a `WalkedFile` for a single discovered path. Returns `None` if the
+/// file exceeds the size limit or its metadata can't be read.
+fn build_walked_file(path: PathBuf, root: &Path, max_size: u64) -> Option<WalkedFile> {
+    let meta = path.metadata().ok()?;
+    let size = meta.len();
+    if max_size > 0 && size > max_size {
+        return None;
+    }
+    let mtime_secs = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    let relative = path
+        .strip_prefix(root)
+        .unwrap_or(&path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    Some(WalkedFile {
+        abs_path: path,
+        relative_path: relative,
+        extension,
+        size,
+        mtime_secs,
+    })
 }
 
 // Re-export language mapping functions from the dedicated lang_map module.

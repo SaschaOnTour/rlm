@@ -432,21 +432,28 @@ fn upsert_claude_local_md(path: &Path, mode: SetupMode) -> Result<SetupAction> {
 #[must_use]
 fn build_updated_markdown(existing: &str) -> String {
     let new_block = render_claude_local_md_section();
-    let mut out = if let (Some(start), Some(end)) =
-        (existing.find(MARKER_BEGIN), existing.find(MARKER_END))
-    {
-        if start < end {
+    let mut out = match (existing.find(MARKER_BEGIN), existing.find(MARKER_END)) {
+        (Some(start), Some(end)) if start < end => {
+            // Well-formed block: replace content between markers.
             let end_of_marker = end + MARKER_END.len();
             let mut s = String::with_capacity(existing.len() + new_block.len());
             s.push_str(&existing[..start]);
             s.push_str(&new_block);
             s.push_str(&existing[end_of_marker..]);
             s
-        } else {
-            append_block(existing, &new_block)
         }
-    } else {
-        append_block(existing, &new_block)
+        (Some(start), _) => {
+            // Corrupt block: begin marker present without a matching end
+            // (or markers in the wrong order). Treat everything from the
+            // begin marker to EOF as the corrupt block and replace it.
+            // This keeps repeat runs self-healing — a manually broken file
+            // gets cleanly restored instead of accumulating duplicate blocks.
+            let mut s = String::with_capacity(start + new_block.len());
+            s.push_str(&existing[..start]);
+            s.push_str(&new_block);
+            s
+        }
+        (None, _) => append_block(existing, &new_block),
     };
     normalize_trailing_newline(&mut out);
     out
@@ -477,22 +484,29 @@ fn normalize_trailing_newline(s: &mut String) {
 }
 
 /// Remove the marker block (and any leading blank line that precedes it).
+///
+/// Handles three cases:
+/// - No begin marker → return unchanged.
+/// - Well-formed block (begin before end) → remove begin..=end inclusive.
+/// - Corrupt block (begin without end or wrong order) → remove begin..EOF
+///   so `--remove` always restores a clean file even if the user hand-edited
+///   the block into an inconsistent state.
 #[must_use]
 fn remove_marker_block(existing: &str) -> String {
-    let (Some(start), Some(end)) = (existing.find(MARKER_BEGIN), existing.find(MARKER_END)) else {
+    let Some(start) = existing.find(MARKER_BEGIN) else {
         return existing.to_string();
     };
-    if start >= end {
-        return existing.to_string();
-    }
-    let end_of_marker = end + MARKER_END.len();
+    let cut_end = match existing.find(MARKER_END) {
+        Some(end) if end > start => end + MARKER_END.len(),
+        _ => existing.len(), // corrupt block: drop from begin to EOF
+    };
 
-    // Trim a single preceding blank line to keep output tidy on repeat runs.
+    // Trim up to two preceding newlines so removal doesn't leave a blank gap.
     let mut cut_start = start;
-    let mut trailing_newline_count = 0;
+    let mut trimmed = 0;
     for ch in existing[..start].chars().rev() {
-        if ch == '\n' && trailing_newline_count < 2 {
-            trailing_newline_count += 1;
+        if ch == '\n' && trimmed < 2 {
+            trimmed += 1;
             cut_start = cut_start.saturating_sub(1);
         } else {
             break;
@@ -501,7 +515,7 @@ fn remove_marker_block(existing: &str) -> String {
 
     let mut out = String::with_capacity(existing.len());
     out.push_str(&existing[..cut_start]);
-    out.push_str(&existing[end_of_marker..]);
+    out.push_str(&existing[cut_end..]);
     out
 }
 
@@ -748,5 +762,46 @@ mod tests {
         let existing = "# A\nNo rlm block here.\n";
         let out = remove_marker_block(existing);
         assert_eq!(out, existing);
+    }
+
+    #[test]
+    fn build_markdown_heals_begin_without_end() {
+        // Corrupt: a user hand-edited the file and deleted the end marker.
+        // Instead of appending a second block, we treat begin..EOF as the
+        // broken block and replace it cleanly.
+        let existing = "# Project\n\n<!-- rlm:begin -->\ngarbage without end marker\n";
+        let out = build_updated_markdown(existing);
+        assert!(out.starts_with("# Project"));
+        assert_eq!(
+            out.matches(MARKER_BEGIN).count(),
+            1,
+            "corrupt block must be replaced, not duplicated"
+        );
+        assert_eq!(out.matches(MARKER_END).count(), 1);
+        assert!(!out.contains("garbage without end marker"));
+    }
+
+    #[test]
+    fn remove_marker_block_heals_begin_without_end() {
+        // --remove on a file with corrupt block should drop begin..EOF so
+        // future runs are self-healing.
+        let existing = "# A\n\n<!-- rlm:begin -->\nbroken content\nno end marker ever\n";
+        let out = remove_marker_block(existing);
+        assert!(!out.contains(MARKER_BEGIN));
+        assert!(!out.contains("broken content"));
+        assert!(out.contains("# A"));
+    }
+
+    #[test]
+    fn remove_marker_block_handles_wrong_order() {
+        // End before begin: also treat as corrupt, strip from the first marker.
+        // (Unlikely in practice, but exercise the branch.)
+        let existing = "# A\n<!-- rlm:end -->\nfoo\n<!-- rlm:begin -->\n";
+        let out = remove_marker_block(existing);
+        // The first-found begin is at the later position; we trim from there.
+        assert!(out.contains("# A"));
+        // End marker that was BEFORE begin stays because it's before our cut point.
+        assert!(out.contains(MARKER_END));
+        assert!(!out.contains(MARKER_BEGIN));
     }
 }

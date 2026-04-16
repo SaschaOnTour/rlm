@@ -11,8 +11,10 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use crate::config::Config;
+use crate::db::queries::IndexedFileMeta;
 use crate::db::Database;
 use crate::error::Result;
+use crate::ingest::hasher;
 use crate::ingest::scanner::Scanner;
 
 use super::reindex_single_file;
@@ -60,6 +62,18 @@ struct ChangeSet {
 /// hiccups) logs to stderr and returns a clean report — a slightly stale
 /// index is better than a blocked tool call.
 ///
+/// # Performance
+/// Mtime-first: the common path is one stat per file, no hashing. Files are
+/// hashed only when their on-disk mtime is newer than the DB's `indexed_at`,
+/// which matches the subset of files the user actually touched since the last
+/// index. For clean projects the overhead is O(files) stats (~tens of ms even
+/// on large repos). For a typical edit session, only a handful of files are
+/// hashed per call.
+///
+/// The `RLM_SKIP_REFRESH=1` env var remains available as an escape hatch for
+/// cases where even stat-per-file is unwanted (e.g., batch scripts over huge
+/// trees that explicitly manage their own indexing).
+///
 /// # Errors
 /// Returns `Ok(ChangeReport)` in all non-catastrophic cases. Errors that would
 /// propagate here have already been caught and logged; callers can treat this
@@ -98,36 +112,53 @@ fn detect_and_apply(db: &Database, config: &Config) -> Result<ChangeReport> {
 }
 
 /// Compare the DB state against the on-disk state and classify each file.
+///
+/// Mtime-first strategy: walk (stat only, no hashing), compare each file's
+/// `mtime_secs` to the DB's `indexed_at_secs`. Hash only files that were
+/// touched after their last index. This keeps the per-call cost ≈ stat-per-
+/// file on clean projects, while still catching content edits via hash
+/// verification when mtime bumps.
 // qual:allow(iosp) reason: "partitioning the three change categories requires orchestration"
 fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
-    let indexed = db.get_all_files()?;
+    let indexed = db.get_indexed_files_meta()?;
     let scanner = Scanner::with_max_file_size(
         &config.project_root,
         config.settings.indexing.max_file_size_mb,
     );
-    let scanned = scanner.scan()?;
+    let walked = scanner.walk()?;
 
-    let indexed_by_path: HashMap<&str, (i64, &str)> = indexed
-        .iter()
-        .map(|f| (f.path.as_str(), (f.id, f.hash.as_str())))
-        .collect();
-    let scanned_paths: HashSet<&str> = scanned.iter().map(|f| f.relative_path.as_str()).collect();
+    let indexed_by_path: HashMap<&str, &IndexedFileMeta> =
+        indexed.iter().map(|f| (f.path.as_str(), f)).collect();
+    let walked_paths: HashSet<&str> = walked.iter().map(|f| f.relative_path.as_str()).collect();
 
     let mut modified = Vec::new();
     let mut added = Vec::new();
-    for file in &scanned {
+    for file in &walked {
         match indexed_by_path.get(file.relative_path.as_str()) {
             None => added.push(file.relative_path.clone()),
-            Some(&(_id, db_hash)) if db_hash != file.hash => {
-                modified.push(file.relative_path.clone());
+            Some(meta) => {
+                // Fast path: mtime is strictly older than indexed_at → trust.
+                // SQLite's CURRENT_TIMESTAMP is second-precision, so equal
+                // seconds are ambiguous within a 1s window — hash to be safe.
+                if file.mtime_secs < meta.indexed_at_secs {
+                    continue;
+                }
+                // Suspect: hash to confirm a real content change
+                // (mtime bumps from `touch` / git checkout / editor save-
+                // without-change should not count as modifications).
+                match hasher::hash_file(&file.abs_path) {
+                    Ok(fresh_hash) if fresh_hash != meta.hash => {
+                        modified.push(file.relative_path.clone());
+                    }
+                    _ => {} // hash error → skip; hash matches → genuinely unchanged
+                }
             }
-            Some(_) => {} // unchanged
         }
     }
 
     let deleted_ids: Vec<i64> = indexed
         .iter()
-        .filter(|f| !scanned_paths.contains(f.path.as_str()))
+        .filter(|f| !walked_paths.contains(f.path.as_str()))
         .map(|f| f.id)
         .collect();
 
@@ -214,6 +245,35 @@ mod tests {
         let (_tmp, config, db) = setup_indexed(&[("main.rs", "fn main() {}")]);
         let report = ensure_index_fresh(&db, &config).unwrap();
         assert!(report.is_clean(), "no changes expected, got {report:?}");
+    }
+
+    #[test]
+    fn ensure_fresh_ignores_mtime_bump_without_content_change() {
+        // Mtime-first optimization: touching a file (bumping mtime without
+        // changing content — e.g. `git checkout`, editor save-without-change)
+        // must not cause a reindex. The hash verification on suspect files
+        // catches this correctly.
+        //
+        // Sleep past a second boundary so the rewrite guarantees
+        // `mtime_secs > indexed_at_secs` (SQLite timestamps are 1s-precise).
+        const SECOND_BOUNDARY_MS: u64 = 1100;
+
+        let (tmp, config, db) = setup_indexed(&[("main.rs", "fn main() {}")]);
+
+        std::thread::sleep(std::time::Duration::from_millis(SECOND_BOUNDARY_MS));
+
+        // Rewrite with identical bytes → mtime bumps, content unchanged.
+        let main = tmp.path().join("src/main.rs");
+        let content = fs::read(&main).unwrap();
+        fs::write(&main, &content).unwrap();
+
+        let report = ensure_index_fresh(&db, &config).unwrap();
+        assert_eq!(
+            report.reindexed, 0,
+            "mtime bump without content change must not trigger reindex, got {report:?}"
+        );
+        assert_eq!(report.added, 0);
+        assert_eq!(report.deleted, 0);
     }
 
     #[test]

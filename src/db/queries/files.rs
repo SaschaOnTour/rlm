@@ -5,6 +5,16 @@ use crate::models::file::FileRecord;
 
 use super::super::Database;
 
+/// Lightweight file metadata for staleness detection.
+#[derive(Debug, Clone)]
+pub struct IndexedFileMeta {
+    pub id: i64,
+    pub path: String,
+    pub hash: String,
+    /// Unix seconds since epoch when the row was last written (from `indexed_at`).
+    pub indexed_at_secs: i64,
+}
+
 impl Database {
     /// Insert or replace a file record. Returns the row ID.
     pub fn upsert_file(&self, file: &FileRecord) -> Result<i64> {
@@ -39,6 +49,30 @@ impl Database {
             Some(r) => Ok(Some(r?)),
             None => Ok(None),
         }
+    }
+
+    /// Get per-file metadata needed by staleness detection: id, path, hash,
+    /// and `indexed_at` converted to Unix seconds (via `strftime('%s', ...)`).
+    ///
+    /// Used to skip SHA-256 on files whose on-disk mtime is still older than
+    /// their indexed timestamp.
+    pub fn get_indexed_files_meta(&self) -> Result<Vec<IndexedFileMeta>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, path, hash, CAST(strftime('%s', indexed_at) AS INTEGER) FROM files ORDER BY path",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(IndexedFileMeta {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                hash: row.get(2)?,
+                indexed_at_secs: row.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 
     /// Get all file records.

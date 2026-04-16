@@ -1,10 +1,11 @@
 mod chunks;
-mod files;
+pub mod files;
 mod refs;
 mod savings;
 mod search;
 mod stats;
 
+pub use files::IndexedFileMeta;
 pub use savings::SavingsQueryRow;
 pub use stats::{IndexStats, VerifyReport};
 

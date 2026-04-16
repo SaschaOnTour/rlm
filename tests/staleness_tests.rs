@@ -4,10 +4,9 @@
 //! `rlm replace` / `rlm insert`) are picked up automatically on the next
 //! tool invocation. Also tests the `RLM_SKIP_REFRESH` escape hatch.
 
-#![allow(deprecated)]
-
 use assert_cmd::Command;
 use predicates::prelude::*;
+use serde_json::Value;
 use std::fs;
 use tempfile::TempDir;
 
@@ -33,6 +32,31 @@ fn rlm(dir: &TempDir) -> Command {
     let mut cmd = Command::cargo_bin("rlm").unwrap();
     cmd.current_dir(dir.path());
     cmd
+}
+
+/// Run `rlm search <query>` with `--format json` and return the parsed result
+/// count. Asserts the command succeeded and the stdout is valid JSON with a
+/// `results` array.
+fn search_result_count(dir: &TempDir, query: &str, extra_env: &[(&str, &str)]) -> usize {
+    let mut cmd = rlm(dir);
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    let output = cmd
+        .arg("--format")
+        .arg("json")
+        .arg("search")
+        .arg(query)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).expect("search stdout is valid JSON");
+    value["results"]
+        .as_array()
+        .expect("results field is an array")
+        .len()
 }
 
 #[test]
@@ -82,13 +106,9 @@ fn cli_reindexes_after_external_file_deleted() {
     fs::remove_file(dir.path().join("doomed.rs")).unwrap();
 
     // Running a search should trigger staleness cleanup; the orphaned symbol
-    // disappears from the index.
-    rlm(&dir)
-        .arg("search")
-        .arg("freshly_added_symbol")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"results\":[]").or(predicate::str::contains("[0]")));
+    // disappears from the index — parse JSON output to avoid substring brittleness.
+    let count = search_result_count(&dir, "freshly_added_symbol", &[]);
+    assert_eq!(count, 0, "deleted file's symbol must no longer be indexed");
 }
 
 #[test]
@@ -99,13 +119,12 @@ fn cli_respects_skip_refresh_env() {
 
     // With RLM_SKIP_REFRESH set, the staleness check is bypassed and the
     // new symbol should NOT appear.
-    rlm(&dir)
-        .env("RLM_SKIP_REFRESH", "1")
-        .arg("search")
-        .arg("freshly_added_symbol")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"results\":[]").or(predicate::str::contains("[0]")));
+    let count_skip =
+        search_result_count(&dir, "freshly_added_symbol", &[("RLM_SKIP_REFRESH", "1")]);
+    assert_eq!(
+        count_skip, 0,
+        "RLM_SKIP_REFRESH=1 must prevent pickup of new symbol"
+    );
 
     // Without the env var, it's picked up.
     rlm(&dir)
