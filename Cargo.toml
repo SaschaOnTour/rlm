@@ -63,7 +63,7 @@ serde_yaml_ng = "0.10"
 toml = "0.9"
 
 # TOON output
-toon-encode = { git = "https://github.com/SaschaOnTour/toon-encode" }
+toon-encode = "0.1"
 
 # PDF
 pdf-extract = "0.10"

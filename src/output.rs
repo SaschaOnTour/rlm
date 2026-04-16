@@ -22,10 +22,13 @@ pub enum OutputFormat {
 
 impl OutputFormat {
     /// Parse from a string (config value). Case-insensitive, unknown values default to JSON.
+    /// Accepted values: "json" (default), "pretty", "toon". "minified" is kept as a
+    /// backward-compatible alias for "json" (older configs).
     pub fn from_str_loose(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "toon" => Self::Toon,
             "pretty" => Self::Pretty,
+            "json" | "minified" => Self::Json,
             _ => Self::Json,
         }
     }

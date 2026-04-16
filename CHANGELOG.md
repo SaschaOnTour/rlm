@@ -17,13 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TOON output format**: `--format toon` flag on all CLI commands produces
   Token-Oriented Object Notation — ~30-50% fewer tokens than JSON for
   list-heavy responses. MCP supports TOON via `format = "toon"` in config.
-  Uses the new `toon-encode` crate (shared with rustqual).
+  Uses the standalone [`toon-encode`](https://crates.io/crates/toon-encode)
+  crate from crates.io (not an in-repo workspace crate).
 
 ### Changed
 
 - **Wrapper standardization**: `build_map` and `build_tree` now return `MapResult` /
-  `TreeResult` with token estimates, matching the `{"r": [...], "t": {...}}` pattern
-  used by search and files
+  `TreeResult` with token estimates, matching the `{"results": [...], "tokens": {...}}`
+  pattern used by search and files
 - **Readable keys**: All 102 short serde renames (`"f"`, `"k"`, `"n"`, `"t"`, etc.)
   replaced with readable field names (`"file"`, `"kind"`, `"name"`, `"tokens"`, etc.).
   JSON output is now self-documenting — no key legend needed.

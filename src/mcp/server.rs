@@ -29,6 +29,11 @@ use super::tools::{
 /// Default maximum number of search results when no explicit limit is provided.
 const DEFAULT_SEARCH_LIMIT: usize = 20;
 
+/// Bounded capacity of the index-progress channel. Small by design: the sender
+/// already throttles to 1-in-`PROGRESS_INTERVAL` files, so this only needs to
+/// absorb short bursts when `notify_progress` is slower than indexing.
+const PROGRESS_CHANNEL_CAPACITY: usize = 16;
+
 use crate::output::PROGRESS_INTERVAL;
 
 // Re-export start_mcp_server from the helpers module.
@@ -83,11 +88,17 @@ impl RlmServer {
         let project_root = self.project_root.clone();
         let path = params.0.path.clone();
 
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, usize)>();
+        // Bounded channel + throttle-at-source: the callback only sends every
+        // PROGRESS_INTERVAL files (and on the final file). A small bounded buffer
+        // caps memory if notify_progress is slower than indexing — excess updates
+        // are dropped via try_send rather than piling up on the heap.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(usize, usize)>(PROGRESS_CHANNEL_CAPACITY);
 
         let mut handle = tokio::task::spawn_blocking(move || {
             let progress = move |current: usize, total: usize| {
-                let _ = tx.send((current, total));
+                if current.is_multiple_of(PROGRESS_INTERVAL) || current == total {
+                    let _ = tx.try_send((current, total));
+                }
             };
             tool_handlers::handle_index_with_progress(
                 path.as_deref(),
@@ -106,9 +117,7 @@ impl RlmServer {
                 biased;
                 msg = rx.recv() => {
                     match msg {
-                        Some((current, total))
-                            if current.is_multiple_of(PROGRESS_INTERVAL) || current == total =>
-                        {
+                        Some((current, total)) => {
                             let _ = peer.notify_progress(ProgressNotificationParam {
                                 progress_token: progress_token.clone(),
                                 progress: current as f64,
@@ -116,7 +125,6 @@ impl RlmServer {
                                 message: Some(format!("Indexing... {current}/{total} files")),
                             }).await;
                         }
-                        Some(_) => {} // throttled — skip this update
                         None => break,
                     }
                 }

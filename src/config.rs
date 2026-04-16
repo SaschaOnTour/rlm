@@ -87,7 +87,7 @@ pub struct OutputSettings {
 impl Default for OutputSettings {
     fn default() -> Self {
         Self {
-            format: "minified".into(),
+            format: "json".into(),
             include_tokens: true,
         }
     }
@@ -308,7 +308,7 @@ mod tests {
             .contains(&"target/".to_string()));
 
         // Check output defaults
-        assert_eq!(settings.output.format, "minified");
+        assert_eq!(settings.output.format, "json");
         assert!(settings.output.include_tokens);
 
         // Check quality defaults
