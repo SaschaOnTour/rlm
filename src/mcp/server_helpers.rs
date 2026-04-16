@@ -47,19 +47,32 @@ impl RlmServer {
     }
 
     pub(crate) fn success_text(text: String) -> CallToolResult {
-        let cow = crate::output::reformat_str(&text);
-        // Reuse the owned input when format is JSON (Cow::Borrowed), avoid clone
+        // Guard first (on raw JSON), then reformat. This keeps guard_output
+        // format-agnostic and lets the caller-configured format apply uniformly
+        // to both the payload and any truncation notice.
+        let guarded = guard_output(text);
+        let cow = crate::output::reformat_str(&guarded);
         let formatted = if matches!(cow, std::borrow::Cow::Borrowed(_)) {
-            text
+            guarded
         } else {
             cow.into_owned()
         };
-        CallToolResult::success(vec![Content::text(guard_output(formatted))])
+        CallToolResult::success(vec![Content::text(formatted)])
     }
 
     pub(crate) fn error_text(msg: String) -> CallToolResult {
-        let formatted = crate::output::serialize_error(&msg);
-        CallToolResult::error(vec![Content::text(guard_output(formatted))])
+        // error_text already formats via serialize_error, so any guard must
+        // happen on the pre-formatted JSON. serialize_error emits minified JSON
+        // for error paths, so we only need to guard after — not reformat.
+        let json = crate::output::to_json(&serde_json::json!({"error": msg}));
+        let guarded = guard_output(json);
+        let cow = crate::output::reformat_str(&guarded);
+        let formatted = if matches!(cow, std::borrow::Cow::Borrowed(_)) {
+            guarded
+        } else {
+            cow.into_owned()
+        };
+        CallToolResult::error(vec![Content::text(formatted)])
     }
 }
 
@@ -129,13 +142,13 @@ pub(crate) fn guard_output(text: String) -> String {
     if text.len() <= MAX_MCP_OUTPUT_BYTES {
         return text;
     }
-    let notice = serde_json::json!({
+    serde_json::json!({
         "truncated": true,
         "actual_bytes": text.len(),
         "limit_bytes": MAX_MCP_OUTPUT_BYTES,
         "hint": "Result exceeded 25K token MCP limit. Narrow your query with path or symbol filters."
-    });
-    crate::output::serialize(&notice)
+    })
+    .to_string()
 }
 
 // -- Server startup ----------------------------------------------------------

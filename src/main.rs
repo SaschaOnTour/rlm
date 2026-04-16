@@ -28,9 +28,17 @@ fn main() {
             Some(commands::FormatArg::Toon) => output::OutputFormat::Toon,
             Some(commands::FormatArg::Json) => output::OutputFormat::Json,
             None => {
-                // No explicit --format flag: read from config
-                let cwd = std::env::current_dir().unwrap_or_default();
-                let config = rlm::config::Config::new(&cwd);
+                // No explicit --format flag: read format from the command's
+                // target config so `rlm index /other/project` respects
+                // /other/project/.rlm/config.toml (same root that cmd_index
+                // uses for indexing settings).
+                let config = match &cli.command {
+                    Command::Index { path } => rlm::config::Config::new(path),
+                    _ => {
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        rlm::config::Config::new(&cwd)
+                    }
+                };
                 output::OutputFormat::from_str_loose(&config.settings.output.format)
             }
         };

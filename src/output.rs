@@ -54,11 +54,17 @@ pub fn serialize<T: Serialize>(result: &T) -> String {
 }
 
 /// Serialize an error in the configured format.
+///
+/// If the configured formatter fails (rare — serde_json::Value is effectively
+/// infallible), falls back to minified JSON so the error payload is never
+/// silently dropped.
 pub fn serialize_error(err: &dyn std::fmt::Display) -> String {
     let error_obj = serde_json::json!({"error": err.to_string()});
     match current_format() {
         OutputFormat::Json => error_obj.to_string(),
-        OutputFormat::Pretty => serde_json::to_string_pretty(&error_obj).unwrap_or_default(),
+        OutputFormat::Pretty => {
+            serde_json::to_string_pretty(&error_obj).unwrap_or_else(|_| error_obj.to_string())
+        }
         OutputFormat::Toon => toon_encode::encode_toon(&error_obj, 0),
     }
 }
