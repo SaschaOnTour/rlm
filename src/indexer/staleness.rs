@@ -119,10 +119,12 @@ fn detect_and_apply(db: &Database, config: &Config) -> Result<ChangeReport> {
 /// Compare the DB state against the on-disk state and classify each file.
 ///
 /// Mtime-first strategy: walk (stat only, no hashing), compare each file's
-/// `mtime_secs` to the DB's `indexed_at_secs`. Hash only files that were
-/// touched after their last index. This keeps the per-call cost ≈ stat-per-
-/// file on clean projects, while still catching content edits via hash
-/// verification when mtime bumps.
+/// on-disk `mtime_secs` to the per-file `mtime_secs` stored in `files` from
+/// the last index. Hash only files whose mtime changed since the last
+/// recorded scan. This keeps the per-call cost ≈ stat-per-file on clean
+/// projects, while still catching content edits via hash verification when
+/// mtime bumps. After a hash-verified no-op (touch, git checkout) the
+/// stored mtime gets refreshed so the fast-path trusts the file next time.
 // qual:allow(iosp) reason: "partitioning the three change categories requires orchestration"
 fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
     let indexed = db.get_indexed_files_meta()?;

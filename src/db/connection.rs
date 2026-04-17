@@ -39,23 +39,24 @@ impl Database {
         }
         conn.execute_batch(CREATE_SCHEMA)?;
         Self::migrate_savings_v2(&conn);
-        Self::migrate_files_mtime(&conn);
+        Self::migrate_files_mtime(&conn)?;
         Ok(Self { conn })
     }
 
-    /// Apply files.mtime_secs migration (best-effort, idempotent).
+    /// Apply `files.mtime_secs` migration (required, idempotent).
     ///
-    /// Probes for the column before altering; silently skips "duplicate column"
-    /// errors if the migration races or is replayed.
-    fn migrate_files_mtime(conn: &Connection) {
+    /// Probes for the column before altering; treats "duplicate column" as a
+    /// no-op (concurrent/replayed migration), but propagates every other
+    /// failure. Returning early from `Database::open` on failure prevents a
+    /// half-migrated schema from showing up as cryptic SELECT errors later.
+    fn migrate_files_mtime(conn: &Connection) -> Result<()> {
         if conn.prepare("SELECT mtime_secs FROM files LIMIT 0").is_ok() {
-            return;
+            return Ok(());
         }
-        if let Err(e) = conn.execute(MIGRATE_FILES_MTIME, []) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column") {
-                eprintln!("warning: files.mtime_secs migration failed: {msg}");
-            }
+        match conn.execute(MIGRATE_FILES_MTIME, []) {
+            Ok(_) => Ok(()),
+            Err(e) if e.to_string().contains("duplicate column") => Ok(()),
+            Err(e) => Err(e.into()),
         }
     }
 

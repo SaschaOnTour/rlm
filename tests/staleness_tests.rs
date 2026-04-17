@@ -5,7 +5,6 @@
 //! tool invocation. Also tests the `RLM_SKIP_REFRESH` escape hatch.
 
 use assert_cmd::Command;
-use predicates::prelude::*;
 use serde_json::Value;
 use std::fs;
 use tempfile::TempDir;
@@ -65,13 +64,13 @@ fn cli_reindexes_after_external_modification() {
     // Overwrite main.rs externally (bypassing rlm replace/insert).
     fs::write(dir.path().join("main.rs"), MODIFIED_SRC).unwrap();
 
-    // A subsequent rlm command should see the new content.
-    rlm(&dir)
-        .arg("search")
-        .arg("edited")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("edited"));
+    // A subsequent rlm command should see the new content — assert via parsed
+    // JSON so the test isn't coupled to the default output format.
+    let count = search_result_count(&dir, "edited", &[]);
+    assert!(
+        count >= 1,
+        "external edit must be picked up; expected >=1 result"
+    );
 }
 
 #[test]
@@ -80,13 +79,12 @@ fn cli_reindexes_after_external_file_added() {
     // Add a brand-new file externally.
     fs::write(dir.path().join("new_file.rs"), ADDED_SYMBOL).unwrap();
 
-    // The new symbol should be searchable.
-    rlm(&dir)
-        .arg("search")
-        .arg("freshly_added_symbol")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("freshly_added_symbol"));
+    // The new symbol must be searchable — parsed JSON, not substring match.
+    let count = search_result_count(&dir, "freshly_added_symbol", &[]);
+    assert!(
+        count >= 1,
+        "new file must be indexed on next call; expected >=1 result"
+    );
 }
 
 #[test]
@@ -185,11 +183,10 @@ fn cli_respects_skip_refresh_env() {
         "RLM_SKIP_REFRESH=1 must prevent pickup of new symbol"
     );
 
-    // Without the env var, it's picked up.
-    rlm(&dir)
-        .arg("search")
-        .arg("freshly_added_symbol")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("freshly_added_symbol"));
+    // Without the env var, the self-healing path picks it up.
+    let count = search_result_count(&dir, "freshly_added_symbol", &[]);
+    assert!(
+        count >= 1,
+        "default path must pick up new symbol after skip env is cleared"
+    );
 }

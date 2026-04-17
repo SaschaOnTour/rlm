@@ -180,8 +180,9 @@ impl Scanner {
     ///
     /// Returns `WalkedFile` entries containing path + size + mtime only.
     /// This is the cheap variant used by `staleness::detect_changes` to
-    /// short-circuit SHA-256 on files whose mtime matches the DB's
-    /// `indexed_at` (i.e., clean since the last index).
+    /// short-circuit SHA-256 on files whose on-disk mtime matches the
+    /// per-file `files.mtime_secs` stored by the indexer (i.e., the file
+    /// hasn't been touched since it was last indexed).
     ///
     /// Same filtering rules as `scan()`: respects .gitignore, skips
     /// non-code directories, supported extensions only, `max_file_size_bytes`.
