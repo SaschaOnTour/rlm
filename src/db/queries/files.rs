@@ -99,6 +99,20 @@ impl Database {
         Ok(files)
     }
 
+    /// Update the stored mtime for a file after a hash-verified no-op.
+    ///
+    /// When staleness detects a file whose mtime has moved but whose content
+    /// hash still matches (e.g. `touch`, `git checkout`), we refresh the
+    /// stored mtime so the fast-path can trust it on the next call — instead
+    /// of re-hashing the same stable file forever.
+    pub fn update_file_mtime(&self, file_id: i64, mtime_secs: i64) -> Result<()> {
+        self.conn().execute(
+            "UPDATE files SET mtime_secs = ?1 WHERE id = ?2",
+            params![mtime_secs, file_id],
+        )?;
+        Ok(())
+    }
+
     /// Delete a file and its chunks/refs (cascade).
     pub fn delete_file(&self, file_id: i64) -> Result<()> {
         self.conn()

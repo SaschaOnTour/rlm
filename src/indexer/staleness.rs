@@ -53,6 +53,11 @@ struct ChangeSet {
     added: Vec<String>,
     /// File IDs in the DB whose path no longer exists on disk.
     deleted_ids: Vec<i64>,
+    /// `(file_id, new_mtime_secs)` pairs where hash matched despite an mtime
+    /// bump (e.g. `touch`, `git checkout`). Applying refreshes the stored
+    /// mtime so the fast-path trusts the file next time instead of re-hashing
+    /// it on every call (important for post-`git-pull` and legacy migrated rows).
+    mtime_refreshes: Vec<(i64, i64)>,
 }
 
 /// Ensure the DB's index reflects the current state of the filesystem.
@@ -136,25 +141,38 @@ fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
 
     let mut modified = Vec::new();
     let mut added = Vec::new();
+    let mut mtime_refreshes = Vec::new();
     for file in &walk.files {
         match indexed_by_path.get(file.relative_path.as_str()) {
             None => added.push(file.relative_path.clone()),
             Some(meta) => {
                 // Fast path: on-disk mtime matches the mtime captured when we
-                // last indexed this file → the file hasn't been touched. This
-                // is stable even when index + edit happen in the same second
-                // (unlike comparing against CURRENT_TIMESTAMP's indexed_at).
-                if file.mtime_secs == meta.mtime_secs {
+                // last indexed this file → the file hasn't been touched. Only
+                // valid when mtime is a real value (non-zero sentinel) on both
+                // sides; 0 means "unknown", always force a hash verification.
+                if file.mtime_secs != 0
+                    && meta.mtime_secs != 0
+                    && file.mtime_secs == meta.mtime_secs
+                {
                     continue;
                 }
-                // Suspect: mtime moved — hash to confirm a real content change.
-                // Mtime bumps from `touch` / `git checkout` / editor save-
-                // without-change produce a matching hash and are not flagged.
+                // Suspect: mtime moved or one side is unknown — hash to confirm
+                // a real content change. Mtime bumps from `touch` /
+                // `git checkout` / editor save-without-change produce a
+                // matching hash and are not flagged.
                 match hasher::hash_file(&file.abs_path) {
                     Ok(fresh_hash) if fresh_hash != meta.hash => {
                         modified.push(file.relative_path.clone());
                     }
-                    Ok(_) => {} // hash matches → genuinely unchanged
+                    Ok(_) => {
+                        // Hash matches: content is unchanged. Update the
+                        // stored mtime so the fast-path can trust it next
+                        // call (prevents forever-rehashing after `touch` /
+                        // legacy-migrated rows with mtime_secs=0).
+                        if meta.mtime_secs != file.mtime_secs {
+                            mtime_refreshes.push((meta.id, file.mtime_secs));
+                        }
+                    }
                     Err(e) => {
                         // Don't silently drift: surface the path that failed.
                         // Next tool call re-attempts (eventual consistency).
@@ -175,6 +193,7 @@ fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
         modified,
         added,
         deleted_ids,
+        mtime_refreshes,
     })
 }
 
@@ -188,7 +207,7 @@ fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
 /// reconciliation of others. Failures are logged to stderr with the file path
 /// so silent drift is visible; failed files stay flagged as drifted and get
 /// retried on the next tool call (eventual consistency).
-// qual:allow(iosp) reason: "sequential application of three category groups"
+// qual:allow(iosp) reason: "sequential application of four category groups (delete / reindex-modified / reindex-added / mtime-refresh)"
 fn apply_changes(db: &Database, config: &Config, changes: ChangeSet) -> Result<ChangeReport> {
     let mut report = ChangeReport::default();
     let mut failures: Vec<String> = Vec::new();
@@ -211,6 +230,14 @@ fn apply_changes(db: &Database, config: &Config, changes: ChangeSet) -> Result<C
         match reindex_single_file(db, config, &path) {
             Ok(_) => report.added += 1,
             Err(e) => failures.push(format!("reindex added {path}: {e}")),
+        }
+    }
+
+    // Refresh stored mtimes for files that had mtime bumps but identical
+    // content — ensures the fast-path trusts them on the next invocation.
+    for (id, mtime_secs) in changes.mtime_refreshes {
+        if let Err(e) = db.update_file_mtime(id, mtime_secs) {
+            failures.push(format!("refresh mtime id={id}: {e}"));
         }
     }
 
@@ -277,6 +304,49 @@ mod tests {
         assert!(
             report2.is_clean(),
             "same-second repeat call must stay clean, got {report2:?}"
+        );
+    }
+
+    #[test]
+    fn ensure_fresh_refreshes_stored_mtime_after_touch_without_content_change() {
+        // Regression: after a touch (mtime bump, content identical), staleness
+        // must UPDATE the stored mtime_secs so subsequent calls hit the fast
+        // path instead of re-hashing the file forever. Legacy rows with
+        // mtime_secs=0 follow the same self-healing path.
+        const SECOND_BOUNDARY_MS: u64 = 1100;
+
+        let (tmp, config, db) = setup_indexed(&[("main.rs", "fn main() {}")]);
+
+        // Read the stored mtime after indexing.
+        let stored_before = db
+            .get_file_by_path("src/main.rs")
+            .unwrap()
+            .expect("indexed")
+            .mtime_secs;
+
+        // Bump mtime by rewriting the same content after the second boundary.
+        std::thread::sleep(std::time::Duration::from_millis(SECOND_BOUNDARY_MS));
+        let main = tmp.path().join("src/main.rs");
+        let content = fs::read(&main).unwrap();
+        fs::write(&main, &content).unwrap();
+
+        ensure_index_fresh(&db, &config).unwrap();
+
+        let stored_after = db
+            .get_file_by_path("src/main.rs")
+            .unwrap()
+            .expect("indexed")
+            .mtime_secs;
+
+        assert_ne!(
+            stored_before, stored_after,
+            "mtime must be refreshed after touch-without-change"
+        );
+        // Fast path should now be clean without re-hashing.
+        let report2 = ensure_index_fresh(&db, &config).unwrap();
+        assert!(
+            report2.is_clean(),
+            "next call must trust the refreshed mtime, got {report2:?}"
         );
     }
 
@@ -388,6 +458,7 @@ mod tests {
             modified: vec![],
             added: vec!["does_not_exist.rs".to_string()],
             deleted_ids: vec![],
+            mtime_refreshes: vec![],
         };
         let report = apply_changes(&db, &config, changes)
             .expect("apply_changes must not propagate per-file errors");

@@ -142,12 +142,15 @@ impl Scanner {
                     return None;
                 }
 
+                // Fall back to 0 (sentinel for "unknown mtime") instead of
+                // dropping the file — missing mtime shouldn't block indexing;
+                // staleness treats 0 as "always hash" to be safe.
                 let mtime_secs = meta
                     .modified()
-                    .ok()?
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()?
-                    .as_secs() as i64;
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
                 let hash = hasher::hash_file(path).ok()?;
                 let relative = path
                     .strip_prefix(root)
@@ -313,8 +316,10 @@ fn walk_supported_paths(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Build a `WalkedFile` for a single discovered path. Returns `None` if the
-/// file exceeds the size limit or its metadata can't be read.
+/// Build a `WalkedFile` for a single discovered path. Returns `None` only if
+/// the metadata call itself fails or the file exceeds the size limit; missing
+/// mtime falls back to 0 (sentinel) so staleness can still hash-verify the
+/// file instead of treating it as deleted.
 fn build_walked_file(path: PathBuf, root: &Path, max_size: u64) -> Option<WalkedFile> {
     let meta = path.metadata().ok()?;
     let size = meta.len();
@@ -323,10 +328,10 @@ fn build_walked_file(path: PathBuf, root: &Path, max_size: u64) -> Option<Walked
     }
     let mtime_secs = meta
         .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs() as i64;
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let relative = to_relative_path(&path, root);
     let extension = path
         .extension()
