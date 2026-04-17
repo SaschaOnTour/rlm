@@ -50,6 +50,10 @@ pub struct ScannedFile {
     pub hash: String,
     pub size: u64,
     pub extension: String,
+    /// File mtime at scan time, Unix seconds. Persisted to
+    /// `files.mtime_secs` so staleness detection can trust-skip hashing
+    /// when the on-disk mtime is unchanged.
+    pub mtime_secs: i64,
 }
 
 /// Stat-only file metadata from `Scanner::walk` — no hash.
@@ -138,6 +142,12 @@ impl Scanner {
                     return None;
                 }
 
+                let mtime_secs = meta
+                    .modified()
+                    .ok()?
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_secs() as i64;
                 let hash = hasher::hash_file(path).ok()?;
                 let relative = path
                     .strip_prefix(root)
@@ -155,6 +165,7 @@ impl Scanner {
                     hash,
                     size,
                     extension: ext,
+                    mtime_secs,
                 })
             })
             .collect();

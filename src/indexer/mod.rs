@@ -1,3 +1,5 @@
+// qual:allow(srp_module) reason: "indexer orchestration: ingestion pipeline + reindex-single-file + preview-on-write form one cohesive domain that would fragment if split"
+
 mod db_insert;
 mod file_processing;
 pub mod staleness;
@@ -127,11 +129,12 @@ fn ingest_file(
     lang: &str,
     source: String,
 ) -> Result<FileOutcome> {
-    let file_record = FileRecord::new(
+    let file_record = FileRecord::with_mtime(
         file.relative_path.clone(),
         file.hash.clone(),
         lang.to_string(),
         file.size,
+        file.mtime_secs,
     );
     let file_id = db.upsert_file(&file_record)?;
 
@@ -264,7 +267,19 @@ pub fn reindex_single_file(
             db.delete_chunks_for_file(existing.id)?;
         }
         let hash = crate::ingest::hasher::hash_bytes(source.as_bytes());
-        let file_record = FileRecord::new(rel_path.into(), hash, lang.into(), source.len() as u64);
+        let mtime_secs = std::fs::metadata(&full_path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let file_record = FileRecord::with_mtime(
+            rel_path.into(),
+            hash,
+            lang.into(),
+            source.len() as u64,
+            mtime_secs,
+        );
         let file_id = db.upsert_file(&file_record)?;
         index_source(db, &dispatcher, &source, file_id, rel_path)
     })();

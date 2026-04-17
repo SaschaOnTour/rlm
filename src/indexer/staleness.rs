@@ -140,15 +140,16 @@ fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
         match indexed_by_path.get(file.relative_path.as_str()) {
             None => added.push(file.relative_path.clone()),
             Some(meta) => {
-                // Fast path: mtime is strictly older than indexed_at → trust.
-                // SQLite's CURRENT_TIMESTAMP is second-precision, so equal
-                // seconds are ambiguous within a 1s window — hash to be safe.
-                if file.mtime_secs < meta.indexed_at_secs {
+                // Fast path: on-disk mtime matches the mtime captured when we
+                // last indexed this file → the file hasn't been touched. This
+                // is stable even when index + edit happen in the same second
+                // (unlike comparing against CURRENT_TIMESTAMP's indexed_at).
+                if file.mtime_secs == meta.mtime_secs {
                     continue;
                 }
-                // Suspect: hash to confirm a real content change
-                // (mtime bumps from `touch` / git checkout / editor save-
-                // without-change should not count as modifications).
+                // Suspect: mtime moved — hash to confirm a real content change.
+                // Mtime bumps from `touch` / `git checkout` / editor save-
+                // without-change produce a matching hash and are not flagged.
                 match hasher::hash_file(&file.abs_path) {
                     Ok(fresh_hash) if fresh_hash != meta.hash => {
                         modified.push(file.relative_path.clone());
@@ -253,6 +254,30 @@ mod tests {
         let (_tmp, config, db) = setup_indexed(&[("main.rs", "fn main() {}")]);
         let report = ensure_index_fresh(&db, &config).unwrap();
         assert!(report.is_clean(), "no changes expected, got {report:?}");
+    }
+
+    #[test]
+    fn ensure_fresh_does_not_rehash_file_indexed_in_same_second_as_edit() {
+        // Regression: previously the staleness check compared file.mtime_secs
+        // against indexed_at (second-precision), so a file edited and indexed
+        // in the SAME second would always hit the "suspect" path on every
+        // subsequent call, hashing it repeatedly despite being unchanged.
+        //
+        // With the stored file-mtime approach, a clean re-check after index
+        // reports zero modifications regardless of whether index+edit fell
+        // inside the same wall-clock second.
+        let (_tmp, config, db) = setup_indexed(&[("main.rs", "fn main() {}")]);
+
+        // First call: should be clean (no changes since index).
+        let report1 = ensure_index_fresh(&db, &config).unwrap();
+        assert!(report1.is_clean(), "first call clean, got {report1:?}");
+
+        // Second call back-to-back (within the same second): still clean.
+        let report2 = ensure_index_fresh(&db, &config).unwrap();
+        assert!(
+            report2.is_clean(),
+            "same-second repeat call must stay clean, got {report2:?}"
+        );
     }
 
     #[test]

@@ -7,7 +7,12 @@ CREATE TABLE IF NOT EXISTS files (
     lang TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
     parse_quality TEXT DEFAULT 'complete',
-    indexed_at TEXT DEFAULT CURRENT_TIMESTAMP
+    indexed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    -- File's own mtime captured at index time (Unix seconds). Used by the
+    -- staleness detector to skip hashing unchanged files — compares on-disk
+    -- mtime against this value for exact stability, avoiding the ambiguity
+    -- of indexed_at's second-precision CURRENT_TIMESTAMP.
+    mtime_secs INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS chunks (
@@ -96,6 +101,14 @@ ALTER TABLE savings ADD COLUMN alt_input_tokens INTEGER NOT NULL DEFAULT 0;\
 ALTER TABLE savings ADD COLUMN rlm_calls INTEGER NOT NULL DEFAULT 1;\
 ALTER TABLE savings ADD COLUMN alt_calls INTEGER NOT NULL DEFAULT 1;\
 ";
+
+/// Migration for older databases that predate the staleness mtime column.
+///
+/// Adds `files.mtime_secs`, defaulting to 0 so legacy rows trigger a
+/// hash-verified reindex on the next staleness check (then get the real
+/// value written).
+pub const MIGRATE_FILES_MTIME: &str =
+    "ALTER TABLE files ADD COLUMN mtime_secs INTEGER NOT NULL DEFAULT 0;";
 
 #[cfg(test)]
 mod tests {

@@ -11,8 +11,9 @@ pub struct IndexedFileMeta {
     pub id: i64,
     pub path: String,
     pub hash: String,
-    /// Unix seconds since epoch when the row was last written (from `indexed_at`).
-    pub indexed_at_secs: i64,
+    /// File's own mtime at index time, Unix seconds. Compared against the
+    /// on-disk mtime to short-circuit hashing when a file is unchanged.
+    pub mtime_secs: i64,
 }
 
 impl Database {
@@ -33,9 +34,9 @@ impl Database {
 
     /// Get a file record by path.
     pub fn get_file_by_path(&self, path: &str) -> Result<Option<FileRecord>> {
-        let mut stmt = self
-            .conn()
-            .prepare("SELECT id, path, hash, lang, size_bytes FROM files WHERE path = ?1")?;
+        let mut stmt = self.conn().prepare(
+            "SELECT id, path, hash, lang, size_bytes, mtime_secs FROM files WHERE path = ?1",
+        )?;
         let mut rows = stmt.query_map(params![path], |row| {
             Ok(FileRecord {
                 id: row.get(0)?,
@@ -43,6 +44,7 @@ impl Database {
                 hash: row.get(2)?,
                 lang: row.get(3)?,
                 size_bytes: row.get::<_, i64>(4)? as u64,
+                mtime_secs: row.get(5)?,
             })
         })?;
         match rows.next() {
@@ -52,20 +54,20 @@ impl Database {
     }
 
     /// Get per-file metadata needed by staleness detection: id, path, hash,
-    /// and `indexed_at` converted to Unix seconds (via `strftime('%s', ...)`).
+    /// and the file's own mtime captured at index time.
     ///
-    /// Used to skip SHA-256 on files whose on-disk mtime is still older than
-    /// their indexed timestamp.
+    /// Used to skip SHA-256 on files whose on-disk mtime matches the stored
+    /// mtime exactly (no touch since the last index).
     pub fn get_indexed_files_meta(&self) -> Result<Vec<IndexedFileMeta>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT id, path, hash, CAST(strftime('%s', indexed_at) AS INTEGER) FROM files ORDER BY path",
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT id, path, hash, mtime_secs FROM files ORDER BY path")?;
         let rows = stmt.query_map([], |row| {
             Ok(IndexedFileMeta {
                 id: row.get(0)?,
                 path: row.get(1)?,
                 hash: row.get(2)?,
-                indexed_at_secs: row.get(3)?,
+                mtime_secs: row.get(3)?,
             })
         })?;
         let mut out = Vec::new();
@@ -77,9 +79,9 @@ impl Database {
 
     /// Get all file records.
     pub fn get_all_files(&self) -> Result<Vec<FileRecord>> {
-        let mut stmt = self
-            .conn()
-            .prepare("SELECT id, path, hash, lang, size_bytes FROM files ORDER BY path")?;
+        let mut stmt = self.conn().prepare(
+            "SELECT id, path, hash, lang, size_bytes, mtime_secs FROM files ORDER BY path",
+        )?;
         let rows = stmt.query_map([], |row| {
             Ok(FileRecord {
                 id: row.get(0)?,
@@ -87,6 +89,7 @@ impl Database {
                 hash: row.get(2)?,
                 lang: row.get(3)?,
                 size_bytes: row.get::<_, i64>(4)? as u64,
+                mtime_secs: row.get(5)?,
             })
         })?;
         let mut files = Vec::new();

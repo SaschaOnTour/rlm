@@ -468,14 +468,16 @@ fn upsert_claude_local_md(path: &Path, mode: SetupMode) -> Result<SetupAction> {
         }
         SetupMode::Check => {
             let next = build_updated_markdown(&existing);
-            classify_markdown_action(&existing, &next, path.exists(), mode)
-                .map(Ok)
-                .unwrap_or(Ok(SetupAction::Skipped))
+            Ok(classify_markdown_action(
+                &existing,
+                &next,
+                path.exists(),
+                mode,
+            ))
         }
         SetupMode::Apply => {
             let next = build_updated_markdown(&existing);
-            let action = classify_markdown_action(&existing, &next, path.exists(), mode)
-                .unwrap_or(SetupAction::Skipped);
+            let action = classify_markdown_action(&existing, &next, path.exists(), mode);
             if !matches!(action, SetupAction::Skipped) {
                 write_text_atomic(path, &next)?;
             }
@@ -595,20 +597,20 @@ fn classify_markdown_action(
     next: &str,
     file_existed: bool,
     mode: SetupMode,
-) -> Option<SetupAction> {
+) -> SetupAction {
     if !file_existed {
-        return Some(match mode {
+        return match mode {
             SetupMode::Check => SetupAction::WouldCreate,
             _ => SetupAction::Created,
-        });
+        };
     }
     if existing == next {
-        return Some(SetupAction::Skipped);
+        return SetupAction::Skipped;
     }
-    Some(match mode {
+    match mode {
         SetupMode::Check => SetupAction::WouldUpdate,
         _ => SetupAction::Updated,
-    })
+    }
 }
 
 fn write_text_atomic(path: &Path, content: &str) -> Result<()> {
@@ -651,8 +653,7 @@ fn render_claude_local_md_section() -> String {
 - `replace` / `insert` / `index` always run sequentially.
 
 ### Quality Check
-- Inspect the `q` field; if `fallback_recommended: true`, fall back to native \
-Read/Grep for affected lines.
+- Inspect the `q` field; if `fallback_recommended: true`, fall back to native Read/Grep for affected lines.
 
 ### Self-healing Index
 - rlm picks up external file changes automatically on the next tool call.

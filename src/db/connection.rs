@@ -2,7 +2,7 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::db::schema::{CREATE_SCHEMA, MIGRATE_SAVINGS_V2};
+use crate::db::schema::{CREATE_SCHEMA, MIGRATE_FILES_MTIME, MIGRATE_SAVINGS_V2};
 use crate::error::Result;
 
 /// Database wrapper for the rlm index.
@@ -39,7 +39,24 @@ impl Database {
         }
         conn.execute_batch(CREATE_SCHEMA)?;
         Self::migrate_savings_v2(&conn);
+        Self::migrate_files_mtime(&conn);
         Ok(Self { conn })
+    }
+
+    /// Apply files.mtime_secs migration (best-effort, idempotent).
+    ///
+    /// Probes for the column before altering; silently skips "duplicate column"
+    /// errors if the migration races or is replayed.
+    fn migrate_files_mtime(conn: &Connection) {
+        if conn.prepare("SELECT mtime_secs FROM files LIMIT 0").is_ok() {
+            return;
+        }
+        if let Err(e) = conn.execute(MIGRATE_FILES_MTIME, []) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") {
+                eprintln!("warning: files.mtime_secs migration failed: {msg}");
+            }
+        }
     }
 
     /// Apply savings V2 migration (best-effort, idempotent).
