@@ -118,6 +118,11 @@ fn cli_logs_hash_failure_instead_of_silent_drift() {
     // denied), the failure must be logged to stderr — not silently swallowed.
     use std::os::unix::fs::PermissionsExt;
 
+    /// chmod value that denies read access.
+    const DENY_READ: u32 = 0o000;
+    /// Owner-rw restore value so `TempDir` drop can clean up.
+    const RESTORE_RW: u32 = 0o644;
+
     let dir = setup_project(INITIAL_SRC);
     let file = dir.path().join("main.rs");
 
@@ -128,7 +133,17 @@ fn cli_logs_hash_failure_instead_of_silent_drift() {
     fs::write(&file, &content).unwrap();
 
     // Revoke read permission so hasher::hash_file fails on File::open.
-    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(DENY_READ)).unwrap();
+
+    // If permissions can still be bypassed (e.g. tests running as root),
+    // the scenario we're asserting can't be constructed — skip the test.
+    if fs::read(&file).is_ok() {
+        let _ = fs::set_permissions(&file, fs::Permissions::from_mode(RESTORE_RW));
+        eprintln!(
+            "skipping cli_logs_hash_failure: effective UID bypasses file permissions (root?)"
+        );
+        return;
+    }
 
     let output = rlm(&dir)
         .arg("search")
@@ -137,7 +152,7 @@ fn cli_logs_hash_failure_instead_of_silent_drift() {
         .expect("command ran");
 
     // Restore before asserting so TempDir cleanup always works.
-    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(RESTORE_RW)).unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
