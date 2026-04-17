@@ -34,10 +34,17 @@ impl RlmServer {
     /// Runs the staleness check so every tool call sees an up-to-date index
     /// (picks up CC-native Edit/Write, external edits, `git pull`, ...). Set
     /// `RLM_SKIP_REFRESH=1` in the MCP server env to skip.
+    ///
+    /// Uses `Database::open_required` to distinguish "index truly missing"
+    /// (→ `invalid_request`) from real I/O / permission errors (→
+    /// `internal_error`), rather than collapsing both into "not found".
     pub(crate) fn ensure_db(&self) -> Result<Database, McpError> {
         let config = self.config();
-        let db = Database::open_if_exists(&config.db_path).ok_or_else(|| {
-            McpError::invalid_request("Index not found. Call the 'index' tool first.", None)
+        let db = Database::open_required(&config.db_path).map_err(|e| match e {
+            crate::error::RlmError::IndexNotFound => {
+                McpError::invalid_request("Index not found. Call the 'index' tool first.", None)
+            }
+            other => McpError::internal_error(other.to_string(), None),
         })?;
         crate::indexer::staleness::ensure_index_fresh(&db, &config)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;

@@ -173,6 +173,70 @@ fn setup_refuses_non_object_json() {
     assert!(result.is_err(), "setup must error on non-object JSON root");
 }
 
+#[cfg(unix)]
+#[test]
+fn setup_errors_on_unreadable_settings_json() {
+    // Regression: a permission-denied settings.json must not be misclassified
+    // as "missing file" and then silently overwritten. `read_settings` now
+    // matches `ErrorKind::NotFound` explicitly; other I/O errors propagate.
+    use std::os::unix::fs::PermissionsExt;
+    const DENY: u32 = 0o000;
+    const RESTORE: u32 = 0o644;
+
+    let dir = make_project();
+    fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    let settings = dir.path().join(".claude/settings.json");
+    fs::write(&settings, r#"{"permissions":{"allow":[]}}"#).unwrap();
+    fs::set_permissions(&settings, fs::Permissions::from_mode(DENY)).unwrap();
+
+    // If the chmod doesn't actually deny us (root / no perm enforcement), skip.
+    if fs::read(&settings).is_ok() {
+        let _ = fs::set_permissions(&settings, fs::Permissions::from_mode(RESTORE));
+        eprintln!("skipping: effective UID bypasses file permissions (root?)");
+        return;
+    }
+
+    let result = run_setup(dir.path(), SetupMode::Apply);
+
+    // Restore so TempDir cleanup works.
+    let _ = fs::set_permissions(&settings, fs::Permissions::from_mode(RESTORE));
+
+    assert!(
+        result.is_err(),
+        "unreadable settings.json must error, not be silently overwritten"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn setup_errors_on_unreadable_claude_local_md() {
+    // Regression: same as above but for CLAUDE.local.md via
+    // `upsert_claude_local_md`.
+    use std::os::unix::fs::PermissionsExt;
+    const DENY: u32 = 0o000;
+    const RESTORE: u32 = 0o644;
+
+    let dir = make_project();
+    let md = dir.path().join("CLAUDE.local.md");
+    fs::write(&md, "# Existing user content\n").unwrap();
+    fs::set_permissions(&md, fs::Permissions::from_mode(DENY)).unwrap();
+
+    if fs::read(&md).is_ok() {
+        let _ = fs::set_permissions(&md, fs::Permissions::from_mode(RESTORE));
+        eprintln!("skipping: effective UID bypasses file permissions (root?)");
+        return;
+    }
+
+    let result = run_setup(dir.path(), SetupMode::Apply);
+
+    let _ = fs::set_permissions(&md, fs::Permissions::from_mode(RESTORE));
+
+    assert!(
+        result.is_err(),
+        "unreadable CLAUDE.local.md must error, not be silently replaced"
+    );
+}
+
 #[test]
 fn setup_preserves_markdown_outside_markers() {
     let dir = make_project();

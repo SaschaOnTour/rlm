@@ -180,12 +180,17 @@ fn classify_settings_action(
 ///
 /// Refuses unparseable or non-object JSON with an error — overwriting a broken
 /// user file would destroy their config. The caller (user) must fix the file
-/// before re-running setup. Both parse steps share a single `from_slice` call.
+/// before re-running setup. Uses `ErrorKind::NotFound` matching (not
+/// `path.exists()`) so permission / I/O errors surface instead of being
+/// silently treated as "file missing" and then overwritten.
 fn read_settings(path: &Path) -> Result<Value> {
-    if !path.exists() {
-        return Ok(Value::Object(Map::new()));
-    }
-    let bytes = std::fs::read(path)?;
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Value::Object(Map::new()));
+        }
+        Err(e) => return Err(e.into()),
+    };
     if bytes.is_empty() {
         return Ok(Value::Object(Map::new()));
     }
@@ -369,15 +374,20 @@ pub fn strip_rlm_from_settings(existing: &Value) -> Value {
 }
 
 fn strip_permissions(out: &mut Value) {
-    let rlm_entries: std::collections::HashSet<Value> =
-        rlm_permission_entries().into_iter().collect();
+    // Compare string-to-string instead of Value-to-Value; a non-string user
+    // entry (unusual but legal JSON) is preserved untouched because it can't
+    // be one of our rlm permission strings.
+    let rlm_entries: std::collections::HashSet<String> = rlm_permission_entries()
+        .into_iter()
+        .filter_map(|entry| entry.as_str().map(str::to_owned))
+        .collect();
     if let Some(allow) = out
         .get_mut("permissions")
         .and_then(Value::as_object_mut)
         .and_then(|m| m.get_mut("allow"))
         .and_then(Value::as_array_mut)
     {
-        allow.retain(|entry| !rlm_entries.contains(entry));
+        allow.retain(|entry| entry.as_str().is_none_or(|s| !rlm_entries.contains(s)));
     }
 }
 
@@ -388,12 +398,15 @@ fn strip_mcp_servers(out: &mut Value) {
 }
 
 /// Update the rlm block in `CLAUDE.local.md`, creating the file if needed.
+///
+/// Uses `ErrorKind::NotFound` matching (not `path.exists()`) so permission /
+/// I/O errors surface instead of being silently treated as "file missing".
 // qual:allow(iosp) reason: "integration: read existing file → build new content → write"
 fn upsert_claude_local_md(path: &Path, mode: SetupMode) -> Result<SetupAction> {
-    let existing = if path.exists() {
-        std::fs::read_to_string(path)?
-    } else {
-        String::new()
+    let existing = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
     };
     let has_block = existing.contains(MARKER_BEGIN);
 

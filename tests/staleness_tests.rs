@@ -154,6 +154,15 @@ fn cli_logs_hash_failure_instead_of_silent_drift() {
     // Restore before asserting so TempDir cleanup always works.
     fs::set_permissions(&file, fs::Permissions::from_mode(RESTORE_RW)).unwrap();
 
+    // The staleness hash failure must NOT abort the tool call — the user
+    // should still get search results (with a stale index + stderr warning).
+    assert!(
+        output.status.success(),
+        "rlm search must succeed despite hash failure; status={:?}, stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("staleness hash failed") || stderr.contains("Permission denied"),
