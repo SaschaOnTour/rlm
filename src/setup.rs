@@ -207,29 +207,70 @@ fn read_settings(path: &Path) -> Result<Value> {
     }
 }
 
-/// Atomic write via tempfile + rename. Emits pretty-printed JSON for hand-editability.
-///
-/// Cross-platform: Unix `rename` atomically replaces. Windows `rename` fails
-/// when the target exists, so we remove the target first (brief non-atomic
-/// window, acceptable for per-project config files).
+/// Atomic write for settings.json — pretty-printed JSON for hand-editability.
 fn write_settings_atomic(path: &Path, v: &Value) -> Result<()> {
+    let body = serde_json::to_string_pretty(v)?;
+    write_atomic(path, body.as_bytes())
+}
+
+/// Upper bound on temp-filename collision retries (pid + nanos + counter).
+/// Collisions are effectively impossible within this budget in practice.
+const MAX_TEMP_ATTEMPTS: u32 = 128;
+
+/// Atomic write via `O_EXCL`-style tempfile + rename.
+///
+/// Uses `OpenOptions::create_new` so we never follow a pre-existing symlink
+/// or overwrite an attacker-seeded file at the temp path. Retries with a
+/// monotonic counter suffix if the chosen temp name is already taken.
+/// Cross-platform replace: Unix `rename` overwrites atomically; on Windows
+/// we remove the target first (see `replace_file`).
+// qual:allow(iosp) reason: "retry loop with early-exit on success is inherent to atomic-write-with-collision-retry; per-attempt work is extracted to try_write_once"
+fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
-    let temp = parent.join(format!(
-        ".rlm_setup_tmp_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    let body = serde_json::to_string_pretty(v)?;
-    std::fs::write(&temp, body)?;
-    if let Err(e) = replace_file(&temp, path) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(e.into());
+    let now_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+
+    for attempt in 0..MAX_TEMP_ATTEMPTS {
+        let temp = parent.join(format!(
+            ".rlm_setup_tmp_{}_{}_{}",
+            std::process::id(),
+            now_nanos,
+            attempt
+        ));
+        if try_write_once(&temp, path, content)? {
+            return Ok(());
+        }
     }
-    Ok(())
+    Err(RlmError::Other(format!(
+        "atomic write exhausted {MAX_TEMP_ATTEMPTS} temp-name attempts"
+    )))
+}
+
+/// One attempt at atomic write. Returns `Ok(true)` on success, `Ok(false)` if
+/// the temp name already existed (caller retries), `Err` on any other failure.
+// qual:allow(iosp) reason: "single-attempt atomic write — O_EXCL open + write + rename form one atomic primitive that can't be meaningfully split further"
+fn try_write_once(temp: &Path, target: &Path, content: &[u8]) -> Result<bool> {
+    use std::io::Write;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temp)
+    {
+        Ok(mut file) => {
+            file.write_all(content)?;
+            drop(file);
+            if let Err(e) = replace_file(temp, target) {
+                let _ = std::fs::remove_file(temp);
+                return Err(e.into());
+            }
+            Ok(true)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Canonical JSON fragment that `rlm setup` contributes.
@@ -487,11 +528,21 @@ fn append_block(existing: &str, new_block: &str) -> String {
     out
 }
 
-/// Ensure the string ends with exactly one `\n`. Required for idempotency —
-/// slicing between markers can leave `\n\n` or no newline depending on input.
+/// Ensure the string ends with exactly one trailing newline sequence.
+///
+/// Required for idempotency — slicing between markers can leave double
+/// newlines of either EOL style. Trims `\r\n\r\n` (CRLF files) and `\n\n`
+/// (LF files) alike, so Windows-authored `CLAUDE.local.md` stays clean
+/// across repeat runs.
 fn normalize_trailing_newline(s: &mut String) {
-    while s.ends_with("\n\n") {
-        s.pop();
+    loop {
+        if s.ends_with("\r\n\r\n") {
+            s.truncate(s.len() - 2);
+        } else if s.ends_with("\n\n") {
+            s.pop();
+        } else {
+            break;
+        }
     }
     if !s.is_empty() && !s.ends_with('\n') {
         s.push('\n');
@@ -561,22 +612,7 @@ fn classify_markdown_action(
 }
 
 fn write_text_atomic(path: &Path, content: &str) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let temp = parent.join(format!(
-        ".rlm_setup_md_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&temp, content)?;
-    if let Err(e) = replace_file(&temp, path) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(RlmError::Io(e));
-    }
-    Ok(())
+    write_atomic(path, content.as_bytes())
 }
 
 /// Cross-platform file replacement: Unix `rename` atomically overwrites,
@@ -810,6 +846,35 @@ mod tests {
         assert!(!out.contains(MARKER_BEGIN));
         assert!(!out.contains("broken content"));
         assert!(out.contains("# A"));
+    }
+
+    #[test]
+    fn normalize_trailing_newline_handles_crlf() {
+        // Regression: CRLF files ending in `\r\n\r\n` must collapse to a
+        // single `\r\n`, just like LF files collapse `\n\n` to `\n`.
+        let mut crlf = String::from("body\r\n\r\n");
+        normalize_trailing_newline(&mut crlf);
+        assert_eq!(crlf, "body\r\n");
+
+        let mut crlf_multi = String::from("body\r\n\r\n\r\n");
+        normalize_trailing_newline(&mut crlf_multi);
+        assert_eq!(crlf_multi, "body\r\n");
+
+        let mut lf = String::from("body\n\n");
+        normalize_trailing_newline(&mut lf);
+        assert_eq!(lf, "body\n");
+
+        let mut already_clean_lf = String::from("body\n");
+        normalize_trailing_newline(&mut already_clean_lf);
+        assert_eq!(already_clean_lf, "body\n");
+
+        let mut already_clean_crlf = String::from("body\r\n");
+        normalize_trailing_newline(&mut already_clean_crlf);
+        assert_eq!(already_clean_crlf, "body\r\n");
+
+        let mut no_newline = String::from("body");
+        normalize_trailing_newline(&mut no_newline);
+        assert_eq!(no_newline, "body\n");
     }
 
     #[test]
