@@ -13,17 +13,39 @@ pub struct FileRecord {
     pub lang: String,
     /// File size in bytes.
     pub size_bytes: u64,
+    /// File's own mtime at index time, in nanoseconds since the Unix epoch.
+    /// Used by staleness detection to skip hashing files whose mtime is
+    /// unchanged since last index. Nanosecond precision prevents same-second
+    /// false negatives on modern filesystems. Defaults to 0 (sentinel for
+    /// "unknown / legacy row", which forces a hash verification).
+    pub mtime_nanos: i64,
 }
 
 impl FileRecord {
+    /// Create a record with `mtime_nanos = 0`. Convenient for tests that don't
+    /// exercise staleness; production indexing code should use `with_mtime`.
     #[must_use]
     pub fn new(path: String, hash: String, lang: String, size_bytes: u64) -> Self {
+        Self::with_mtime(path, hash, lang, size_bytes, 0)
+    }
+
+    /// Create a record with an explicit file-mtime. Used by the indexer so the
+    /// staleness detector can compare on-disk mtime against this value.
+    #[must_use]
+    pub fn with_mtime(
+        path: String,
+        hash: String,
+        lang: String,
+        size_bytes: u64,
+        mtime_nanos: i64,
+    ) -> Self {
         Self {
             id: 0,
             path,
             hash,
             lang,
             size_bytes,
+            mtime_nanos,
         }
     }
 }
@@ -45,6 +67,23 @@ mod tests {
         assert_eq!(f.id, 0);
         assert_eq!(f.path, "src/main.rs");
         assert_eq!(f.lang, "rust");
+        assert_eq!(f.size_bytes, FILE_SIZE);
+        assert_eq!(f.mtime_nanos, 0);
+    }
+
+    #[test]
+    fn file_record_with_mtime_sets_field() {
+        const FILE_SIZE: u64 = 2048;
+        const SAMPLE_MTIME: i64 = 1_700_000_000;
+
+        let f = FileRecord::with_mtime(
+            "src/lib.rs".into(),
+            "def456".into(),
+            "rust".into(),
+            FILE_SIZE,
+            SAMPLE_MTIME,
+        );
+        assert_eq!(f.mtime_nanos, SAMPLE_MTIME);
         assert_eq!(f.size_bytes, FILE_SIZE);
     }
 }

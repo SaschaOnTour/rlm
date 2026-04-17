@@ -99,12 +99,13 @@ pub fn cmd_files(path_filter: Option<&str>, skipped_only: bool, indexed_only: bo
 
 pub fn cmd_verify(fix: bool) -> CmdResult {
     let config = get_config()?;
-
-    if !config.index_exists() {
-        return Err(map_err("Index not found. Run 'rlm index' first."));
-    }
-
-    let db = crate::db::Database::open(&config.db_path).map_err(map_err)?;
+    let db = match crate::db::Database::open_required(&config.db_path) {
+        Ok(db) => db,
+        Err(crate::error::RlmError::IndexNotFound) => {
+            return Err(map_err("Index not found. Run 'rlm index' first."));
+        }
+        Err(e) => return Err(map_err(e.to_string())),
+    };
     let report = operations::verify_index(&db, &config.project_root).map_err(map_err)?;
 
     if fix && !report.is_ok() {
@@ -119,5 +120,19 @@ pub fn cmd_verify(fix: bool) -> CmdResult {
 pub fn cmd_supported() -> CmdResult {
     let result = operations::list_supported();
     output::print(&result);
+    Ok(())
+}
+
+pub fn cmd_setup(check: bool, remove: bool) -> CmdResult {
+    let mode = if remove {
+        crate::setup::SetupMode::Remove
+    } else if check {
+        crate::setup::SetupMode::Check
+    } else {
+        crate::setup::SetupMode::Apply
+    };
+    let cwd = std::env::current_dir().map_err(map_err)?;
+    let report = crate::setup::run_setup(&cwd, mode).map_err(map_err)?;
+    output::print(&report);
     Ok(())
 }

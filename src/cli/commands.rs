@@ -237,4 +237,22 @@ pub enum Command {
 
     /// [read-only] List all supported file extensions and their parser types.
     Supported,
+
+    /// [write] Configure Claude Code integration for this project.
+    ///
+    /// Creates/updates `.claude/settings.json` with rlm permissions and the
+    /// `mcpServers.rlm` entry, and appends an rlm workflow block to
+    /// `CLAUDE.local.md`. If no index exists, runs `rlm index` once.
+    ///
+    /// Existing user entries are preserved — permission arrays are dedup-
+    /// merged and only the `mcpServers.rlm` key is overwritten. Re-running
+    /// produces identical output (idempotent).
+    Setup {
+        /// Dry-run: show planned changes, write nothing to disk.
+        #[arg(long, conflicts_with = "remove")]
+        check: bool,
+        /// Remove all rlm configuration entries.
+        #[arg(long, conflicts_with = "check")]
+        remove: bool,
+    },
 }

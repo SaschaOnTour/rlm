@@ -142,6 +142,8 @@ mod tests {
         // Regression test: a naive single-pass estimate undercounts because
         // tokens.output's digit length (e.g., "0" → "275") changes the JSON
         // payload size after the caller writes the estimate back.
+        const PAYLOAD_CHARS: usize = 500;
+
         #[derive(serde::Serialize)]
         struct Wrapper {
             data: String,
@@ -149,7 +151,7 @@ mod tests {
         }
 
         let w = Wrapper {
-            data: "x".repeat(500),
+            data: "x".repeat(PAYLOAD_CHARS),
             tokens: TokenEstimate::default(),
         };
         let estimate = estimate_output_tokens(&w);

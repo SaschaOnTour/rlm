@@ -188,14 +188,15 @@ pub fn handle_savings(db: &Database, since: Option<&str>) -> Result<CallToolResu
 /// Handle the `verify` tool: verify index integrity.
 // qual:api
 pub fn handle_verify(config: &Config, fix: bool) -> Result<CallToolResult, McpError> {
-    if !config.index_exists() {
-        return Ok(RlmServer::error_text(
-            "Index not found. Call the 'index' tool first.".into(),
-        ));
-    }
-
-    let db = crate::db::Database::open(&config.db_path)
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let db = match crate::db::Database::open_required(&config.db_path) {
+        Ok(db) => db,
+        Err(crate::error::RlmError::IndexNotFound) => {
+            return Ok(RlmServer::error_text(
+                "Index not found. Call the 'index' tool first.".into(),
+            ));
+        }
+        Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
+    };
 
     let report = match operations::verify_index(&db, &config.project_root) {
         Ok(r) => r,
