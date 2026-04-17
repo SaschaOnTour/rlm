@@ -38,7 +38,7 @@ fn rlm(dir: &TempDir) -> Command {
 /// `results` array.
 fn search_result_count(dir: &TempDir, query: &str, extra_env: &[(&str, &str)]) -> usize {
     let mut cmd = rlm(dir);
-    for (k, v) in extra_env {
+    for &(k, v) in extra_env {
         cmd.env(k, v);
     }
     let output = cmd
