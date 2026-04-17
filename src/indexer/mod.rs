@@ -134,7 +134,7 @@ fn ingest_file(
         file.hash.clone(),
         lang.to_string(),
         file.size,
-        file.mtime_secs,
+        file.mtime_nanos,
     );
     let file_id = db.upsert_file(&file_record)?;
 
@@ -267,18 +267,20 @@ pub fn reindex_single_file(
             db.delete_chunks_for_file(existing.id)?;
         }
         let hash = crate::ingest::hasher::hash_bytes(source.as_bytes());
-        let mtime_secs = std::fs::metadata(&full_path)
+        // Nanosecond precision so staleness can distinguish sub-second edits.
+        // `as_nanos()` returns u128 but fits in i64 until year 2262.
+        let mtime_nanos = std::fs::metadata(&full_path)
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
+            .map(|d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX))
             .unwrap_or(0);
         let file_record = FileRecord::with_mtime(
             rel_path.into(),
             hash,
             lang.into(),
             source.len() as u64,
-            mtime_secs,
+            mtime_nanos,
         );
         let file_id = db.upsert_file(&file_record)?;
         index_source(db, &dispatcher, &source, file_id, rel_path)

@@ -13,14 +13,16 @@ pub struct FileRecord {
     pub lang: String,
     /// File size in bytes.
     pub size_bytes: u64,
-    /// File's own mtime at index time, Unix seconds. Used by staleness
-    /// detection to skip hashing files whose mtime is unchanged since last
-    /// index. Defaults to 0 for records created without a known mtime.
-    pub mtime_secs: i64,
+    /// File's own mtime at index time, in nanoseconds since the Unix epoch.
+    /// Used by staleness detection to skip hashing files whose mtime is
+    /// unchanged since last index. Nanosecond precision prevents same-second
+    /// false negatives on modern filesystems. Defaults to 0 (sentinel for
+    /// "unknown / legacy row", which forces a hash verification).
+    pub mtime_nanos: i64,
 }
 
 impl FileRecord {
-    /// Create a record with `mtime_secs = 0`. Convenient for tests that don't
+    /// Create a record with `mtime_nanos = 0`. Convenient for tests that don't
     /// exercise staleness; production indexing code should use `with_mtime`.
     #[must_use]
     pub fn new(path: String, hash: String, lang: String, size_bytes: u64) -> Self {
@@ -35,7 +37,7 @@ impl FileRecord {
         hash: String,
         lang: String,
         size_bytes: u64,
-        mtime_secs: i64,
+        mtime_nanos: i64,
     ) -> Self {
         Self {
             id: 0,
@@ -43,7 +45,7 @@ impl FileRecord {
             hash,
             lang,
             size_bytes,
-            mtime_secs,
+            mtime_nanos,
         }
     }
 }
@@ -66,7 +68,7 @@ mod tests {
         assert_eq!(f.path, "src/main.rs");
         assert_eq!(f.lang, "rust");
         assert_eq!(f.size_bytes, FILE_SIZE);
-        assert_eq!(f.mtime_secs, 0);
+        assert_eq!(f.mtime_nanos, 0);
     }
 
     #[test]
@@ -81,7 +83,7 @@ mod tests {
             FILE_SIZE,
             SAMPLE_MTIME,
         );
-        assert_eq!(f.mtime_secs, SAMPLE_MTIME);
+        assert_eq!(f.mtime_nanos, SAMPLE_MTIME);
         assert_eq!(f.size_bytes, FILE_SIZE);
     }
 }

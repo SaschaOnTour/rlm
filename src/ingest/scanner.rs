@@ -50,10 +50,11 @@ pub struct ScannedFile {
     pub hash: String,
     pub size: u64,
     pub extension: String,
-    /// File mtime at scan time, Unix seconds. Persisted to
-    /// `files.mtime_secs` so staleness detection can trust-skip hashing
-    /// when the on-disk mtime is unchanged.
-    pub mtime_secs: i64,
+    /// File mtime at scan time, in nanoseconds since the Unix epoch.
+    /// Persisted to `files.mtime_nanos` so staleness can trust-skip hashing
+    /// when the on-disk mtime is unchanged. Nanosecond precision avoids the
+    /// same-second ambiguity that second-precision timestamps would suffer.
+    pub mtime_nanos: i64,
 }
 
 /// Stat-only file metadata from `Scanner::walk` — no hash.
@@ -67,8 +68,9 @@ pub struct WalkedFile {
     pub relative_path: String,
     pub extension: String,
     pub size: u64,
-    /// Last-modified time, Unix seconds since epoch.
-    pub mtime_secs: i64,
+    /// Last-modified time, nanoseconds since the Unix epoch (matching
+    /// `files.mtime_nanos` in the DB for exact equality comparisons).
+    pub mtime_nanos: i64,
 }
 
 /// Result of `Scanner::walk`: successfully-stat'd files AND the full list of
@@ -142,14 +144,16 @@ impl Scanner {
                     return None;
                 }
 
-                // Fall back to 0 (sentinel for "unknown mtime") instead of
-                // dropping the file — missing mtime shouldn't block indexing;
-                // staleness treats 0 as "always hash" to be safe.
-                let mtime_secs = meta
+                // Nanosecond precision avoids the same-second false-negative
+                // that second precision would have (edit → index → edit all
+                // within one wall-clock second). Fall back to 0 (sentinel for
+                // "unknown mtime") if the filesystem doesn't expose modified()
+                // — staleness treats 0 as "always hash" to stay correct.
+                let mtime_nanos = meta
                     .modified()
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
+                    .map(|d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX))
                     .unwrap_or(0);
                 let hash = hasher::hash_file(path).ok()?;
                 let relative = path
@@ -168,7 +172,7 @@ impl Scanner {
                     hash,
                     size,
                     extension: ext,
-                    mtime_secs,
+                    mtime_nanos,
                 })
             })
             .collect();
@@ -181,7 +185,7 @@ impl Scanner {
     /// Returns `WalkedFile` entries containing path + size + mtime only.
     /// This is the cheap variant used by `staleness::detect_changes` to
     /// short-circuit SHA-256 on files whose on-disk mtime matches the
-    /// per-file `files.mtime_secs` stored by the indexer (i.e., the file
+    /// per-file `files.mtime_nanos` stored by the indexer (i.e., the file
     /// hasn't been touched since it was last indexed).
     ///
     /// Same filtering rules as `scan()`: respects .gitignore, skips
@@ -327,11 +331,13 @@ fn build_walked_file(path: PathBuf, root: &Path, max_size: u64) -> Option<Walked
     if max_size > 0 && size > max_size {
         return None;
     }
-    let mtime_secs = meta
+    // See scan() above: nanosecond precision so staleness' fast-path is safe
+    // against same-second edits. 0 = unknown → always hash.
+    let mtime_nanos = meta
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
+        .map(|d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX))
         .unwrap_or(0);
     let relative = to_relative_path(&path, root);
     let extension = path
@@ -344,7 +350,7 @@ fn build_walked_file(path: PathBuf, root: &Path, max_size: u64) -> Option<Walked
         relative_path: relative,
         extension,
         size,
-        mtime_secs,
+        mtime_nanos,
     })
 }
 

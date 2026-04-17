@@ -53,7 +53,7 @@ struct ChangeSet {
     added: Vec<String>,
     /// File IDs in the DB whose path no longer exists on disk.
     deleted_ids: Vec<i64>,
-    /// `(file_id, new_mtime_secs)` pairs where hash matched despite an mtime
+    /// `(file_id, new_mtime_nanos)` pairs where hash matched despite an mtime
     /// bump (e.g. `touch`, `git checkout`). Applying refreshes the stored
     /// mtime so the fast-path trusts the file next time instead of re-hashing
     /// it on every call (important for post-`git-pull` and legacy migrated rows).
@@ -69,11 +69,18 @@ struct ChangeSet {
 ///
 /// # Performance
 /// Mtime-first: the common path is one stat per file, no hashing. Files are
-/// hashed only when their on-disk mtime is newer than the DB's `indexed_at`,
-/// which matches the subset of files the user actually touched since the last
-/// index. For clean projects the overhead is O(files) stats (~tens of ms even
-/// on large repos). For a typical edit session, only a handful of files are
-/// hashed per call.
+/// hashed only when their on-disk mtime (nanoseconds) differs from the
+/// per-file `files.mtime_nanos` stored at the last index — i.e., the subset
+/// of files that were actually touched since their last verification. After
+/// a hash-verified no-op (e.g. `touch`, `git checkout`), the stored mtime is
+/// refreshed so the fast-path stays effective. For clean projects the
+/// overhead is O(files) stats (~tens of ms even on large repos). For a
+/// typical edit session, only a handful of files are hashed per call.
+///
+/// Nanosecond precision avoids the same-second false negative that a
+/// second-precision comparison would suffer from — on modern filesystems
+/// (ext4 / NTFS / APFS / btrfs), rapid edit sequences produce distinct
+/// mtimes and are correctly detected.
 ///
 /// The `RLM_SKIP_REFRESH=1` env var remains available as an escape hatch for
 /// cases where even stat-per-file is unwanted (e.g., batch scripts over huge
@@ -119,7 +126,7 @@ fn detect_and_apply(db: &Database, config: &Config) -> Result<ChangeReport> {
 /// Compare the DB state against the on-disk state and classify each file.
 ///
 /// Mtime-first strategy: walk (stat only, no hashing), compare each file's
-/// on-disk `mtime_secs` to the per-file `mtime_secs` stored in `files` from
+/// on-disk `mtime_nanos` to the per-file `mtime_nanos` stored in `files` from
 /// the last index. Hash only files whose mtime changed since the last
 /// recorded scan. This keeps the per-call cost ≈ stat-per-file on clean
 /// projects, while still catching content edits via hash verification when
@@ -152,9 +159,9 @@ fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
                 // last indexed this file → the file hasn't been touched. Only
                 // valid when mtime is a real value (non-zero sentinel) on both
                 // sides; 0 means "unknown", always force a hash verification.
-                if file.mtime_secs != 0
-                    && meta.mtime_secs != 0
-                    && file.mtime_secs == meta.mtime_secs
+                if file.mtime_nanos != 0
+                    && meta.mtime_nanos != 0
+                    && file.mtime_nanos == meta.mtime_nanos
                 {
                     continue;
                 }
@@ -170,9 +177,9 @@ fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
                         // Hash matches: content is unchanged. Update the
                         // stored mtime so the fast-path can trust it next
                         // call (prevents forever-rehashing after `touch` /
-                        // legacy-migrated rows with mtime_secs=0).
-                        if meta.mtime_secs != file.mtime_secs {
-                            mtime_refreshes.push((meta.id, file.mtime_secs));
+                        // legacy-migrated rows with mtime_nanos=0).
+                        if meta.mtime_nanos != file.mtime_nanos {
+                            mtime_refreshes.push((meta.id, file.mtime_nanos));
                         }
                     }
                     Err(e) => {
@@ -237,8 +244,8 @@ fn apply_changes(db: &Database, config: &Config, changes: ChangeSet) -> Result<C
 
     // Refresh stored mtimes for files that had mtime bumps but identical
     // content — ensures the fast-path trusts them on the next invocation.
-    for (id, mtime_secs) in changes.mtime_refreshes {
-        if let Err(e) = db.update_file_mtime(id, mtime_secs) {
+    for (id, mtime_nanos) in changes.mtime_refreshes {
+        if let Err(e) = db.update_file_mtime(id, mtime_nanos) {
             failures.push(format!("refresh mtime id={id}: {e}"));
         }
     }
@@ -287,7 +294,7 @@ mod tests {
 
     #[test]
     fn ensure_fresh_does_not_rehash_file_indexed_in_same_second_as_edit() {
-        // Regression: previously the staleness check compared file.mtime_secs
+        // Regression: previously the staleness check compared file.mtime_nanos
         // against indexed_at (second-precision), so a file edited and indexed
         // in the SAME second would always hit the "suspect" path on every
         // subsequent call, hashing it repeatedly despite being unchanged.
@@ -312,9 +319,9 @@ mod tests {
     #[test]
     fn ensure_fresh_refreshes_stored_mtime_after_touch_without_content_change() {
         // Regression: after a touch (mtime bump, content identical), staleness
-        // must UPDATE the stored mtime_secs so subsequent calls hit the fast
+        // must UPDATE the stored mtime_nanos so subsequent calls hit the fast
         // path instead of re-hashing the file forever. Legacy rows with
-        // mtime_secs=0 follow the same self-healing path.
+        // mtime_nanos=0 follow the same self-healing path.
         const SECOND_BOUNDARY_MS: u64 = 1100;
 
         let (tmp, config, db) = setup_indexed(&[("main.rs", "fn main() {}")]);
@@ -324,7 +331,7 @@ mod tests {
             .get_file_by_path("src/main.rs")
             .unwrap()
             .expect("indexed")
-            .mtime_secs;
+            .mtime_nanos;
 
         // Bump mtime by rewriting the same content after the second boundary.
         std::thread::sleep(std::time::Duration::from_millis(SECOND_BOUNDARY_MS));
@@ -338,7 +345,7 @@ mod tests {
             .get_file_by_path("src/main.rs")
             .unwrap()
             .expect("indexed")
-            .mtime_secs;
+            .mtime_nanos;
 
         assert_ne!(
             stored_before, stored_after,
@@ -360,7 +367,7 @@ mod tests {
         // catches this correctly.
         //
         // Sleep past a second boundary so the rewrite guarantees
-        // `mtime_secs > indexed_at_secs` (SQLite timestamps are 1s-precise).
+        // `mtime_nanos > indexed_at_secs` (SQLite timestamps are 1s-precise).
         const SECOND_BOUNDARY_MS: u64 = 1100;
 
         let (tmp, config, db) = setup_indexed(&[("main.rs", "fn main() {}")]);

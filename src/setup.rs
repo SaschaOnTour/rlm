@@ -260,7 +260,11 @@ fn try_write_once(temp: &Path, target: &Path, content: &[u8]) -> Result<bool> {
         .open(temp)
     {
         Ok(mut file) => {
-            file.write_all(content)?;
+            if let Err(e) = file.write_all(content) {
+                drop(file);
+                let _ = std::fs::remove_file(temp);
+                return Err(e.into());
+            }
             drop(file);
             if let Err(e) = replace_file(temp, target) {
                 let _ = std::fs::remove_file(temp);

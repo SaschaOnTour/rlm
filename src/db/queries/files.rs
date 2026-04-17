@@ -11,9 +11,11 @@ pub struct IndexedFileMeta {
     pub id: i64,
     pub path: String,
     pub hash: String,
-    /// File's own mtime at index time, Unix seconds. Compared against the
-    /// on-disk mtime to short-circuit hashing when a file is unchanged.
-    pub mtime_secs: i64,
+    /// File's own mtime at index time, in nanoseconds since the Unix epoch.
+    /// Compared against the on-disk mtime to short-circuit hashing when a
+    /// file is unchanged. Nanosecond precision prevents same-second false
+    /// negatives on modern filesystems (ext4 / NTFS / APFS / btrfs).
+    pub mtime_nanos: i64,
 }
 
 impl Database {
@@ -35,7 +37,7 @@ impl Database {
     /// Get a file record by path.
     pub fn get_file_by_path(&self, path: &str) -> Result<Option<FileRecord>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, path, hash, lang, size_bytes, mtime_secs FROM files WHERE path = ?1",
+            "SELECT id, path, hash, lang, size_bytes, mtime_nanos FROM files WHERE path = ?1",
         )?;
         let mut rows = stmt.query_map(params![path], |row| {
             Ok(FileRecord {
@@ -44,7 +46,7 @@ impl Database {
                 hash: row.get(2)?,
                 lang: row.get(3)?,
                 size_bytes: row.get::<_, i64>(4)? as u64,
-                mtime_secs: row.get(5)?,
+                mtime_nanos: row.get(5)?,
             })
         })?;
         match rows.next() {
@@ -61,13 +63,13 @@ impl Database {
     pub fn get_indexed_files_meta(&self) -> Result<Vec<IndexedFileMeta>> {
         let mut stmt = self
             .conn()
-            .prepare("SELECT id, path, hash, mtime_secs FROM files ORDER BY path")?;
+            .prepare("SELECT id, path, hash, mtime_nanos FROM files ORDER BY path")?;
         let rows = stmt.query_map([], |row| {
             Ok(IndexedFileMeta {
                 id: row.get(0)?,
                 path: row.get(1)?,
                 hash: row.get(2)?,
-                mtime_secs: row.get(3)?,
+                mtime_nanos: row.get(3)?,
             })
         })?;
         let mut out = Vec::new();
@@ -80,7 +82,7 @@ impl Database {
     /// Get all file records.
     pub fn get_all_files(&self) -> Result<Vec<FileRecord>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, path, hash, lang, size_bytes, mtime_secs FROM files ORDER BY path",
+            "SELECT id, path, hash, lang, size_bytes, mtime_nanos FROM files ORDER BY path",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(FileRecord {
@@ -89,7 +91,7 @@ impl Database {
                 hash: row.get(2)?,
                 lang: row.get(3)?,
                 size_bytes: row.get::<_, i64>(4)? as u64,
-                mtime_secs: row.get(5)?,
+                mtime_nanos: row.get(5)?,
             })
         })?;
         let mut files = Vec::new();
@@ -105,10 +107,10 @@ impl Database {
     /// hash still matches (e.g. `touch`, `git checkout`), we refresh the
     /// stored mtime so the fast-path can trust it on the next call — instead
     /// of re-hashing the same stable file forever.
-    pub fn update_file_mtime(&self, file_id: i64, mtime_secs: i64) -> Result<()> {
+    pub fn update_file_mtime(&self, file_id: i64, mtime_nanos: i64) -> Result<()> {
         self.conn().execute(
-            "UPDATE files SET mtime_secs = ?1 WHERE id = ?2",
-            params![mtime_secs, file_id],
+            "UPDATE files SET mtime_nanos = ?1 WHERE id = ?2",
+            params![mtime_nanos, file_id],
         )?;
         Ok(())
     }

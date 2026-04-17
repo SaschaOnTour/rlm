@@ -43,14 +43,17 @@ impl Database {
         Ok(Self { conn })
     }
 
-    /// Apply `files.mtime_secs` migration (required, idempotent).
+    /// Apply `files.mtime_nanos` migration (required, idempotent).
     ///
     /// Probes for the column before altering; treats "duplicate column" as a
     /// no-op (concurrent/replayed migration), but propagates every other
     /// failure. Returning early from `Database::open` on failure prevents a
     /// half-migrated schema from showing up as cryptic SELECT errors later.
     fn migrate_files_mtime(conn: &Connection) -> Result<()> {
-        if conn.prepare("SELECT mtime_secs FROM files LIMIT 0").is_ok() {
+        if conn
+            .prepare("SELECT mtime_nanos FROM files LIMIT 0")
+            .is_ok()
+        {
             return Ok(());
         }
         match conn.execute(MIGRATE_FILES_MTIME, []) {
