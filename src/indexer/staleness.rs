@@ -192,11 +192,22 @@ fn detect_changes(db: &Database, config: &Config) -> Result<ChangeSet> {
         }
     }
 
-    let deleted_ids: Vec<i64> = indexed
-        .iter()
-        .filter(|f| !discovered_paths.contains(f.path.as_str()))
-        .map(|f| f.id)
-        .collect();
+    // Only compute deletions when the walk was complete. If the walker hit
+    // errors (permission / IO on a subdirectory), `discovered_paths` is
+    // known-incomplete and a "missing" indexed file might still exist inside
+    // the unreadable branch — classifying it as deleted would drop real data.
+    let deleted_ids: Vec<i64> = if walk.walk_had_errors {
+        eprintln!(
+            "rlm: staleness walk hit errors; skipping deletion phase to preserve indexed entries"
+        );
+        Vec::new()
+    } else {
+        indexed
+            .iter()
+            .filter(|f| !discovered_paths.contains(f.path.as_str()))
+            .map(|f| f.id)
+            .collect()
+    };
 
     Ok(ChangeSet {
         modified,
@@ -421,6 +432,56 @@ mod tests {
         assert_eq!(report.deleted, 1, "got {report:?}");
         assert_eq!(report.reindexed, 0);
         assert_eq!(report.added, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_fresh_skips_deletion_when_walk_hits_errors() {
+        // Regression: permission-denied on a subdirectory causes walker errors,
+        // which leave `discovered` incomplete. Staleness must NOT delete
+        // indexed files that could still exist inside the unreadable subdir.
+        use std::os::unix::fs::PermissionsExt;
+        const DENY: u32 = 0o000;
+        const RESTORE: u32 = 0o755;
+
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let private = src.join("private");
+        fs::create_dir_all(&private).unwrap();
+        fs::write(src.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(private.join("secret.rs"), "fn secret() {}").unwrap();
+
+        let config = Config::new(tmp.path());
+        run_index(&config, None).unwrap();
+        let db = Database::open(&config.db_path).unwrap();
+
+        // Revoke access so walker errors on reading the private subdir.
+        fs::set_permissions(&private, fs::Permissions::from_mode(DENY)).unwrap();
+
+        // Root-bypass check: skip if permissions are ineffective.
+        if std::fs::read_dir(&private).is_ok() {
+            let _ = fs::set_permissions(&private, fs::Permissions::from_mode(RESTORE));
+            eprintln!("skipping: effective UID bypasses file permissions (root?)");
+            return;
+        }
+
+        let report = ensure_index_fresh(&db, &config).unwrap();
+
+        // Restore before asserting so TempDir cleanup works.
+        let _ = fs::set_permissions(&private, fs::Permissions::from_mode(RESTORE));
+
+        // secret.rs is still on disk but invisible to the walk; must NOT be
+        // classified as deleted.
+        assert_eq!(
+            report.deleted, 0,
+            "walker errors must prevent deletion of files in unreadable subdirs; got {report:?}"
+        );
+        let files = db.get_all_files().unwrap();
+        assert!(
+            files.iter().any(|f| f.path.contains("secret")),
+            "secret.rs must remain indexed after a walk with errors"
+        );
     }
 
     #[test]

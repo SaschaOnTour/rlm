@@ -59,9 +59,11 @@ pub struct ScannedFile {
 
 /// Stat-only file metadata from `Scanner::walk` — no hash.
 ///
-/// Used by `staleness::detect_changes` to skip SHA-256 on files whose mtime
-/// is still older than the DB's `indexed_at`. Much cheaper than `ScannedFile`
-/// for the clean-project common case.
+/// Used by `staleness::detect_changes` to skip SHA-256 on files whose
+/// on-disk `mtime_nanos` still exactly matches the per-file
+/// `files.mtime_nanos` stored in the DB (i.e., unchanged since the last
+/// indexed version of that file). Much cheaper than `ScannedFile` for the
+/// clean-project common case.
 #[derive(Debug, Clone)]
 pub struct WalkedFile {
     pub abs_path: PathBuf,
@@ -86,6 +88,13 @@ pub struct WalkResult {
     /// "file truly deleted" from "file still on disk but transiently
     /// unreadable / over the configured size limit".
     pub discovered: Vec<String>,
+    /// True if the underlying `ignore::WalkBuilder` encountered any errors
+    /// (permission denied on a subdirectory, IO hiccups, ...). When set, the
+    /// `discovered` list is known-incomplete: staleness must skip the
+    /// deletion phase because a missing path might still exist on disk but
+    /// inside an unreadable branch. Preserving index entries over transient
+    /// walk errors beats silently dropping them.
+    pub walk_had_errors: bool,
 }
 
 /// A discovered file (may or may not be indexable).
@@ -191,7 +200,7 @@ impl Scanner {
     /// Same filtering rules as `scan()`: respects .gitignore, skips
     /// non-code directories, supported extensions only, `max_file_size_bytes`.
     pub fn walk(&self) -> Result<WalkResult> {
-        let entries = walk_supported_paths(&self.root);
+        let (entries, walk_had_errors) = walk_supported_paths_with_errors(&self.root);
         let root = &self.root;
         let max_size = self.max_file_size_bytes;
 
@@ -201,7 +210,11 @@ impl Scanner {
             .filter_map(|path| build_walked_file(path, root, max_size))
             .collect();
 
-        Ok(WalkResult { files, discovered })
+        Ok(WalkResult {
+            files,
+            discovered,
+            walk_had_errors,
+        })
     }
 
     /// Scan ALL files in the project directory, including unsupported ones.
@@ -286,7 +299,18 @@ impl Scanner {
 /// Shared filter used by `scan()` and `walk()` to avoid duplicating the
 /// `WalkBuilder` configuration.
 fn walk_supported_paths(root: &Path) -> Vec<PathBuf> {
-    WalkBuilder::new(root)
+    walk_supported_paths_with_errors(root).0
+}
+
+/// Same as `walk_supported_paths`, but also reports whether the walker hit
+/// any errors (permission / IO on subdirectories). Staleness uses the flag
+/// to stay safe against transient errors: an incomplete walk must not cause
+/// indexed files to be wrongly classified as deleted.
+// qual:allow(iosp) reason: "walker error propagation requires branching per entry inside the filter chain"
+fn walk_supported_paths_with_errors(root: &Path) -> (Vec<PathBuf>, bool) {
+    let mut had_errors = false;
+    let mut paths = Vec::new();
+    for entry in WalkBuilder::new(root)
         .hidden(true)
         .git_ignore(true)
         .git_global(false)
@@ -309,16 +333,22 @@ fn walk_supported_paths(root: &Path) -> Vec<PathBuf> {
             )
         })
         .build()
-        .filter_map(std::result::Result::ok)
-        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-        .filter(|e| {
-            e.path()
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(is_supported_extension)
-        })
-        .map(ignore::DirEntry::into_path)
-        .collect()
+    {
+        match entry {
+            Ok(e)
+                if e.file_type().is_some_and(|ft| ft.is_file())
+                    && e.path()
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(is_supported_extension) =>
+            {
+                paths.push(e.into_path());
+            }
+            Ok(_) => {} // dir or unsupported ext → skip
+            Err(_) => had_errors = true,
+        }
+    }
+    (paths, had_errors)
 }
 
 /// Build a `WalkedFile` for a single discovered path. Returns `None` only if

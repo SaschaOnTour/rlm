@@ -351,17 +351,16 @@ fn merge_permissions(out: &mut Value, rlm: &Value) {
         return;
     };
 
-    if !out.is_object() {
-        *out = Value::Object(Map::new());
-    }
+    // Bail if the target root isn't an object — don't clobber user data.
+    // `read_settings` guarantees Object for fresh loads; guard is defensive.
     let Value::Object(root) = out else { return };
 
+    // Insert an empty object only when "permissions" is absent. If the user
+    // has `permissions` as a non-object value (string/array/number), leave
+    // it alone and skip the rlm merge rather than silently replacing.
     let perms = root
         .entry("permissions".to_string())
         .or_insert_with(|| Value::Object(Map::new()));
-    if !perms.is_object() {
-        *perms = Value::Object(Map::new());
-    }
     let Value::Object(perms_obj) = perms else {
         return;
     };
@@ -369,10 +368,9 @@ fn merge_permissions(out: &mut Value, rlm: &Value) {
     let allow = perms_obj
         .entry("allow".to_string())
         .or_insert_with(|| Value::Array(Vec::new()));
-    if !allow.is_array() {
-        *allow = Value::Array(Vec::new());
-    }
     let Value::Array(allow_arr) = allow else {
+        // Non-array `allow` stays untouched. User data preservation trumps
+        // silent merge.
         return;
     };
 
@@ -391,18 +389,13 @@ fn merge_mcp_servers(out: &mut Value, rlm: &Value) {
         return;
     };
 
-    if !out.is_object() {
-        *out = Value::Object(Map::new());
-    }
     let Value::Object(root) = out else { return };
 
     let servers = root
         .entry("mcpServers".to_string())
         .or_insert_with(|| Value::Object(Map::new()));
-    if !servers.is_object() {
-        *servers = Value::Object(Map::new());
-    }
     let Value::Object(servers_map) = servers else {
+        // Non-object `mcpServers`: preserve user value, skip the rlm entry.
         return;
     };
 
@@ -760,6 +753,50 @@ mod tests {
         assert!(allow.iter().any(|e| e == "mcp__user__x"));
         assert!(!allow.iter().any(|e| e == "mcp__rlm__search"));
         assert!(stripped["mcpServers"].get("rlm").is_none());
+    }
+
+    #[test]
+    fn merge_preserves_non_object_permissions_value() {
+        // Regression: if a user has `permissions` as a non-object value
+        // (unusual but legal JSON), rlm setup must NOT silently overwrite
+        // it with `{}`. Leave the user value alone.
+        let existing = json!({ "permissions": "something-odd" });
+        let merged = merge_settings(&existing, &rlm_defaults());
+        assert_eq!(
+            merged["permissions"], "something-odd",
+            "non-object permissions must be preserved"
+        );
+        // rlm's own mcpServers entry should still be added.
+        assert!(merged["mcpServers"]["rlm"].is_object());
+    }
+
+    #[test]
+    fn merge_preserves_non_array_permissions_allow() {
+        // `permissions.allow` as a non-array value (e.g. user accidentally
+        // typed a string) must stay untouched — rlm merge skips rather than
+        // replacing with `[]`.
+        let existing = json!({
+            "permissions": { "allow": "all" }
+        });
+        let merged = merge_settings(&existing, &rlm_defaults());
+        assert_eq!(
+            merged["permissions"]["allow"], "all",
+            "non-array `allow` must be preserved"
+        );
+    }
+
+    #[test]
+    fn merge_preserves_non_object_mcp_servers_value() {
+        // Same principle for `mcpServers` — don't clobber user's unexpected type.
+        let existing = json!({ "mcpServers": ["not", "an", "object"] });
+        let merged = merge_settings(&existing, &rlm_defaults());
+        assert!(
+            merged["mcpServers"].is_array(),
+            "non-object mcpServers must be preserved: {}",
+            merged["mcpServers"]
+        );
+        // rlm's permissions should still be added at the top level.
+        assert!(merged["permissions"]["allow"].is_array());
     }
 
     #[test]
