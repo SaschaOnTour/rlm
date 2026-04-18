@@ -5,8 +5,6 @@
 
 pub mod callgraph;
 pub mod context;
-pub mod deps;
-pub mod diff;
 pub mod impact;
 pub mod index;
 pub mod refs;
@@ -17,8 +15,6 @@ pub mod type_info;
 
 pub use callgraph::{build_callgraph, CallgraphResult};
 pub use context::{build_context, ContextResult};
-pub use deps::{get_deps, DepsResult};
-pub use diff::{diff_file, diff_symbol, FileDiffResult, SymbolDiffResult};
 pub use impact::{analyze_impact, ImpactEntry, ImpactResult};
 pub use index::IndexOutput;
 pub use refs::{get_refs, RefHit, RefsResult};
@@ -26,6 +22,12 @@ pub use savings::get_savings_report;
 pub use scope::{get_scope, ScopeResult};
 pub use signature::{get_signature, SignatureResult};
 pub use type_info::{get_type_info, TypeInfoResult};
+
+// Slice 3.3 moved these into `crate::application::content::*`.
+pub use crate::application::content::deps::{get_deps, DepsResult};
+pub use crate::application::content::diff::{
+    diff_file, diff_symbol, FileDiffResult, SymbolDiffResult,
+};
 
 // Slice 3.2 moved these into `crate::application::query::*`. Re-export
 // the previous public API here so adapters that still use the

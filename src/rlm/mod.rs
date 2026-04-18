@@ -1,7 +1,5 @@
-pub mod partition;
-pub mod summarize;
-
-// Slice 3.2 moved `rlm::peek` to `crate::application::query::peek`.
-// Re-export here so adapters still importing through the old path
-// keep compiling; later slices update those imports.
+// Slice 3.2 and 3.3 moved the contents of this module to
+// `crate::application::query::*` and `crate::application::content::*`.
+// Re-exports keep the old paths compilable until adapters migrate.
+pub use crate::application::content::{partition, summarize};
 pub use crate::application::query::peek;
