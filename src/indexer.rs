@@ -1,5 +1,5 @@
 // Slice 3.8 moved the contents of this module to
-// `crate::application::index::*`. Re-exports keep the old paths
-// compilable until adapters migrate.
-pub use crate::application::index::staleness;
+// `crate::application::index::*`. The glob re-export includes the
+// `staleness` submodule so `crate::indexer::staleness::...` paths
+// keep resolving.
 pub use crate::application::index::*;
