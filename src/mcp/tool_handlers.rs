@@ -10,11 +10,11 @@ use rmcp::ErrorData as McpError;
 
 use crate::config::Config;
 use crate::db::Database;
-use crate::domain::token_budget::estimate_json_tokens;
 use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
+use crate::interface::shared::{record_operation, AlternativeCost, OperationMeta};
 use crate::models::chunk::Chunk;
 use crate::operations;
 use crate::operations::savings;
@@ -110,17 +110,15 @@ pub fn handle_search(
 ) -> Result<CallToolResult, McpError> {
     match operations::search_chunks(db, query, limit) {
         Ok(result) => {
-            let json = RlmServer::to_json(&result);
-            let out_tokens = estimate_json_tokens(json.len());
-            let alt_tokens = result.tokens.output.max(out_tokens);
-            savings::record(
-                db,
-                "search",
-                out_tokens,
-                alt_tokens,
-                result.results.len() as u64,
-            );
-            Ok(RlmServer::success_text(formatter, json))
+            let meta = OperationMeta {
+                command: "search",
+                files_touched: result.results.len() as u64,
+                alternative: AlternativeCost::AtLeastBody {
+                    base: result.tokens.output,
+                },
+            };
+            let response = record_operation(db, &meta, &result);
+            Ok(RlmServer::success_text(formatter, response.body))
         }
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }

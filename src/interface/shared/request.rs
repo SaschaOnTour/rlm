@@ -34,6 +34,13 @@ pub enum AlternativeCost {
     /// Operation doesn't map cleanly to any model above; supply a
     /// precomputed token estimate directly.
     Fixed(u64),
+    /// Same as `Fixed` but clamps the recorded alternative cost **up**
+    /// to the actual body token count if the body turns out larger than
+    /// `base`. Matches the `base.max(out_tokens)` safeguard used by
+    /// operations whose native-tool estimate (e.g. `search.tokens.output`)
+    /// approximates the result size — prevents negative recorded savings
+    /// when the actual JSON payload exceeds the up-front estimate.
+    AtLeastBody { base: u64 },
 }
 
 #[cfg(test)]
@@ -64,6 +71,7 @@ mod tests {
             prefix: Some("src/".into()),
         };
         let whole_project = AlternativeCost::ScopedFiles { prefix: None };
+        let at_least = AlternativeCost::AtLeastBody { base: 42 };
 
         match single {
             AlternativeCost::SingleFile { path } => assert_eq!(path, "src/main.rs"),
@@ -79,6 +87,10 @@ mod tests {
         }
         match whole_project {
             AlternativeCost::ScopedFiles { prefix } => assert!(prefix.is_none()),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+        match at_least {
+            AlternativeCost::AtLeastBody { base } => assert_eq!(base, 42),
             other => panic!("unexpected variant: {other:?}"),
         }
     }

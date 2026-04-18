@@ -7,11 +7,11 @@ use crate::cli::helpers::{
     cmd_single_file_op, emit_read_symbol, format_chunks, get_config, get_db, map_err,
     parse_strategy, print_str, print_write_result, CmdResult,
 };
-use crate::domain::token_budget::estimate_json_tokens;
 use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
+use crate::interface::shared::{record_operation, AlternativeCost, OperationMeta};
 use crate::operations;
 use crate::operations::savings;
 use crate::output::{self, Formatter};
@@ -43,13 +43,15 @@ pub fn cmd_search(query: &str, limit: usize, formatter: Formatter) -> CmdResult 
     let config = get_config()?;
     let db = get_db(&config)?;
     let result = operations::search_chunks(&db, query, limit).map_err(map_err)?;
-    // Estimate tokens from JSON (savings always tracks JSON cost, regardless of output format)
-    let json_for_savings = output::to_json(&result);
-    let out_tokens = estimate_json_tokens(json_for_savings.len());
-    let file_count = result.results.len() as u64;
-    let alt_tokens = result.tokens.output.max(out_tokens);
-    savings::record(&db, "search", out_tokens, alt_tokens, file_count);
-    formatter.print(&result);
+    let meta = OperationMeta {
+        command: "search",
+        files_touched: result.results.len() as u64,
+        alternative: AlternativeCost::AtLeastBody {
+            base: result.tokens.output,
+        },
+    };
+    let response = record_operation(&db, &meta, &result);
+    print_str(formatter, &response.body);
     Ok(())
 }
 
