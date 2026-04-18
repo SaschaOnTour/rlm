@@ -6,6 +6,7 @@ mod search;
 mod stats;
 
 pub use files::IndexedFileMeta;
+pub use refs::RefWithContext;
 pub use savings::SavingsQueryRow;
 pub use stats::{IndexStats, VerifyReport};
 
