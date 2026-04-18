@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
-use crate::edit::error::EditError;
-use crate::edit::syntax_guard::{validate_and_write, SyntaxGuard};
+use super::error::EditError;
+use super::validator::{validate_and_write, SyntaxGuard};
 use crate::error::{Result, RlmError};
 use crate::ingest::scanner::ext_to_lang;
 

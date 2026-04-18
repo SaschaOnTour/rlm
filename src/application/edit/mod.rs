@@ -1,4 +1,12 @@
-//! Write operations (insert, replace) and their syntax validator.
+//! Write operations (insert, replace) and the syntax validator that
+//! gates every write.
 //!
-//! Slice 3.4 migrates `crate::edit::{inserter, replacer}` into this
-//! module and renames `syntax_guard` to `validator`.
+//! Slice 3.4 moved these in from `crate::edit::*` and renamed the
+//! `syntax_guard` module to `validator`. The `SyntaxGuard` struct name
+//! and `validate_and_write` helper are unchanged — only the module
+//! name changed to match the "validator in front of writer" semantics.
+
+pub mod error;
+pub mod inserter;
+pub mod replacer;
+pub mod validator;
