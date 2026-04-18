@@ -16,64 +16,9 @@ use crate::ingest::code::base::{
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
-const CHUNK_QUERY_SRC: &str = r"
-    ; Functions
-    (function_declaration name: (identifier) @fn_name) @fn_def
-    (generator_function_declaration name: (identifier) @gen_fn_name) @gen_fn_def
+const CHUNK_QUERY_SRC: &str = include_str!("queries/typescript/chunk.scm");
 
-    ; Arrow functions assigned to variables
-    (lexical_declaration
-        (variable_declarator
-            name: (identifier) @arrow_name
-            value: (arrow_function))) @arrow_def
-
-    ; Classes (including abstract classes)
-    (class_declaration name: (type_identifier) @class_name) @class_def
-    (abstract_class_declaration name: (type_identifier) @abs_class_name) @abs_class_def
-
-    ; Class methods
-    (method_definition
-        name: (property_identifier) @method_name) @method_def
-
-    ; Interfaces
-    (interface_declaration name: (type_identifier) @iface_name) @iface_def
-
-    ; Type aliases
-    (type_alias_declaration name: (type_identifier) @type_alias_name) @type_alias_def
-
-    ; Enums
-    (enum_declaration name: (identifier) @enum_name) @enum_def
-
-    ; ES Module imports
-    (import_statement) @import_decl
-
-    ; Namespaces/Modules
-    (module name: (identifier) @namespace_name) @namespace_def
-    (internal_module name: (identifier) @internal_namespace_name) @internal_namespace_def
-";
-
-const REF_QUERY_SRC: &str = r"
-    ; Function calls
-    (call_expression
-        function: (identifier) @call_name)
-    (call_expression
-        function: (member_expression
-            property: (property_identifier) @method_call))
-
-    ; Import paths
-    (import_statement
-        source: (string) @import_path)
-
-    ; Type references
-    (type_identifier) @type_ref
-
-    ; Generic type arguments
-    (type_arguments (type_identifier) @generic_type_ref)
-
-    ; Decorators
-    (decorator (call_expression function: (identifier) @decorator_name))
-    (decorator (identifier) @decorator_name)
-";
+const REF_QUERY_SRC: &str = include_str!("queries/typescript/ref.scm");
 
 // TSX-specific query additions (JSX elements)
 const TSX_REF_QUERY_ADDITION: &str = r"

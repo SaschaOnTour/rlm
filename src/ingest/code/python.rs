@@ -6,22 +6,9 @@ use crate::ingest::code::base::{
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
-const CHUNK_QUERY_SRC: &str = r"
-    (function_definition name: (identifier) @fn_name) @fn_def
-    (class_definition name: (identifier) @class_name) @class_def
-    (import_statement) @import_decl
-    (import_from_statement) @import_decl
-";
+const CHUNK_QUERY_SRC: &str = include_str!("queries/python/chunk.scm");
 
-const REF_QUERY_SRC: &str = r"
-    (call function: (identifier) @call_name)
-    (call function: (attribute attribute: (identifier) @method_call))
-    (import_statement name: (dotted_name) @import_name)
-    (import_from_statement module_name: (dotted_name) @import_from_module)
-    (import_from_statement name: (dotted_name) @import_from_name)
-    (aliased_import name: (dotted_name) @import_alias)
-    (type) @type_ref
-";
+const REF_QUERY_SRC: &str = include_str!("queries/python/ref.scm");
 
 pub struct PythonConfig {
     language: Language,

@@ -7,25 +7,9 @@ use crate::ingest::code::base::{
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
-const CHUNK_QUERY_SRC: &str = r"
-    (class_declaration name: (identifier) @class_name) @class_def
-    (interface_declaration name: (identifier) @iface_name) @iface_def
-    (enum_declaration name: (identifier) @enum_name) @enum_def
-    (struct_declaration name: (identifier) @struct_name) @struct_def
-    (method_declaration name: (identifier) @method_name) @method_def
-    (constructor_declaration name: (identifier) @ctor_name) @ctor_def
-    (namespace_declaration name: (identifier) @ns_name) @ns_def
-    (using_directive) @using_decl
-";
+const CHUNK_QUERY_SRC: &str = include_str!("queries/csharp/chunk.scm");
 
-const REF_QUERY_SRC: &str = r"
-    (invocation_expression function: (identifier) @call_name)
-    (invocation_expression function: (member_access_expression name: (identifier) @method_call))
-    (using_directive (qualified_name) @using_path)
-    (using_directive (identifier) @using_simple)
-    (generic_name (identifier) @type_ref)
-    (predefined_type) @type_ref
-";
+const REF_QUERY_SRC: &str = include_str!("queries/csharp/ref.scm");
 
 pub struct CSharpConfig {
     language: Language,

@@ -13,46 +13,9 @@ use crate::ingest::code::base::{
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
-const CHUNK_QUERY_SRC: &str = r#"
-    ; Elements with id attribute
-    (element
-        (start_tag
-            (tag_name) @tag_name
-            (attribute
-                (attribute_name) @attr_name
-                (quoted_attribute_value) @id_value
-                (#eq? @attr_name "id")))
-        ) @element_with_id
+const CHUNK_QUERY_SRC: &str = include_str!("queries/html/chunk.scm");
 
-    ; Script elements
-    (script_element) @script_el
-
-    ; Style elements
-    (style_element) @style_el
-
-    ; Doctype
-    (doctype) @doctype_el
-"#;
-
-const REF_QUERY_SRC: &str = r#"
-    ; Class references
-    (attribute
-        (attribute_name) @_class_attr
-        (quoted_attribute_value) @class_value
-        (#eq? @_class_attr "class"))
-
-    ; href links
-    (attribute
-        (attribute_name) @_href_attr
-        (quoted_attribute_value) @href_value
-        (#eq? @_href_attr "href"))
-
-    ; src references
-    (attribute
-        (attribute_name) @_src_attr
-        (quoted_attribute_value) @src_value
-        (#eq? @_src_attr "src"))
-"#;
+const REF_QUERY_SRC: &str = include_str!("queries/html/ref.scm");
 
 pub struct HtmlConfig {
     language: Language,

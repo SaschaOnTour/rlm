@@ -7,23 +7,9 @@ use crate::ingest::code::base::{
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
-const CHUNK_QUERY_SRC: &str = r"
-    (function_definition name: (name) @fn_name) @fn_def
-    (class_declaration name: (name) @class_name) @class_def
-    (interface_declaration name: (name) @iface_name) @iface_def
-    (method_declaration name: (name) @method_name) @method_def
-    (trait_declaration name: (name) @trait_name) @trait_def
-    (namespace_use_declaration) @use_decl
-";
+const CHUNK_QUERY_SRC: &str = include_str!("queries/php/chunk.scm");
 
-const REF_QUERY_SRC: &str = r"
-    (function_call_expression function: (name) @call_name)
-    (member_call_expression name: (name) @method_call)
-    (namespace_use_clause (qualified_name) @use_path)
-    (namespace_use_clause (name) @use_simple)
-    (named_type (name) @type_ref)
-    (named_type (qualified_name) @type_ref_qualified)
-";
+const REF_QUERY_SRC: &str = include_str!("queries/php/ref.scm");
 
 pub struct PhpConfig {
     language: Language,

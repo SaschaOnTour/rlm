@@ -10,33 +10,9 @@ use crate::models::chunk::{Chunk, ChunkKind, RefKind};
 // Impl-block method extraction helpers live in `rust_impl_methods`.
 use super::rust_impl_methods::{extract_impl_methods, find_node_at_byte_range};
 
-const CHUNK_QUERY_SRC: &str = r"
-    (function_item name: (identifier) @fn_name) @fn_def
-    (struct_item name: (type_identifier) @struct_name) @struct_def
-    (enum_item name: (type_identifier) @enum_name) @enum_def
-    (trait_item name: (type_identifier) @trait_name) @trait_def
-    (impl_item type: (type_identifier) @impl_name) @impl_def
-    (const_item name: (identifier) @const_name) @const_def
-    (static_item name: (identifier) @static_name) @static_def
-    (mod_item name: (identifier) @mod_name) @mod_def
-    (use_declaration) @use_decl
-    (macro_definition name: (identifier) @macro_name) @macro_def
-    (type_item name: (type_identifier) @type_alias_name) @type_alias_def
-";
+const CHUNK_QUERY_SRC: &str = include_str!("queries/rust/chunk.scm");
 
-const REF_QUERY_SRC: &str = r"
-    (call_expression function: (identifier) @call_name)
-    (call_expression function: (scoped_identifier name: (identifier) @scoped_call))
-    (call_expression function: (field_expression field: (field_identifier) @method_call))
-    (use_declaration argument: (scoped_identifier name: (identifier) @use_name))
-    (use_declaration argument: (scoped_identifier) @use_path)
-    (use_declaration argument: (use_as_clause path: (scoped_identifier) @use_as_path))
-    (use_declaration argument: (use_list (identifier) @use_list_item))
-    (use_declaration argument: (use_list (scoped_identifier name: (identifier) @use_list_scoped)))
-    (use_declaration argument: (scoped_use_list path: (scoped_identifier) @use_group_path))
-    (use_declaration argument: (identifier) @use_simple)
-    (type_identifier) @type_ref
-";
+const REF_QUERY_SRC: &str = include_str!("queries/rust/ref.scm");
 
 pub struct RustConfig {
     language: Language,

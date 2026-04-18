@@ -6,21 +6,9 @@ use crate::ingest::code::base::{
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
-const CHUNK_QUERY_SRC: &str = r"
-    (class_declaration name: (identifier) @class_name) @class_def
-    (interface_declaration name: (identifier) @iface_name) @iface_def
-    (enum_declaration name: (identifier) @enum_name) @enum_def
-    (method_declaration name: (identifier) @method_name) @method_def
-    (constructor_declaration name: (identifier) @ctor_name) @ctor_def
-    (import_declaration) @import_decl
-";
+const CHUNK_QUERY_SRC: &str = include_str!("queries/java/chunk.scm");
 
-const REF_QUERY_SRC: &str = r"
-    (method_invocation name: (identifier) @call_name)
-    (import_declaration (scoped_identifier) @import_path)
-    (import_declaration (identifier) @import_simple)
-    (type_identifier) @type_ref
-";
+const REF_QUERY_SRC: &str = include_str!("queries/java/ref.scm");
 
 pub struct JavaConfig {
     language: Language,

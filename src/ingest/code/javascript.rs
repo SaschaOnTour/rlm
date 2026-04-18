@@ -15,69 +15,9 @@ use crate::ingest::code::base::{
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
-const CHUNK_QUERY_SRC: &str = r#"
-    ; Functions
-    (function_declaration name: (identifier) @fn_name) @fn_def
-    (generator_function_declaration name: (identifier) @gen_fn_name) @gen_fn_def
+const CHUNK_QUERY_SRC: &str = include_str!("queries/javascript/chunk.scm");
 
-    ; Arrow functions assigned to variables
-    (lexical_declaration
-        (variable_declarator
-            name: (identifier) @arrow_name
-            value: (arrow_function))) @arrow_def
-    (variable_declaration
-        (variable_declarator
-            name: (identifier) @arrow_name
-            value: (arrow_function))) @arrow_def
-
-    ; Classes
-    (class_declaration name: (identifier) @class_name) @class_def
-
-    ; Class methods
-    (method_definition
-        name: (property_identifier) @method_name) @method_def
-
-    ; ES Module imports
-    (import_statement) @import_decl
-
-    ; CommonJS require (variable declarations with require)
-    (lexical_declaration
-        (variable_declarator
-            value: (call_expression
-                function: (identifier) @_require_fn
-                (#eq? @_require_fn "require")))) @require_decl
-    (variable_declaration
-        (variable_declarator
-            value: (call_expression
-                function: (identifier) @_require_fn
-                (#eq? @_require_fn "require")))) @require_decl
-"#;
-
-const REF_QUERY_SRC: &str = r#"
-    ; Function calls
-    (call_expression
-        function: (identifier) @call_name)
-    (call_expression
-        function: (member_expression
-            property: (property_identifier) @method_call))
-
-    ; Import paths
-    (import_statement
-        source: (string) @import_path)
-
-    ; Require paths
-    (call_expression
-        function: (identifier) @_require
-        arguments: (arguments (string) @require_path)
-        (#eq? @_require "require"))
-
-    ; JSX elements
-    (jsx_element
-        open_tag: (jsx_opening_element
-            name: (identifier) @jsx_component))
-    (jsx_self_closing_element
-        name: (identifier) @jsx_component)
-"#;
+const REF_QUERY_SRC: &str = include_str!("queries/javascript/ref.scm");
 
 pub struct JavaScriptConfig {
     language: Language,

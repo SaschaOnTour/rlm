@@ -6,20 +6,9 @@ use crate::ingest::code::base::{
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
-const CHUNK_QUERY_SRC: &str = r"
-    (function_declaration name: (identifier) @fn_name) @fn_def
-    (method_declaration name: (field_identifier) @method_name) @method_def
-    (type_declaration (type_spec name: (type_identifier) @type_name)) @type_def
-    (import_declaration) @import_decl
-";
+const CHUNK_QUERY_SRC: &str = include_str!("queries/go/chunk.scm");
 
-const REF_QUERY_SRC: &str = r"
-    (call_expression function: (identifier) @call_name)
-    (call_expression function: (selector_expression field: (field_identifier) @method_call))
-    (import_spec path: (interpreted_string_literal) @import_path)
-    (import_spec name: (package_identifier) @import_alias)
-    (type_identifier) @type_ref
-";
+const REF_QUERY_SRC: &str = include_str!("queries/go/ref.scm");
 
 pub struct GoConfig {
     language: Language,

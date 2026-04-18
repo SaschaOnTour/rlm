@@ -14,30 +14,9 @@ use crate::ingest::code::base::{
 };
 use crate::models::chunk::{ChunkKind, RefKind};
 
-const CHUNK_QUERY_SRC: &str = r"
-    ; Rule sets (selectors with declarations)
-    (rule_set
-        (selectors) @selector) @rule
+const CHUNK_QUERY_SRC: &str = include_str!("queries/css/chunk.scm");
 
-    ; Media queries
-    (media_statement) @media_query
-
-    ; Keyframes
-    (keyframes_statement) @keyframe
-
-    ; Import statements
-    (import_statement) @import_stmt
-";
-
-const REF_QUERY_SRC: &str = r"
-    ; Class selectors
-    (class_selector
-        (class_name) @class_ref)
-
-    ; ID selectors
-    (id_selector
-        (id_name) @id_ref)
-";
+const REF_QUERY_SRC: &str = include_str!("queries/css/ref.scm");
 
 pub struct CssConfig {
     language: Language,
