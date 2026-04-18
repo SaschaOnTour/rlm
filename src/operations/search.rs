@@ -5,8 +5,8 @@
 use serde::Serialize;
 
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_tokens_str, TokenEstimate};
 use crate::error::Result;
-use crate::models::token_estimate::{estimate_tokens_str, TokenEstimate};
 use crate::search::fts;
 
 /// Approximate number of characters per token for output size estimation.

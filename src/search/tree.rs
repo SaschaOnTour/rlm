@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
 use crate::models::chunk::Chunk;
-use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Wrapped tree result with token estimate.
 #[derive(Debug, Clone, Serialize)]

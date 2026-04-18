@@ -5,9 +5,9 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
 use crate::models::chunk::RefKind;
-use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Complete context information for a symbol.
 #[derive(Debug, Clone, Serialize)]

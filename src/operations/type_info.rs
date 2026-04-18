@@ -6,8 +6,8 @@
 use serde::Serialize;
 
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
-use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Priority value assigned to chunks whose file record is unknown,
 /// ensuring they sort below src/ (0), default (1), and fixtures/tests (2).

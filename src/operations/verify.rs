@@ -9,8 +9,8 @@ use serde::Serialize;
 
 use crate::db::queries::VerifyReport;
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
-use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of fixing integrity issues.
 #[derive(Debug, Clone, Serialize)]

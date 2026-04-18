@@ -1,8 +1,8 @@
 use serde::Serialize;
 
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_tokens_str, TokenEstimate};
 use crate::error::{Result, RlmError};
-use crate::models::token_estimate::{estimate_tokens_str, TokenEstimate};
 
 /// Number of lines per chunk when semantic partitioning falls back to uniform splitting
 /// (i.e., when the file has no indexed AST chunks).

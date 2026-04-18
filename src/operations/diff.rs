@@ -7,9 +7,9 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
 use crate::ingest::hasher;
-use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of comparing a file with its indexed version.
 #[derive(Debug, Clone, Serialize)]

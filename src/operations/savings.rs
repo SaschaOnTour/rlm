@@ -7,10 +7,10 @@
 use serde::Serialize;
 
 use crate::db::Database;
-use crate::error::Result;
-use crate::models::token_estimate::{
+use crate::domain::token_budget::{
     estimate_json_tokens, estimate_tokens, estimate_tokens_from_bytes,
 };
+use crate::error::Result;
 
 /// Per-call overhead in tokens (tool_use block structure).
 const CALL_OVERHEAD: u64 = 30;

@@ -10,12 +10,12 @@ use rmcp::ErrorData as McpError;
 
 use crate::config::Config;
 use crate::db::Database;
+use crate::domain::token_budget::estimate_json_tokens;
 use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
 use crate::models::chunk::Chunk;
-use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
 use crate::search::tree;
