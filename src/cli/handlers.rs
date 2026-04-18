@@ -7,11 +7,11 @@ use crate::cli::helpers::{
     cmd_single_file_op, emit_read_symbol, format_chunks, get_config, get_db, map_err,
     parse_strategy, print_str, print_write_result, CmdResult,
 };
+use crate::domain::token_budget::estimate_json_tokens;
 use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
-use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
 use crate::output;

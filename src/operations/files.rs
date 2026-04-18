@@ -6,9 +6,9 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::domain::token_budget::TokenEstimate;
 use crate::error::Result;
 use crate::ingest::scanner::{DiscoveredFile, Scanner};
-use crate::models::token_estimate::TokenEstimate;
 
 /// Estimated number of tokens consumed per file entry in the output.
 const TOKENS_PER_FILE_ENTRY: usize = 10;

@@ -5,8 +5,8 @@
 use serde::Serialize;
 
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
-use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of getting scope information.
 #[derive(Debug, Clone, Serialize)]
@@ -27,7 +27,9 @@ pub struct ScopeResult {
 pub fn get_scope(db: &Database, path: &str, line: u32) -> Result<ScopeResult> {
     let file = db
         .get_file_by_path(path)?
-        .ok_or_else(|| crate::error::RlmError::Other(format!("file not found: {path}")))?;
+        .ok_or_else(|| crate::error::RlmError::FileNotFound {
+            path: path.to_string(),
+        })?;
 
     let chunks = db.get_chunks_for_file(file.id)?;
 

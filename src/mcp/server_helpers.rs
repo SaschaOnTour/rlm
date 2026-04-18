@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::db::Database;
-use crate::models::token_estimate::estimate_json_tokens;
+use crate::domain::token_budget::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
 
@@ -198,14 +198,14 @@ pub async fn start_mcp_server() -> crate::error::Result<()> {
     let service = server
         .serve(rmcp::transport::stdio())
         .await
-        .map_err(|e| crate::error::RlmError::Other(format!("MCP server error: {e}")))?;
+        .map_err(|e| crate::error::RlmError::Mcp(format!("{e}")))?;
 
     tracing::info!("MCP server running on stdio");
 
     service
         .waiting()
         .await
-        .map_err(|e| crate::error::RlmError::Other(format!("MCP server error: {e}")))?;
+        .map_err(|e| crate::error::RlmError::Mcp(format!("{e}")))?;
 
     Ok(())
 }

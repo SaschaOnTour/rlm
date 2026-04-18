@@ -46,9 +46,11 @@ pub mod cli;
 pub mod config;
 
 pub mod db;
+pub mod domain;
 pub mod edit;
 pub mod error;
 pub mod indexer;
+pub mod infrastructure;
 pub mod ingest;
 pub mod mcp;
 pub mod models;

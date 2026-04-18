@@ -7,9 +7,9 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
 use crate::ingest::hasher;
-use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of comparing a file with its indexed version.
 #[derive(Debug, Clone, Serialize)]
@@ -78,7 +78,9 @@ pub fn diff_symbol(
     let chunks = db.get_chunks_by_ident(symbol)?;
     let chunk = chunks
         .first()
-        .ok_or_else(|| crate::error::RlmError::Other(format!("symbol not found: {symbol}")))?;
+        .ok_or_else(|| crate::error::RlmError::SymbolNotFound {
+            ident: symbol.to_string(),
+        })?;
 
     let current = std::fs::read_to_string(&full_path)?;
 

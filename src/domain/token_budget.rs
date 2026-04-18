@@ -1,3 +1,5 @@
+//! Token budget tracking: estimates for operation input/output size.
+
 use serde::Serialize;
 
 /// Bytes per token for plain text (~4 bytes/token heuristic).

@@ -1,8 +1,8 @@
 use serde::Serialize;
 
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_tokens_str, TokenEstimate};
 use crate::error::{Result, RlmError};
-use crate::models::token_estimate::{estimate_tokens_str, TokenEstimate};
 
 /// Number of lines per chunk when semantic partitioning falls back to uniform splitting
 /// (i.e., when the file has no indexed AST chunks).
@@ -185,8 +185,10 @@ fn split_by_keyword(lines: &[&str], re: &regex::Regex) -> Vec<RawPartition> {
 
 /// Keyword partitioning: filter lines by regex, then partition remaining (integration).
 fn partition_keyword(source: &str, pattern: &str) -> Result<Vec<Partition>> {
-    let re =
-        regex::Regex::new(pattern).map_err(|e| RlmError::Other(format!("invalid regex: {e}")))?;
+    let re = regex::Regex::new(pattern).map_err(|e| RlmError::InvalidPattern {
+        pattern: pattern.to_string(),
+        reason: e.to_string(),
+    })?;
 
     let lines: Vec<&str> = source.lines().collect();
     let raw = split_by_keyword(&lines, &re);

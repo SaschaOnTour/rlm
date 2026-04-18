@@ -6,8 +6,8 @@
 use serde::Serialize;
 
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
-use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Priority value assigned to chunks whose file record is unknown,
 /// ensuring they sort below src/ (0), default (1), and fixtures/tests (2).
@@ -43,9 +43,9 @@ pub fn get_type_info(db: &Database, symbol: &str) -> Result<TypeInfoResult> {
     let chunks = db.get_chunks_by_ident(symbol)?;
 
     if chunks.is_empty() {
-        return Err(crate::error::RlmError::Other(format!(
-            "symbol not found: {symbol}"
-        )));
+        return Err(crate::error::RlmError::SymbolNotFound {
+            ident: symbol.to_string(),
+        });
     }
 
     // Build file lookup for O(1) access instead of O(chunks * files)
@@ -68,7 +68,9 @@ pub fn get_type_info(db: &Database, symbol: &str) -> Result<TypeInfoResult> {
             }
             None => UNKNOWN_FILE_PRIORITY, // Unknown files get lowest priority
         })
-        .ok_or_else(|| crate::error::RlmError::Other(format!("symbol not found: {symbol}")))?;
+        .ok_or_else(|| crate::error::RlmError::SymbolNotFound {
+            ident: symbol.to_string(),
+        })?;
 
     let file_path = file_map
         .get(&chunk.file_id)

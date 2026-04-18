@@ -5,8 +5,8 @@
 
 use crate::config::Config;
 use crate::db::Database;
+use crate::domain::token_budget::estimate_json_tokens;
 use crate::indexer;
-use crate::models::token_estimate::estimate_json_tokens;
 use crate::operations::savings;
 use crate::output;
 

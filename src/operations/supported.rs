@@ -4,8 +4,8 @@
 
 use serde::Serialize;
 
+use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::ingest::scanner::{ext_to_lang, is_supported_extension};
-use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of listing supported extensions.
 #[derive(Debug, Clone, Serialize)]

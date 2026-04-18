@@ -8,9 +8,9 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::db::Database;
+use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
 use crate::models::chunk::RefKind;
-use crate::models::token_estimate::{estimate_output_tokens, TokenEstimate};
 
 /// Result of getting dependencies for a file.
 #[derive(Debug, Clone, Serialize)]
@@ -30,7 +30,9 @@ pub struct DepsResult {
 pub fn get_deps(db: &Database, path: &str) -> Result<DepsResult> {
     let file = db
         .get_file_by_path(path)?
-        .ok_or_else(|| crate::error::RlmError::Other(format!("file not found: {path}")))?;
+        .ok_or_else(|| crate::error::RlmError::FileNotFound {
+            path: path.to_string(),
+        })?;
 
     // Use the optimized file-level refs query
     let refs = db.get_refs_for_file(file.id)?;

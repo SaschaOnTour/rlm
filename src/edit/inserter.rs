@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use crate::edit::error::EditError;
 use crate::edit::syntax_guard::{validate_and_write, SyntaxGuard};
 use crate::error::{Result, RlmError};
 use crate::ingest::scanner::ext_to_lang;
@@ -156,10 +157,11 @@ fn insert_relative(source: &str, code: &str, line: u32, after: bool) -> Result<S
         idx > lines.len()
     };
     if out_of_bounds {
-        return Err(RlmError::Other(format!(
-            "line {line} is beyond file length ({})",
-            lines.len()
-        )));
+        return Err(EditError::LineOutOfBounds {
+            line: line as usize,
+            max: lines.len(),
+        }
+        .into());
     }
     Ok(insert_at_line(&lines, code, idx, after))
 }
