@@ -7,34 +7,33 @@ pub mod callgraph;
 pub mod context;
 pub mod deps;
 pub mod diff;
-pub mod files;
 pub mod impact;
 pub mod index;
-pub mod map;
 pub mod refs;
 pub mod savings;
 pub mod scope;
-pub mod search;
 pub mod signature;
-pub mod stats;
-pub mod supported;
 pub mod type_info;
-pub mod verify;
 
 pub use callgraph::{build_callgraph, CallgraphResult};
 pub use context::{build_context, ContextResult};
 pub use deps::{get_deps, DepsResult};
 pub use diff::{diff_file, diff_symbol, FileDiffResult, SymbolDiffResult};
-pub use files::{list_files, FilesFilter, FilesResult, FilesSummary};
 pub use impact::{analyze_impact, ImpactEntry, ImpactResult};
 pub use index::IndexOutput;
-pub use map::{build_map, MapEntry};
 pub use refs::{get_refs, RefHit, RefsResult};
 pub use savings::get_savings_report;
 pub use scope::{get_scope, ScopeResult};
-pub use search::{search_chunks, SearchHit, SearchResult};
 pub use signature::{get_signature, SignatureResult};
-pub use stats::{get_quality_info, get_stats, QualityInfo, StatsResult};
-pub use supported::{list_supported, ExtensionInfo, SupportedResult};
 pub use type_info::{get_type_info, TypeInfoResult};
-pub use verify::{fix_integrity, verify_index, FixResult};
+
+// Slice 3.2 moved these into `crate::application::query::*`. Re-export
+// the previous public API here so adapters that still use the
+// `operations::*` path keep compiling; later slices update adapters to
+// import directly from `application::query`.
+pub use crate::application::query::files::{list_files, FilesFilter, FilesResult, FilesSummary};
+pub use crate::application::query::map::{build_map, MapEntry};
+pub use crate::application::query::search::{search_chunks, SearchHit, SearchResult};
+pub use crate::application::query::stats::{get_quality_info, get_stats, QualityInfo, StatsResult};
+pub use crate::application::query::supported::{list_supported, ExtensionInfo, SupportedResult};
+pub use crate::application::query::verify::{fix_integrity, verify_index, FixResult};
