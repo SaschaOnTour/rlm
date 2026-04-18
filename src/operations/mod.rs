@@ -30,7 +30,7 @@ pub use impact::{analyze_impact, ImpactEntry, ImpactResult};
 pub use index::IndexOutput;
 pub use map::{build_map, MapEntry};
 pub use refs::{get_refs, RefHit, RefsResult};
-pub use savings::{get_savings_report, SavingsReport};
+pub use savings::get_savings_report;
 pub use scope::{get_scope, ScopeResult};
 pub use search::{search_chunks, SearchHit, SearchResult};
 pub use signature::{get_signature, SignatureResult};
