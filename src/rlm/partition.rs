@@ -185,8 +185,10 @@ fn split_by_keyword(lines: &[&str], re: &regex::Regex) -> Vec<RawPartition> {
 
 /// Keyword partitioning: filter lines by regex, then partition remaining (integration).
 fn partition_keyword(source: &str, pattern: &str) -> Result<Vec<Partition>> {
-    let re =
-        regex::Regex::new(pattern).map_err(|e| RlmError::Other(format!("invalid regex: {e}")))?;
+    let re = regex::Regex::new(pattern).map_err(|e| RlmError::InvalidPattern {
+        pattern: pattern.to_string(),
+        reason: e.to_string(),
+    })?;
 
     let lines: Vec<&str> = source.lines().collect();
     let raw = split_by_keyword(&lines, &re);

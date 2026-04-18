@@ -17,9 +17,31 @@ use std::path::Path;
 
 use serde::Serialize;
 use serde_json::{json, Map, Value};
+use thiserror::Error;
 
 use crate::config::Config;
-use crate::error::{Result, RlmError};
+use crate::error::Result;
+
+/// Failures specific to `rlm setup`.
+#[derive(Error, Debug)]
+pub enum SetupError {
+    /// The existing settings file is valid JSON but not an object; we refuse
+    /// to overwrite user content of unknown shape.
+    #[error("{path} is not a JSON object — rlm refuses to overwrite it. Remove or replace the file before re-running setup.")]
+    NotJsonObject { path: String },
+
+    /// The existing settings file is not parseable JSON.
+    #[error("{path} is not valid JSON ({source}) — rlm refuses to overwrite it. Fix the file before re-running setup.")]
+    InvalidJson {
+        path: String,
+        source: serde_json::Error,
+    },
+
+    /// The atomic-write retry budget was exhausted without finding a free
+    /// temp filename. Only plausible under extreme contention or clock skew.
+    #[error("atomic write exhausted {attempts} temp-name attempts")]
+    AtomicWriteExhausted { attempts: u32 },
+}
 
 /// Directory under `project_dir` holding Claude Code settings.
 const CLAUDE_DIR: &str = ".claude";
@@ -196,14 +218,15 @@ fn read_settings(path: &Path) -> Result<Value> {
     }
     match serde_json::from_slice::<Value>(&bytes) {
         Ok(value @ Value::Object(_)) => Ok(value),
-        Ok(_) => Err(RlmError::Other(format!(
-            "{} is not a JSON object — rlm refuses to overwrite it. Remove or replace the file before re-running setup.",
-            path.display()
-        ))),
-        Err(e) => Err(RlmError::Other(format!(
-            "{} is not valid JSON ({e}) — rlm refuses to overwrite it. Fix the file before re-running setup.",
-            path.display()
-        ))),
+        Ok(_) => Err(SetupError::NotJsonObject {
+            path: path.display().to_string(),
+        }
+        .into()),
+        Err(source) => Err(SetupError::InvalidJson {
+            path: path.display().to_string(),
+            source,
+        }
+        .into()),
     }
 }
 
@@ -244,9 +267,10 @@ fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
             return Ok(());
         }
     }
-    Err(RlmError::Other(format!(
-        "atomic write exhausted {MAX_TEMP_ATTEMPTS} temp-name attempts"
-    )))
+    Err(SetupError::AtomicWriteExhausted {
+        attempts: MAX_TEMP_ATTEMPTS,
+    }
+    .into())
 }
 
 /// One attempt at atomic write. Returns `Ok(true)` on success, `Ok(false)` if

@@ -78,7 +78,9 @@ pub fn diff_symbol(
     let chunks = db.get_chunks_by_ident(symbol)?;
     let chunk = chunks
         .first()
-        .ok_or_else(|| crate::error::RlmError::Other(format!("symbol not found: {symbol}")))?;
+        .ok_or_else(|| crate::error::RlmError::SymbolNotFound {
+            ident: symbol.to_string(),
+        })?;
 
     let current = std::fs::read_to_string(&full_path)?;
 

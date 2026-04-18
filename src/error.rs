@@ -1,5 +1,8 @@
 use thiserror::Error;
 
+use crate::edit::error::EditError;
+use crate::setup::SetupError;
+
 #[derive(Error, Debug)]
 pub enum RlmError {
     #[error("database error: {0}")]
@@ -7,6 +10,9 @@ pub enum RlmError {
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
 
     #[error("index not found: project must be indexed first")]
     IndexNotFound,
@@ -35,17 +41,23 @@ pub enum RlmError {
     #[error("edit conflict: file changed on disk")]
     EditConflict,
 
-    #[error("json error: {0}")]
-    Json(#[from] serde_json::Error),
-
     #[error("config error: {0}")]
     Config(String),
 
     #[error("path traversal rejected: {path}")]
     PathTraversal { path: String },
 
-    #[error("{0}")]
-    Other(String),
+    #[error("invalid pattern {pattern:?}: {reason}")]
+    InvalidPattern { pattern: String, reason: String },
+
+    #[error("mcp server error: {0}")]
+    Mcp(String),
+
+    #[error(transparent)]
+    Setup(#[from] SetupError),
+
+    #[error(transparent)]
+    Edit(#[from] EditError),
 }
 
 pub type Result<T> = std::result::Result<T, RlmError>;

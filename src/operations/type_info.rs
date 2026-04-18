@@ -43,9 +43,9 @@ pub fn get_type_info(db: &Database, symbol: &str) -> Result<TypeInfoResult> {
     let chunks = db.get_chunks_by_ident(symbol)?;
 
     if chunks.is_empty() {
-        return Err(crate::error::RlmError::Other(format!(
-            "symbol not found: {symbol}"
-        )));
+        return Err(crate::error::RlmError::SymbolNotFound {
+            ident: symbol.to_string(),
+        });
     }
 
     // Build file lookup for O(1) access instead of O(chunks * files)
@@ -68,7 +68,9 @@ pub fn get_type_info(db: &Database, symbol: &str) -> Result<TypeInfoResult> {
             }
             None => UNKNOWN_FILE_PRIORITY, // Unknown files get lowest priority
         })
-        .ok_or_else(|| crate::error::RlmError::Other(format!("symbol not found: {symbol}")))?;
+        .ok_or_else(|| crate::error::RlmError::SymbolNotFound {
+            ident: symbol.to_string(),
+        })?;
 
     let file_path = file_map
         .get(&chunk.file_id)

@@ -30,7 +30,9 @@ pub struct DepsResult {
 pub fn get_deps(db: &Database, path: &str) -> Result<DepsResult> {
     let file = db
         .get_file_by_path(path)?
-        .ok_or_else(|| crate::error::RlmError::Other(format!("file not found: {path}")))?;
+        .ok_or_else(|| crate::error::RlmError::FileNotFound {
+            path: path.to_string(),
+        })?;
 
     // Use the optimized file-level refs query
     let refs = db.get_refs_for_file(file.id)?;

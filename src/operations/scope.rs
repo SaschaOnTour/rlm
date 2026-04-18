@@ -27,7 +27,9 @@ pub struct ScopeResult {
 pub fn get_scope(db: &Database, path: &str, line: u32) -> Result<ScopeResult> {
     let file = db
         .get_file_by_path(path)?
-        .ok_or_else(|| crate::error::RlmError::Other(format!("file not found: {path}")))?;
+        .ok_or_else(|| crate::error::RlmError::FileNotFound {
+            path: path.to_string(),
+        })?;
 
     let chunks = db.get_chunks_for_file(file.id)?;
 
