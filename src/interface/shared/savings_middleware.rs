@@ -30,7 +30,8 @@ use super::{AlternativeCost, OperationMeta, OperationResponse};
 /// - [`AlternativeCost::SingleFile`]  — delegates to `record_file_op`.
 /// - [`AlternativeCost::SymbolFiles`] — delegates to `record_symbol_op`.
 /// - [`AlternativeCost::ScopedFiles`] — delegates to `record_scoped_op`.
-/// - [`AlternativeCost::Fixed`]       — uses `Database::record_savings`
+/// - [`AlternativeCost::Fixed`]       — records via `savings::record`
+///   (V2-aware legacy wrapper, sets `rlm_calls = alt_calls = 1`)
 ///   with the caller-supplied alternative token count.
 /// - [`AlternativeCost::AtLeastBody`] — same as `Fixed` but clamps the
 ///   alternative count up to the actual body token count, matching the
@@ -61,14 +62,24 @@ pub fn record_operation<T: Serialize>(
         AlternativeCost::Fixed(alt_tokens) => {
             let json = output::to_json(result);
             let out_tokens = estimate_json_tokens(json.len());
-            let _ = db.record_savings(meta.command, out_tokens, *alt_tokens, meta.files_touched);
+            // Route through savings::record (V2-aware legacy wrapper)
+            // rather than Database::record_savings — the latter leaves
+            // rlm_calls/alt_calls NULL, which COALESCEs to 0 in the
+            // aggregate SQL and undercounts call overhead in reports.
+            savings::record(
+                db,
+                meta.command,
+                out_tokens,
+                *alt_tokens,
+                meta.files_touched,
+            );
             (json, out_tokens)
         }
         AlternativeCost::AtLeastBody { base } => {
             let json = output::to_json(result);
             let out_tokens = estimate_json_tokens(json.len());
             let alt_tokens = (*base).max(out_tokens);
-            let _ = db.record_savings(meta.command, out_tokens, alt_tokens, meta.files_touched);
+            savings::record(db, meta.command, out_tokens, alt_tokens, meta.files_touched);
             (json, out_tokens)
         }
     };
@@ -181,6 +192,12 @@ mod tests {
             .find(|r| r.command == "search")
             .expect("search entry");
         assert_eq!(row.alt_tokens, FIXED_TOKENS);
+        // Regression guard: Fixed and AtLeastBody must record through the
+        // V2-aware savings::record, not the bare Database::record_savings
+        // INSERT. Otherwise rlm_calls/alt_calls stay NULL and the savings
+        // report undercounts call overhead.
+        assert_eq!(row.rlm_calls, 1);
+        assert_eq!(row.alt_calls, 1);
     }
 
     #[test]
@@ -232,6 +249,9 @@ mod tests {
             .find(|r| r.command == "search")
             .expect("search entry");
         assert_eq!(row.alt_tokens, LARGE_BASE);
+        // Same regression guard as the Fixed test.
+        assert_eq!(row.rlm_calls, 1);
+        assert_eq!(row.alt_calls, 1);
     }
 
     #[test]
