@@ -2,14 +2,14 @@
 
 /// Final response from an operation pipeline.
 ///
-/// Both CLI and MCP adapters consume this the same way: write `body` to
-/// their output sink and attach `tokens_out` to their own metadata
-/// without re-serializing the payload.
+/// CLI and MCP adapters consume this the same way: hand `body` to their
+/// output path (where a `Formatter` may reformat it for pretty / TOON)
+/// and attach `tokens_out` to their own metadata.
 #[derive(Debug, Clone)]
 pub struct OperationResponse {
-    /// Serialized operation result. The format is determined by the
-    /// formatter context (slice 2.2) — default JSON, alternatives pretty
-    /// and TOON.
+    /// Serialized operation result as produced by the pipeline. Always
+    /// raw minified JSON; adapters reformat it via `Formatter` before
+    /// writing to their output sink.
     pub body: String,
     /// Estimated token count of `body` on the caller side.
     pub tokens_out: u64,

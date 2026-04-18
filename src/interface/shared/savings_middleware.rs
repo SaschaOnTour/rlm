@@ -41,32 +41,38 @@ pub fn record_operation<T: Serialize>(
     meta: &OperationMeta,
     result: &T,
 ) -> OperationResponse {
-    let json = match &meta.alternative {
+    let (json, tokens_out) = match &meta.alternative {
         AlternativeCost::SingleFile { path } => {
-            savings::record_file_op(db, meta.command, result, path)
+            let json = savings::record_file_op(db, meta.command, result, path);
+            let tokens_out = estimate_json_tokens(json.len());
+            (json, tokens_out)
         }
         AlternativeCost::SymbolFiles { symbol } => {
-            savings::record_symbol_op(db, meta.command, result, symbol, meta.files_touched)
+            let json =
+                savings::record_symbol_op(db, meta.command, result, symbol, meta.files_touched);
+            let tokens_out = estimate_json_tokens(json.len());
+            (json, tokens_out)
         }
         AlternativeCost::ScopedFiles { prefix } => {
-            savings::record_scoped_op(db, meta.command, result, prefix.as_deref())
+            let json = savings::record_scoped_op(db, meta.command, result, prefix.as_deref());
+            let tokens_out = estimate_json_tokens(json.len());
+            (json, tokens_out)
         }
         AlternativeCost::Fixed(alt_tokens) => {
             let json = output::to_json(result);
             let out_tokens = estimate_json_tokens(json.len());
             let _ = db.record_savings(meta.command, out_tokens, *alt_tokens, meta.files_touched);
-            json
+            (json, out_tokens)
         }
         AlternativeCost::AtLeastBody { base } => {
             let json = output::to_json(result);
             let out_tokens = estimate_json_tokens(json.len());
             let alt_tokens = (*base).max(out_tokens);
             let _ = db.record_savings(meta.command, out_tokens, alt_tokens, meta.files_touched);
-            json
+            (json, out_tokens)
         }
     };
 
-    let tokens_out = estimate_json_tokens(json.len());
     OperationResponse::new(json, tokens_out)
 }
 
