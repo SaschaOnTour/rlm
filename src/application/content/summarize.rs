@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+use crate::application::FileQuery;
 use crate::db::Database;
 use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::{Result, RlmError};
@@ -98,6 +99,18 @@ fn generate_description(lang: &str, symbols: &[SymbolSummary]) -> String {
         "{lang} file with {}. {pub_count} public symbol(s).",
         parts.join(", ")
     )
+}
+
+/// `summarize <path>` as a [`FileQuery`].
+pub struct SummarizeQuery;
+
+impl FileQuery for SummarizeQuery {
+    type Output = Summary;
+    const COMMAND: &'static str = "summarize";
+
+    fn execute(&self, db: &Database, path: &str) -> Result<Self::Output> {
+        summarize(db, path)
+    }
 }
 
 #[cfg(test)]

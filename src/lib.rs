@@ -42,6 +42,7 @@
     clippy::manual_let_else
 )]
 
+pub mod application;
 pub mod cli;
 pub mod config;
 

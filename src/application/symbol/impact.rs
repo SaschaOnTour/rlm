@@ -54,26 +54,19 @@ impl ImpactResult {
 /// Returns all locations (file, containing symbol, line, ref kind)
 /// that reference this symbol and would need updating if it changes.
 pub fn analyze_impact(db: &Database, symbol: &str) -> Result<ImpactResult> {
-    let refs = db.get_refs_to(symbol)?;
+    // Single JOIN query instead of the legacy N+1 (get_chunk_by_id +
+    // get_all_files per ref). See `Database::get_refs_with_context`.
+    let refs_with_ctx = db.get_refs_with_context(symbol)?;
 
-    let mut impacted = Vec::new();
-    for r in &refs {
-        if let Some(chunk) = db.get_chunk_by_id(r.chunk_id)? {
-            let file = db
-                .get_all_files()
-                .ok()
-                .and_then(|files| files.into_iter().find(|f| f.id == chunk.file_id))
-                .map(|f| f.path)
-                .unwrap_or_default();
-
-            impacted.push(ImpactEntry {
-                file,
-                in_symbol: chunk.ident,
-                line: r.line,
-                ref_kind: r.ref_kind.as_str().to_string(),
-            });
-        }
-    }
+    let impacted: Vec<ImpactEntry> = refs_with_ctx
+        .into_iter()
+        .map(|rc| ImpactEntry {
+            file: rc.file_path,
+            in_symbol: rc.containing_symbol,
+            line: rc.reference.line,
+            ref_kind: rc.reference.ref_kind.as_str().to_string(),
+        })
+        .collect();
 
     let count = impacted.len();
     let mut result = ImpactResult {

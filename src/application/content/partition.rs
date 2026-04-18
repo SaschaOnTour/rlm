@@ -1,5 +1,8 @@
+use std::path::PathBuf;
+
 use serde::Serialize;
 
+use crate::application::FileQuery;
 use crate::db::Database;
 use crate::domain::token_budget::{estimate_tokens_str, TokenEstimate};
 use crate::error::{Result, RlmError};
@@ -200,6 +203,25 @@ fn partition_keyword(source: &str, pattern: &str) -> Result<Vec<Partition>> {
         .collect();
 
     Ok(partitions)
+}
+
+/// `partition <path> <strategy>` as a [`FileQuery`].
+///
+/// Strategy and project root travel on the struct rather than as
+/// execute parameters so the trait signature stays uniform across all
+/// file queries.
+pub struct PartitionQuery {
+    pub strategy: Strategy,
+    pub project_root: PathBuf,
+}
+
+impl FileQuery for PartitionQuery {
+    type Output = PartitionResult;
+    const COMMAND: &'static str = "partition";
+
+    fn execute(&self, db: &Database, path: &str) -> Result<Self::Output> {
+        partition_file(db, path, &self.strategy, &self.project_root)
+    }
 }
 
 #[cfg(test)]

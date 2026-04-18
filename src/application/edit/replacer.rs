@@ -1,5 +1,5 @@
+use super::validator::{validate_and_write, SyntaxGuard};
 use crate::db::Database;
-use crate::edit::syntax_guard::{validate_and_write, SyntaxGuard};
 use crate::error::{Result, RlmError};
 use crate::ingest::scanner::ext_to_lang;
 use crate::models::chunk::Chunk;

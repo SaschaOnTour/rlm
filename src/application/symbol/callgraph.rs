@@ -27,27 +27,22 @@ pub struct CallgraphResult {
 /// Returns the list of callers (who calls this symbol) and callees
 /// (what this symbol calls).
 pub fn build_callgraph(db: &Database, symbol: &str) -> Result<CallgraphResult> {
-    // Find who calls this symbol (callers)
-    let callers_refs = db.get_refs_to(symbol)?;
+    // Callers: single JOIN lookup replaces the per-ref get_chunk_by_id
+    // loop the legacy code ran to turn each reference into its caller
+    // symbol name. See `Database::get_refs_with_context`.
+    let caller_refs = db.get_refs_with_context(symbol)?;
+    let caller_names: Vec<String> = caller_refs
+        .into_iter()
+        .map(|rc| rc.containing_symbol)
+        .collect();
 
-    // Find what this symbol calls (callees)
+    // Callees: chunks for this symbol, then refs from each chunk.
     let chunks = db.get_chunks_by_ident(symbol)?;
     let mut callees_refs = Vec::new();
     for chunk in &chunks {
         let refs = db.get_refs_from_chunk(chunk.id)?;
         callees_refs.extend(refs);
     }
-
-    // Extract caller names from the chunks containing the references
-    let caller_names: Vec<String> = callers_refs
-        .iter()
-        .filter_map(|r| {
-            db.get_chunk_by_id(r.chunk_id)
-                .ok()
-                .flatten()
-                .map(|c| c.ident)
-        })
-        .collect();
 
     // Extract callee names (only Call refs, deduplicated)
     let callee_names: Vec<String> = callees_refs

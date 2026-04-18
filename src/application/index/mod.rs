@@ -200,6 +200,21 @@ fn accumulate_outcome(result: &mut IndexResult, outcome: FileOutcome) {
 /// Progress callback: (current_file_1based, total_files).
 pub type ProgressCallback = dyn Fn(usize, usize) + Send;
 
+/// Run `work` inside an IMMEDIATE transaction: commit on Ok, roll back
+/// on Err. Shared by `run_index` and `reindex_single_file` so the
+/// BEGIN/COMMIT/ROLLBACK boilerplate lives in exactly one place.
+fn run_in_transaction<T>(db: &Database, work: impl FnOnce() -> Result<T>) -> Result<T> {
+    db.conn().execute_batch("BEGIN IMMEDIATE")?;
+    let outcome = work();
+    match &outcome {
+        Ok(_) => db.conn().execute_batch("COMMIT")?,
+        Err(_) => {
+            let _ = db.conn().execute_batch("ROLLBACK");
+        }
+    }
+    outcome
+}
+
 /// Run the indexer: scan files, parse chunks, store in DB.
 pub fn run_index(config: &Config, progress: Option<&ProgressCallback>) -> Result<IndexResult> {
     config.ensure_rlm_dir()?;
@@ -219,8 +234,7 @@ pub fn run_index(config: &Config, progress: Option<&ProgressCallback>) -> Result
 
     let scanned_paths: HashSet<String> = scanned.iter().map(|f| f.relative_path.clone()).collect();
 
-    db.conn().execute_batch("BEGIN IMMEDIATE")?;
-    let tx_result = (|| -> Result<()> {
+    run_in_transaction(&db, || {
         result.deleted_from_index = purge_deleted_files(&db, &scanned_paths)?;
 
         let total = scanned.len();
@@ -232,14 +246,7 @@ pub fn run_index(config: &Config, progress: Option<&ProgressCallback>) -> Result
             accumulate_outcome(&mut result, outcome);
         }
         Ok(())
-    })();
-    match &tx_result {
-        Ok(()) => db.conn().execute_batch("COMMIT")?,
-        Err(_) => {
-            let _ = db.conn().execute_batch("ROLLBACK");
-        }
-    }
-    tx_result?;
+    })?;
 
     Ok(result)
 }
@@ -261,8 +268,7 @@ pub fn reindex_single_file(
         return Ok((0, 0));
     }
 
-    db.conn().execute_batch("BEGIN IMMEDIATE")?;
-    let tx_result = (|| -> Result<(usize, usize)> {
+    run_in_transaction(db, || {
         if let Some(existing) = db.get_file_by_path(rel_path)? {
             db.delete_chunks_for_file(existing.id)?;
         }
@@ -284,14 +290,7 @@ pub fn reindex_single_file(
         );
         let file_id = db.upsert_file(&file_record)?;
         index_source(db, &dispatcher, &source, file_id, rel_path)
-    })();
-    match &tx_result {
-        Ok(_) => db.conn().execute_batch("COMMIT")?,
-        Err(_) => {
-            let _ = db.conn().execute_batch("ROLLBACK");
-        }
-    }
-    tx_result
+    })
 }
 
 /// Max lines to include in the post-write preview.

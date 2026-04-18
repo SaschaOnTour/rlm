@@ -8,15 +8,18 @@
 
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
-use serde::Serialize;
 
+use crate::application::content::{
+    DepsQuery, DiffFileQuery, DiffSymbolQuery, PartitionQuery, SummarizeQuery,
+};
+use crate::application::symbol::{ContextQuery, ContextWithGraphQuery, ScopeQuery};
 use crate::config::Config;
 use crate::db::Database;
-use crate::interface::shared::{record_operation, AlternativeCost, OperationMeta};
+use crate::interface::shared::{record_file_query, record_symbol_query};
 use crate::operations;
 use crate::operations::savings;
 use crate::output::Formatter;
-use crate::rlm::{partition, summarize};
+use crate::rlm::partition;
 
 use super::server::RlmServer;
 
@@ -68,18 +71,12 @@ pub fn handle_partition(
         ));
     };
 
-    match partition::partition_file(db, path, &strategy, project_root) {
-        Ok(result) => {
-            let meta = OperationMeta {
-                command: "partition",
-                files_touched: 1,
-                alternative: AlternativeCost::SingleFile {
-                    path: path.to_string(),
-                },
-            };
-            let response = record_operation(db, &meta, &result);
-            Ok(RlmServer::success_text(formatter, response.body))
-        }
+    let query = PartitionQuery {
+        strategy,
+        project_root: project_root.to_path_buf(),
+    };
+    match record_file_query(db, &query, path) {
+        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
@@ -91,19 +88,8 @@ pub fn handle_summarize(
     path: &str,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    let result = summarize::summarize(db, path);
-    match result {
-        Ok(val) => {
-            let meta = OperationMeta {
-                command: "summarize",
-                files_touched: 1,
-                alternative: AlternativeCost::SingleFile {
-                    path: path.to_string(),
-                },
-            };
-            let response = record_operation(db, &meta, &val);
-            Ok(RlmServer::success_text(formatter, response.body))
-        }
+    match record_file_query(db, &SummarizeQuery, path) {
+        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
@@ -117,30 +103,21 @@ pub fn handle_diff(
     project_root: &std::path::Path,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    let meta = OperationMeta {
-        command: "diff",
-        files_touched: 1,
-        alternative: AlternativeCost::SingleFile {
-            path: path.to_string(),
-        },
-    };
-
-    if let Some(sym) = symbol {
-        match operations::diff_symbol(db, path, sym, project_root) {
-            Ok(result) => {
-                let response = record_operation(db, &meta, &result);
-                Ok(RlmServer::success_text(formatter, response.body))
-            }
-            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-        }
+    let result = if let Some(sym) = symbol {
+        let query = DiffSymbolQuery {
+            symbol: sym.to_string(),
+            project_root: project_root.to_path_buf(),
+        };
+        record_file_query(db, &query, path)
     } else {
-        match operations::diff_file(db, path, project_root) {
-            Ok(result) => {
-                let response = record_operation(db, &meta, &result);
-                Ok(RlmServer::success_text(formatter, response.body))
-            }
-            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-        }
+        let query = DiffFileQuery {
+            project_root: project_root.to_path_buf(),
+        };
+        record_file_query(db, &query, path)
+    };
+    match result {
+        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
@@ -152,37 +129,13 @@ pub fn handle_context(
     include_graph: bool,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match operations::build_context(db, symbol) {
-        Ok(ctx_result) => {
-            let meta = OperationMeta {
-                command: "context",
-                files_touched: ctx_result.file_count as u64,
-                alternative: AlternativeCost::SymbolFiles {
-                    symbol: symbol.to_string(),
-                },
-            };
-            if include_graph {
-                match operations::build_callgraph(db, symbol) {
-                    Ok(graph) => {
-                        #[derive(Serialize)]
-                        struct ContextWithGraph<'a> {
-                            context: &'a operations::ContextResult,
-                            callgraph: &'a operations::CallgraphResult,
-                        }
-                        let combined = ContextWithGraph {
-                            context: &ctx_result,
-                            callgraph: &graph,
-                        };
-                        let response = record_operation(db, &meta, &combined);
-                        Ok(RlmServer::success_text(formatter, response.body))
-                    }
-                    Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-                }
-            } else {
-                let response = record_operation(db, &meta, &ctx_result);
-                Ok(RlmServer::success_text(formatter, response.body))
-            }
-        }
+    let result = if include_graph {
+        record_symbol_query::<ContextWithGraphQuery>(db, symbol)
+    } else {
+        record_symbol_query::<ContextQuery>(db, symbol)
+    };
+    match result {
+        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
@@ -194,19 +147,8 @@ pub fn handle_deps(
     path: &str,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    let result = operations::get_deps(db, path);
-    match result {
-        Ok(val) => {
-            let meta = OperationMeta {
-                command: "deps",
-                files_touched: 1,
-                alternative: AlternativeCost::SingleFile {
-                    path: path.to_string(),
-                },
-            };
-            let response = record_operation(db, &meta, &val);
-            Ok(RlmServer::success_text(formatter, response.body))
-        }
+    match record_file_query(db, &DepsQuery, path) {
+        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
@@ -219,18 +161,8 @@ pub fn handle_scope(
     line: u32,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match operations::get_scope(db, path, line) {
-        Ok(result) => {
-            let meta = OperationMeta {
-                command: "scope",
-                files_touched: 1,
-                alternative: AlternativeCost::SingleFile {
-                    path: path.to_string(),
-                },
-            };
-            let response = record_operation(db, &meta, &result);
-            Ok(RlmServer::success_text(formatter, response.body))
-        }
+    match record_file_query(db, &ScopeQuery { line }, path) {
+        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }

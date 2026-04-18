@@ -2,10 +2,11 @@
 //!
 //! Provides consistent behavior for comparing indexed versions with current disk versions.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::application::FileQuery;
 use crate::db::Database;
 use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
@@ -102,6 +103,35 @@ pub fn diff_symbol(
     };
     result.tokens = estimate_output_tokens(&result);
     Ok(result)
+}
+
+/// `diff <path>` without a symbol filter, as a [`FileQuery`].
+pub struct DiffFileQuery {
+    pub project_root: PathBuf,
+}
+
+impl FileQuery for DiffFileQuery {
+    type Output = FileDiffResult;
+    const COMMAND: &'static str = "diff";
+
+    fn execute(&self, db: &Database, path: &str) -> Result<Self::Output> {
+        diff_file(db, path, &self.project_root)
+    }
+}
+
+/// `diff <path> --symbol <sym>` as a [`FileQuery`].
+pub struct DiffSymbolQuery {
+    pub symbol: String,
+    pub project_root: PathBuf,
+}
+
+impl FileQuery for DiffSymbolQuery {
+    type Output = SymbolDiffResult;
+    const COMMAND: &'static str = "diff";
+
+    fn execute(&self, db: &Database, path: &str) -> Result<Self::Output> {
+        diff_symbol(db, path, &self.symbol, &self.project_root)
+    }
 }
 
 #[cfg(test)]

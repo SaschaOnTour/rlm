@@ -9,6 +9,9 @@ use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
 use crate::models::chunk::RefKind;
 
+use super::callgraph::{build_callgraph, CallgraphResult};
+use super::SymbolQuery;
+
 /// Complete context information for a symbol.
 #[derive(Debug, Clone, Serialize)]
 pub struct ContextResult {
@@ -70,6 +73,49 @@ pub fn build_context(db: &Database, symbol: &str) -> Result<ContextResult> {
     };
     result.tokens = estimate_output_tokens(&result);
     Ok(result)
+}
+
+/// Bare context query — symbol body + caller count + callee names, no
+/// full callgraph expansion.
+pub struct ContextQuery;
+
+impl SymbolQuery for ContextQuery {
+    type Output = ContextResult;
+    const COMMAND: &'static str = "context";
+
+    fn execute(db: &Database, symbol: &str) -> Result<Self::Output> {
+        build_context(db, symbol)
+    }
+
+    fn file_count(output: &Self::Output) -> u64 {
+        output.file_count as u64
+    }
+}
+
+/// Combined envelope returned by [`ContextWithGraphQuery`]: the bare
+/// context plus the full callgraph.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextWithGraph {
+    pub context: ContextResult,
+    pub callgraph: CallgraphResult,
+}
+
+/// Context query with full callgraph expansion.
+pub struct ContextWithGraphQuery;
+
+impl SymbolQuery for ContextWithGraphQuery {
+    type Output = ContextWithGraph;
+    const COMMAND: &'static str = "context";
+
+    fn execute(db: &Database, symbol: &str) -> Result<Self::Output> {
+        let context = build_context(db, symbol)?;
+        let callgraph = build_callgraph(db, symbol)?;
+        Ok(ContextWithGraph { context, callgraph })
+    }
+
+    fn file_count(output: &Self::Output) -> u64 {
+        output.context.file_count as u64
+    }
 }
 
 #[cfg(test)]
