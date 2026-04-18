@@ -17,16 +17,19 @@ use clap::Parser;
 use rlm::cli::commands::{self, Cli, Command};
 use rlm::cli::handlers;
 use rlm::cli::handlers_util;
-use rlm::output;
+use rlm::output::{Formatter, OutputFormat};
 
 fn main() {
     let cli = Cli::parse();
-    // MCP server sets its own format from config — don't override with CLI flag
-    if !matches!(cli.command, Command::Mcp) {
+    // MCP server builds its own Formatter from its project config — don't
+    // derive one from CLI flags here.
+    let formatter = if matches!(cli.command, Command::Mcp) {
+        Formatter::default()
+    } else {
         let format = match cli.format {
-            Some(commands::FormatArg::Pretty) => output::OutputFormat::Pretty,
-            Some(commands::FormatArg::Toon) => output::OutputFormat::Toon,
-            Some(commands::FormatArg::Json) => output::OutputFormat::Json,
+            Some(commands::FormatArg::Pretty) => OutputFormat::Pretty,
+            Some(commands::FormatArg::Toon) => OutputFormat::Toon,
+            Some(commands::FormatArg::Json) => OutputFormat::Json,
             None => {
                 // No explicit --format flag: read format from the command's
                 // target config so `rlm index /other/project` respects
@@ -39,62 +42,74 @@ fn main() {
                         rlm::config::Config::new(&cwd)
                     }
                 };
-                output::OutputFormat::from_str_loose(&config.settings.output.format)
+                OutputFormat::from_str_loose(&config.settings.output.format)
             }
         };
-        output::init(format);
-    }
+        Formatter::new(format)
+    };
 
-    if let Err(e) = run(cli) {
-        eprintln!("{}", output::serialize_error(&e));
+    if let Err(e) = run(cli, formatter) {
+        eprintln!("{}", formatter.serialize_error(&e));
         std::process::exit(1);
     }
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn std::fmt::Display>> {
+fn run(cli: Cli, formatter: Formatter) -> Result<(), Box<dyn std::fmt::Display>> {
     match cli.command {
-        Command::Index { path } => handlers::cmd_index(&path),
-        Command::Search { query, limit } => handlers::cmd_search(&query, limit),
+        Command::Index { path } => handlers::cmd_index(&path, formatter),
+        Command::Search { query, limit } => handlers::cmd_search(&query, limit, formatter),
         Command::Read {
             path,
             symbol,
             section,
             metadata,
-        } => handlers::cmd_read(&path, symbol.as_deref(), section.as_deref(), metadata),
-        Command::Overview { detail, path } => handlers::cmd_overview(&detail, path.as_deref()),
-        Command::Refs { symbol } => handlers::cmd_refs(&symbol),
+        } => handlers::cmd_read(
+            &path,
+            symbol.as_deref(),
+            section.as_deref(),
+            metadata,
+            formatter,
+        ),
+        Command::Overview { detail, path } => {
+            handlers::cmd_overview(&detail, path.as_deref(), formatter)
+        }
+        Command::Refs { symbol } => handlers::cmd_refs(&symbol, formatter),
         Command::Replace {
             path,
             symbol,
             code,
             preview,
-        } => handlers::cmd_replace(&path, &symbol, &code, preview),
+        } => handlers::cmd_replace(&path, &symbol, &code, preview, formatter),
         Command::Insert {
             path,
             code,
             position,
-        } => handlers::cmd_insert(&path, &code, &position),
-        Command::Stats { savings, since } => handlers_util::cmd_stats(savings, since.as_deref()),
-        Command::Partition { path, strategy } => handlers::cmd_partition(&path, &strategy),
-        Command::Summarize { path } => handlers::cmd_summarize(&path),
-        Command::Diff { path, symbol } => handlers::cmd_diff(&path, symbol.as_deref()),
-        Command::Context { symbol, graph } => handlers::cmd_context(&symbol, graph),
-        Command::Deps { path } => handlers::cmd_deps(&path),
-        Command::Scope { path, line } => handlers::cmd_scope(&path, line),
+        } => handlers::cmd_insert(&path, &code, &position, formatter),
+        Command::Stats { savings, since } => {
+            handlers_util::cmd_stats(savings, since.as_deref(), formatter)
+        }
+        Command::Partition { path, strategy } => {
+            handlers::cmd_partition(&path, &strategy, formatter)
+        }
+        Command::Summarize { path } => handlers::cmd_summarize(&path, formatter),
+        Command::Diff { path, symbol } => handlers::cmd_diff(&path, symbol.as_deref(), formatter),
+        Command::Context { symbol, graph } => handlers::cmd_context(&symbol, graph, formatter),
+        Command::Deps { path } => handlers::cmd_deps(&path, formatter),
+        Command::Scope { path, line } => handlers::cmd_scope(&path, line, formatter),
         Command::Mcp => handlers_util::cmd_mcp(),
         Command::Quality {
             unknown_only,
             all,
             clear,
             summary,
-        } => handlers_util::cmd_quality(unknown_only, all, clear, summary),
+        } => handlers_util::cmd_quality(unknown_only, all, clear, summary, formatter),
         Command::Files {
             path,
             skipped_only,
             indexed_only,
-        } => handlers_util::cmd_files(path.as_deref(), skipped_only, indexed_only),
-        Command::Verify { fix } => handlers_util::cmd_verify(fix),
-        Command::Supported => handlers_util::cmd_supported(),
-        Command::Setup { check, remove } => handlers_util::cmd_setup(check, remove),
+        } => handlers_util::cmd_files(path.as_deref(), skipped_only, indexed_only, formatter),
+        Command::Verify { fix } => handlers_util::cmd_verify(fix, formatter),
+        Command::Supported => handlers_util::cmd_supported(formatter),
+        Command::Setup { check, remove } => handlers_util::cmd_setup(check, remove, formatter),
     }
 }

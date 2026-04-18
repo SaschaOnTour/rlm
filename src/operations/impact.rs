@@ -32,6 +32,23 @@ pub struct ImpactResult {
     pub tokens: TokenEstimate,
 }
 
+impl ImpactResult {
+    /// Number of distinct files containing at least one impacted location.
+    ///
+    /// This is the count the savings middleware's `SymbolFiles` cost
+    /// model needs for `files_touched` — using `count` would overstate
+    /// `alt_calls` whenever multiple hits share a file.
+    #[must_use]
+    pub fn file_count(&self) -> u64 {
+        use std::collections::HashSet;
+        self.impacted
+            .iter()
+            .map(|e| e.file.as_str())
+            .collect::<HashSet<_>>()
+            .len() as u64
+    }
+}
+
 /// Analyze the impact of changing a symbol.
 ///
 /// Returns all locations (file, containing symbol, line, ref kind)
@@ -112,6 +129,49 @@ mod tests {
 
     fn setup_test_db() -> Database {
         Database::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn file_count_deduplicates_hits_per_file() {
+        let result = ImpactResult {
+            symbol: "foo".into(),
+            impacted: vec![
+                ImpactEntry {
+                    file: "src/a.rs".into(),
+                    in_symbol: "caller_a1".into(),
+                    line: 10,
+                    ref_kind: "call".into(),
+                },
+                ImpactEntry {
+                    file: "src/a.rs".into(),
+                    in_symbol: "caller_a2".into(),
+                    line: 20,
+                    ref_kind: "call".into(),
+                },
+                ImpactEntry {
+                    file: "src/b.rs".into(),
+                    in_symbol: "caller_b".into(),
+                    line: 5,
+                    ref_kind: "call".into(),
+                },
+            ],
+            count: 3,
+            tokens: TokenEstimate::default(),
+        };
+        // 3 hits across 2 distinct files.
+        assert_eq!(result.count, 3);
+        assert_eq!(result.file_count(), 2);
+    }
+
+    #[test]
+    fn file_count_is_zero_for_empty_result() {
+        let result = ImpactResult {
+            symbol: "foo".into(),
+            impacted: Vec::new(),
+            count: 0,
+            tokens: TokenEstimate::default(),
+        };
+        assert_eq!(result.file_count(), 0);
     }
 
     #[test]

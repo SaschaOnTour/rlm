@@ -7,18 +7,18 @@ use crate::cli::helpers::{
     cmd_single_file_op, emit_read_symbol, format_chunks, get_config, get_db, map_err,
     parse_strategy, print_str, print_write_result, CmdResult,
 };
-use crate::domain::token_budget::estimate_json_tokens;
 use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
+use crate::interface::shared::{record_operation, AlternativeCost, OperationMeta};
 use crate::operations;
 use crate::operations::savings;
-use crate::output;
+use crate::output::{self, Formatter};
 use crate::rlm::{partition, peek, summarize};
 use crate::search::tree;
 
-pub fn cmd_index(path: &str) -> CmdResult {
+pub fn cmd_index(path: &str, formatter: Formatter) -> CmdResult {
     let config = if path == "." {
         get_config()?
     } else {
@@ -35,21 +35,23 @@ pub fn cmd_index(path: &str) -> CmdResult {
         eprintln!();
     }
     let output: operations::IndexOutput = result.into();
-    output::print(&output);
+    formatter.print(&output);
     Ok(())
 }
 
-pub fn cmd_search(query: &str, limit: usize) -> CmdResult {
+pub fn cmd_search(query: &str, limit: usize, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let result = operations::search_chunks(&db, query, limit).map_err(map_err)?;
-    // Estimate tokens from JSON (savings always tracks JSON cost, regardless of output format)
-    let json_for_savings = output::to_json(&result);
-    let out_tokens = estimate_json_tokens(json_for_savings.len());
-    let file_count = result.results.len() as u64;
-    let alt_tokens = result.tokens.output.max(out_tokens);
-    savings::record(&db, "search", out_tokens, alt_tokens, file_count);
-    output::print(&result);
+    let meta = OperationMeta {
+        command: "search",
+        files_touched: result.file_count,
+        alternative: AlternativeCost::AtLeastBody {
+            base: result.tokens.output,
+        },
+    };
+    let response = record_operation(&db, &meta, &result);
+    print_str(formatter, &response.body);
     Ok(())
 }
 
@@ -58,17 +60,18 @@ pub fn cmd_read(
     symbol: Option<&str>,
     section: Option<&str>,
     metadata: bool,
+    formatter: Formatter,
 ) -> CmdResult {
     match (symbol, section) {
-        (Some(sym), _) => cmd_read_symbol(path, sym, metadata),
-        (_, Some(heading)) => cmd_read_section(path, heading),
+        (Some(sym), _) => cmd_read_symbol(path, sym, metadata, formatter),
+        (_, Some(heading)) => cmd_read_section(path, heading, formatter),
         _ => Err(map_err(
             "read requires --symbol or --section. Use Claude Code's Read for full files or line ranges.",
         )),
     }
 }
 
-fn cmd_read_symbol(path: &str, sym: &str, metadata: bool) -> CmdResult {
+fn cmd_read_symbol(path: &str, sym: &str, metadata: bool, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
 
@@ -90,11 +93,11 @@ fn cmd_read_symbol(path: &str, sym: &str, metadata: bool) -> CmdResult {
     };
 
     let json = format_chunks(&db, sym, &target_json, metadata);
-    emit_read_symbol(&db, path, &json);
+    emit_read_symbol(&db, path, &json, formatter);
     Ok(())
 }
 
-fn cmd_read_section(path: &str, heading: &str) -> CmdResult {
+fn cmd_read_section(path: &str, heading: &str, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
 
@@ -106,33 +109,48 @@ fn cmd_read_section(path: &str, heading: &str) -> CmdResult {
         .find(|c| c.kind.is_section() && c.ident == heading)
     {
         Some(c) => {
-            let json = savings::record_file_op(&db, "read_section", c, path);
-            print_str(&json);
+            let meta = OperationMeta {
+                command: "read_section",
+                files_touched: 1,
+                alternative: AlternativeCost::SingleFile {
+                    path: path.to_string(),
+                },
+            };
+            let response = record_operation(&db, &meta, c);
+            print_str(formatter, &response.body);
         }
         None => return Err(map_err(format!("section not found: {heading}"))),
     }
     Ok(())
 }
 
-pub fn cmd_overview(detail: &str, path: Option<&str>) -> CmdResult {
+pub fn cmd_overview(detail: &str, path: Option<&str>, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
+
+    let meta = OperationMeta {
+        command: "overview",
+        files_touched: 0,
+        alternative: AlternativeCost::ScopedFiles {
+            prefix: path.map(String::from),
+        },
+    };
 
     match detail {
         "minimal" => {
             let result = peek::peek(&db, path).map_err(map_err)?;
-            let json = savings::record_scoped_op(&db, "overview", &result, path);
-            print_str(&json);
+            let response = record_operation(&db, &meta, &result);
+            print_str(formatter, &response.body);
         }
         "standard" => {
             let entries = operations::build_map(&db, path).map_err(map_err)?;
-            let json = savings::record_scoped_op(&db, "overview", &entries, path);
-            print_str(&json);
+            let response = record_operation(&db, &meta, &entries);
+            print_str(formatter, &response.body);
         }
         "tree" => {
             let nodes = tree::build_tree(&db, path).map_err(map_err)?;
-            let json = savings::record_scoped_op(&db, "overview", &nodes, path);
-            print_str(&json);
+            let response = record_operation(&db, &meta, &nodes);
+            print_str(formatter, &response.body);
         }
         other => {
             return Err(map_err(format!(
@@ -143,27 +161,45 @@ pub fn cmd_overview(detail: &str, path: Option<&str>) -> CmdResult {
     Ok(())
 }
 
-pub fn cmd_refs(symbol: &str) -> CmdResult {
+pub fn cmd_refs(symbol: &str, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let result = operations::analyze_impact(&db, symbol).map_err(map_err)?;
-    let json = savings::record_symbol_op(&db, "refs", &result, symbol, result.count as u64);
-    print_str(&json);
+    let meta = OperationMeta {
+        command: "refs",
+        files_touched: result.file_count(),
+        alternative: AlternativeCost::SymbolFiles {
+            symbol: symbol.to_string(),
+        },
+    };
+    let response = record_operation(&db, &meta, &result);
+    print_str(formatter, &response.body);
     Ok(())
 }
 
-pub fn cmd_replace(path: &str, symbol: &str, code: &str, preview: bool) -> CmdResult {
+pub fn cmd_replace(
+    path: &str,
+    symbol: &str,
+    code: &str,
+    preview: bool,
+    formatter: Formatter,
+) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
 
     if preview {
         let diff = replacer::preview_replace(&db, path, symbol, code).map_err(map_err)?;
-        output::print(&diff);
+        formatter.print(&diff);
     } else {
         let outcome = replacer::replace_symbol(&db, path, symbol, code, &config.project_root)
             .map_err(map_err)?;
-        let result_json =
-            print_write_result(&db, &config, path, indexer::PreviewSource::Symbol(symbol));
+        let result_json = print_write_result(
+            &db,
+            &config,
+            path,
+            indexer::PreviewSource::Symbol(symbol),
+            formatter,
+        );
         if let Ok(entry) = savings::alternative_replace_entry(
             &db,
             path,
@@ -177,75 +213,105 @@ pub fn cmd_replace(path: &str, symbol: &str, code: &str, preview: bool) -> CmdRe
     Ok(())
 }
 
-pub fn cmd_insert(path: &str, code: &str, position: &InsertPosition) -> CmdResult {
+pub fn cmd_insert(
+    path: &str,
+    code: &str,
+    position: &InsertPosition,
+    formatter: Formatter,
+) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let guard = SyntaxGuard::new();
     inserter::insert_code(&config.project_root, path, position, code, &guard).map_err(map_err)?;
-    let result_json = print_write_result(&db, &config, path, position.preview_source());
+    let result_json = print_write_result(&db, &config, path, position.preview_source(), formatter);
     if let Ok(entry) = savings::alternative_insert_entry(&db, path, code.len(), result_json.len()) {
         savings::record_v2(&db, &entry);
     }
     Ok(())
 }
 
-pub fn cmd_partition(path: &str, strategy_str: &str) -> CmdResult {
+pub fn cmd_partition(path: &str, strategy_str: &str, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let strategy = parse_strategy(strategy_str)?;
     let result =
         partition::partition_file(&db, path, &strategy, &config.project_root).map_err(map_err)?;
-    let json = savings::record_file_op(&db, "partition", &result, path);
-    print_str(&json);
+    let meta = OperationMeta {
+        command: "partition",
+        files_touched: 1,
+        alternative: AlternativeCost::SingleFile {
+            path: path.to_string(),
+        },
+    };
+    let response = record_operation(&db, &meta, &result);
+    print_str(formatter, &response.body);
     Ok(())
 }
 
-pub fn cmd_summarize(path: &str) -> CmdResult {
-    cmd_single_file_op("summarize", path, summarize::summarize)
+pub fn cmd_summarize(path: &str, formatter: Formatter) -> CmdResult {
+    cmd_single_file_op("summarize", path, summarize::summarize, formatter)
 }
 
-pub fn cmd_diff(path: &str, symbol: Option<&str>) -> CmdResult {
+pub fn cmd_diff(path: &str, symbol: Option<&str>, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
 
-    if let Some(sym) = symbol {
+    let meta = OperationMeta {
+        command: "diff",
+        files_touched: 1,
+        alternative: AlternativeCost::SingleFile {
+            path: path.to_string(),
+        },
+    };
+
+    let response = if let Some(sym) = symbol {
         let result =
             operations::diff_symbol(&db, path, sym, &config.project_root).map_err(map_err)?;
-        let json = savings::record_file_op(&db, "diff", &result, path);
-        print_str(&json);
+        record_operation(&db, &meta, &result)
     } else {
         let result = operations::diff_file(&db, path, &config.project_root).map_err(map_err)?;
-        let json = savings::record_file_op(&db, "diff", &result, path);
-        print_str(&json);
-    }
+        record_operation(&db, &meta, &result)
+    };
+    print_str(formatter, &response.body);
     Ok(())
 }
 
-pub fn cmd_context(symbol: &str, graph: bool) -> CmdResult {
+pub fn cmd_context(symbol: &str, graph: bool, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let result = operations::build_context(&db, symbol).map_err(map_err)?;
 
-    let file_count = result.file_count as u64;
-    if graph {
+    let meta = OperationMeta {
+        command: "context",
+        files_touched: result.file_count as u64,
+        alternative: AlternativeCost::SymbolFiles {
+            symbol: symbol.to_string(),
+        },
+    };
+
+    let response = if graph {
         let callgraph = operations::build_callgraph(&db, symbol).map_err(map_err)?;
         let combined = serde_json::json!({
             "context": result,
             "callgraph": callgraph,
         });
-        let json = savings::record_symbol_op(&db, "context", &combined, symbol, file_count);
-        print_str(&json);
+        record_operation(&db, &meta, &combined)
     } else {
-        let json = savings::record_symbol_op(&db, "context", &result, symbol, file_count);
-        print_str(&json);
-    }
+        record_operation(&db, &meta, &result)
+    };
+    print_str(formatter, &response.body);
     Ok(())
 }
 
-pub fn cmd_deps(path: &str) -> CmdResult {
-    cmd_single_file_op("deps", path, operations::get_deps)
+pub fn cmd_deps(path: &str, formatter: Formatter) -> CmdResult {
+    cmd_single_file_op("deps", path, operations::get_deps, formatter)
 }
 
-pub fn cmd_scope(path: &str, line: u32) -> CmdResult {
-    cmd_single_file_op("scope", path, |db, p| operations::get_scope(db, p, line))
+pub fn cmd_scope(path: &str, line: u32, formatter: Formatter) -> CmdResult {
+    cmd_single_file_op(
+        "scope",
+        path,
+        |db, p| operations::get_scope(db, p, line),
+        formatter,
+    )
 }

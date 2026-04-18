@@ -34,19 +34,21 @@ const DEFAULT_SEARCH_LIMIT: usize = 20;
 /// absorb short bursts when `notify_progress` is slower than indexing.
 const PROGRESS_CHANNEL_CAPACITY: usize = 16;
 
-use crate::output::PROGRESS_INTERVAL;
+use crate::output::{Formatter, PROGRESS_INTERVAL};
 
 // Re-export start_mcp_server from the helpers module.
 pub use super::server_helpers::start_mcp_server;
 
 /// The RLM MCP Server.
 ///
-/// Holds the project root path. The database is opened on-demand for each tool
-/// call to avoid lifetime issues with the sqlite connection.
+/// Holds the project root path and the output formatter. The database is
+/// opened on-demand for each tool call to avoid lifetime issues with the
+/// sqlite connection.
 // qual:allow(srp) reason: "rmcp #[tool_router] requires all tools on single struct"
 #[derive(Clone)]
 pub struct RlmServer {
     project_root: PathBuf,
+    formatter: Formatter,
     tool_router: Arc<ToolRouter<Self>>,
 }
 
@@ -68,9 +70,10 @@ impl RlmServer {
 #[tool_router]
 impl RlmServer {
     #[must_use]
-    pub fn new(project_root: PathBuf) -> Self {
+    pub fn new(project_root: PathBuf, formatter: Formatter) -> Self {
         Self {
             project_root,
+            formatter,
             tool_router: Arc::new(Self::tool_router()),
         }
     }
@@ -86,6 +89,7 @@ impl RlmServer {
         peer: Peer<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let project_root = self.project_root.clone();
+        let formatter = self.formatter;
         let path = params.0.path.clone();
 
         // Bounded channel + throttle-at-source: the callback only sends every
@@ -104,6 +108,7 @@ impl RlmServer {
                 path.as_deref(),
                 &project_root,
                 Some(&progress),
+                formatter,
             )
         });
 
@@ -150,6 +155,7 @@ impl RlmServer {
             &db,
             &params.0.query,
             params.0.limit.unwrap_or(DEFAULT_SEARCH_LIMIT),
+            self.formatter,
         )
     }
 
@@ -160,7 +166,7 @@ impl RlmServer {
     // qual:api
     async fn read(&self, params: Parameters<ReadParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        tool_handlers::handle_read(&db, &params.0)
+        tool_handlers::handle_read(&db, &params.0, self.formatter)
     }
 
     #[tool(
@@ -175,7 +181,7 @@ impl RlmServer {
         let db = self.ensure_db()?;
         let detail = params.0.detail.as_deref().unwrap_or("standard");
         let path = params.0.path.as_deref();
-        tool_handlers::handle_overview(&db, detail, path)
+        tool_handlers::handle_overview(&db, detail, path, self.formatter)
     }
 
     #[tool(
@@ -185,7 +191,7 @@ impl RlmServer {
     // qual:api
     async fn refs(&self, params: Parameters<RefsParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        tool_handlers::handle_refs(&db, &params.0.symbol)
+        tool_handlers::handle_refs(&db, &params.0.symbol, self.formatter)
     }
 
     #[tool(
@@ -194,7 +200,7 @@ impl RlmServer {
     // qual:api
     async fn replace(&self, params: Parameters<ReplaceParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        tool_handlers::handle_replace(&db, &params.0, &self.project_root)
+        tool_handlers::handle_replace(&db, &params.0, &self.project_root, self.formatter)
     }
 
     #[tool(
@@ -211,6 +217,7 @@ impl RlmServer {
             &p.position,
             &p.code,
             &self.project_root,
+            self.formatter,
         )
     }
 
@@ -221,7 +228,7 @@ impl RlmServer {
     // qual:api
     async fn stats(&self) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        tool_handlers_util::handle_stats(&db)
+        tool_handlers_util::handle_stats(&db, self.formatter)
     }
 
     #[tool(
@@ -237,7 +244,13 @@ impl RlmServer {
         let db = self.ensure_db()?;
         let config = self.config();
         let p = &params.0;
-        tool_handlers_util::handle_partition(&db, &p.path, &p.strategy, &config.project_root)
+        tool_handlers_util::handle_partition(
+            &db,
+            &p.path,
+            &p.strategy,
+            &config.project_root,
+            self.formatter,
+        )
     }
 
     #[tool(
@@ -250,7 +263,7 @@ impl RlmServer {
         params: Parameters<SummarizeParams>,
     ) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        tool_handlers_util::handle_summarize(&db, &params.0.path)
+        tool_handlers_util::handle_summarize(&db, &params.0.path, self.formatter)
     }
 
     #[tool(
@@ -262,7 +275,13 @@ impl RlmServer {
         let db = self.ensure_db()?;
         let config = self.config();
         let p = &params.0;
-        tool_handlers_util::handle_diff(&db, &p.path, p.symbol.as_deref(), &config.project_root)
+        tool_handlers_util::handle_diff(
+            &db,
+            &p.path,
+            p.symbol.as_deref(),
+            &config.project_root,
+            self.formatter,
+        )
     }
 
     #[tool(
@@ -272,7 +291,12 @@ impl RlmServer {
     // qual:api
     async fn context(&self, params: Parameters<ContextParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        tool_handlers_util::handle_context(&db, &params.0.symbol, params.0.graph.unwrap_or(false))
+        tool_handlers_util::handle_context(
+            &db,
+            &params.0.symbol,
+            params.0.graph.unwrap_or(false),
+            self.formatter,
+        )
     }
 
     #[tool(
@@ -282,7 +306,7 @@ impl RlmServer {
     // qual:api
     async fn deps(&self, params: Parameters<DepsParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        tool_handlers_util::handle_deps(&db, &params.0.path)
+        tool_handlers_util::handle_deps(&db, &params.0.path, self.formatter)
     }
 
     #[tool(
@@ -292,7 +316,7 @@ impl RlmServer {
     // qual:api
     async fn scope(&self, params: Parameters<ScopeParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        tool_handlers_util::handle_scope(&db, &params.0.path, params.0.line)
+        tool_handlers_util::handle_scope(&db, &params.0.path, params.0.line, self.formatter)
     }
 
     #[tool(
@@ -307,6 +331,7 @@ impl RlmServer {
             p.path.clone(),
             p.skipped_only.unwrap_or(false),
             p.indexed_only.unwrap_or(false),
+            self.formatter,
         )
     }
 
@@ -316,7 +341,7 @@ impl RlmServer {
     // qual:api
     async fn verify(&self, params: Parameters<VerifyParams>) -> Result<CallToolResult, McpError> {
         let config = self.config();
-        tool_handlers_util::handle_verify(&config, params.0.fix.unwrap_or(false))
+        tool_handlers_util::handle_verify(&config, params.0.fix.unwrap_or(false), self.formatter)
     }
 
     #[tool(
@@ -326,7 +351,7 @@ impl RlmServer {
     // qual:api
     async fn savings(&self, params: Parameters<SavingsParams>) -> Result<CallToolResult, McpError> {
         let db = self.ensure_db()?;
-        tool_handlers_util::handle_savings(&db, params.0.since.as_deref())
+        tool_handlers_util::handle_savings(&db, params.0.since.as_deref(), self.formatter)
     }
 
     #[tool(
@@ -336,7 +361,7 @@ impl RlmServer {
     // qual:api
     // qual:allow(srp) reason: "rmcp #[tool_router] requires &self on all #[tool] methods"
     async fn supported(&self) -> Result<CallToolResult, McpError> {
-        tool_handlers_util::handle_supported()
+        tool_handlers_util::handle_supported(self.formatter)
     }
 }
 

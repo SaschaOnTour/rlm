@@ -7,13 +7,14 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::domain::token_budget::estimate_json_tokens;
 use crate::indexer;
+use crate::interface::shared::{record_operation, AlternativeCost, OperationMeta};
 use crate::operations::savings;
-use crate::output;
+use crate::output::{self, Formatter};
 
 pub type CmdResult = Result<(), Box<dyn std::fmt::Display>>;
 
-pub fn print_str(s: &str) {
-    output::print_str(s);
+pub fn print_str(formatter: Formatter, s: &str) {
+    formatter.print_str(s);
 }
 
 pub fn map_err(e: impl std::fmt::Display + 'static) -> Box<dyn std::fmt::Display> {
@@ -63,30 +64,39 @@ pub fn print_write_result(
     config: &Config,
     rel_path: &str,
     source: indexer::PreviewSource<'_>,
+    formatter: Formatter,
 ) -> String {
     let json = indexer::reindex_with_result(db, config, rel_path, source);
-    print_str(&json);
+    print_str(formatter, &json);
     json
 }
 
 /// Emit a read_symbol result and record savings (integration: calls only).
-pub fn emit_read_symbol(db: &Database, path: &str, json: &str) {
+pub fn emit_read_symbol(db: &Database, path: &str, json: &str, formatter: Formatter) {
     let out_tokens = estimate_json_tokens(json.len());
     savings::record_read_symbol(db, out_tokens, path);
-    print_str(json);
+    print_str(formatter, json);
 }
 
 /// Generic handler for commands that operate on a single file with savings recording.
 pub fn cmd_single_file_op<T: serde::Serialize>(
-    command: &str,
+    command: &'static str,
     path: &str,
     op: impl FnOnce(&Database, &str) -> crate::error::Result<T>,
+    formatter: Formatter,
 ) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
     let result = op(&db, path).map_err(map_err)?;
-    let json = savings::record_file_op(&db, command, &result, path);
-    print_str(&json);
+    let meta = OperationMeta {
+        command,
+        files_touched: 1,
+        alternative: AlternativeCost::SingleFile {
+            path: path.to_string(),
+        },
+    };
+    let response = record_operation(&db, &meta, &result);
+    print_str(formatter, &response.body);
     Ok(())
 }
 

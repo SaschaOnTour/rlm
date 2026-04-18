@@ -222,9 +222,10 @@ pub fn record_file_op<T: serde::Serialize>(
 ///
 /// CC equivalent: Grep (1 call) + Read per file (N calls).
 ///
-/// **Note:** `files_touched` should be the number of *distinct files*, not total
-/// hits. Some callers (e.g., `refs`) currently pass hit count — this overstates
-/// `alt_calls` when multiple hits come from the same file.
+/// `files_touched` must be the number of *distinct files* involved; the
+/// value is used directly as the Read count in the alt-path cost model
+/// (`alt_calls = 1 + files_touched`). Passing a hit count instead would
+/// overstate `alt_calls` whenever multiple hits come from the same file.
 pub fn record_symbol_op<T: serde::Serialize>(
     db: &Database,
     command: &str,
