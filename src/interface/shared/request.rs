@@ -13,8 +13,16 @@ pub struct OperationMeta {
     /// copying. Not a typo guard — any string literal compiles; for
     /// compile-time validation use an enum instead.
     pub command: &'static str,
-    /// Number of distinct source files the operation consults. Used for
-    /// the "how many Reads would CC need" side of the savings calculation.
+    /// Number of distinct source files the operation consults when the
+    /// savings middleware needs a caller-supplied file count.
+    ///
+    /// This value is consumed for variants whose alternative-cost estimate
+    /// depends on the adapter's notion of how many files were involved
+    /// (for example `SymbolFiles`, `Fixed`, and `AtLeastBody`).
+    ///
+    /// For some `AlternativeCost` variants the middleware derives the count
+    /// itself instead of using this field: `SingleFile` always counts as `1`
+    /// and `ScopedFiles` is computed from the scoped file stats.
     pub files_touched: u64,
     /// How to estimate what Claude Code's native tools would have cost.
     pub alternative: AlternativeCost,
