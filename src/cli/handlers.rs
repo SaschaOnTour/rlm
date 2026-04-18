@@ -167,7 +167,7 @@ pub fn cmd_refs(symbol: &str, formatter: Formatter) -> CmdResult {
     let result = operations::analyze_impact(&db, symbol).map_err(map_err)?;
     let meta = OperationMeta {
         command: "refs",
-        files_touched: result.count as u64,
+        files_touched: result.file_count(),
         alternative: AlternativeCost::SymbolFiles {
             symbol: symbol.to_string(),
         },

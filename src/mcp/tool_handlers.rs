@@ -316,7 +316,7 @@ pub fn handle_refs(
         Ok(result) => {
             let meta = OperationMeta {
                 command: "refs",
-                files_touched: result.count as u64,
+                files_touched: result.file_count(),
                 alternative: AlternativeCost::SymbolFiles {
                     symbol: symbol.to_string(),
                 },
