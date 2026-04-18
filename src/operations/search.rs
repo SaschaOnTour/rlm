@@ -17,6 +17,13 @@ const MIN_FTS_TOKEN_LENGTH: u64 = 4;
 pub struct SearchResult {
     /// The search results.
     pub results: Vec<SearchHit>,
+    /// Number of distinct files represented in `results`.
+    ///
+    /// Computed from the underlying chunks' `file_id` before the
+    /// chunk-to-`SearchHit` mapping drops that information. Consumed
+    /// by the savings middleware so the recorded `files_touched`
+    /// reflects distinct files, not hit count.
+    pub file_count: u64,
     /// Token usage estimate.
     pub tokens: TokenEstimate,
 }
@@ -38,7 +45,15 @@ pub struct SearchHit {
 
 /// Perform a full-text search across indexed chunks.
 pub fn search_chunks(db: &Database, query: &str, limit: usize) -> Result<SearchResult> {
+    use std::collections::HashSet;
+
     let results = fts::search(db, query, limit)?;
+
+    let file_count = results
+        .iter()
+        .map(|c| c.file_id)
+        .collect::<HashSet<_>>()
+        .len() as u64;
 
     let hits: Vec<SearchHit> = results
         .iter()
@@ -55,6 +70,7 @@ pub fn search_chunks(db: &Database, query: &str, limit: usize) -> Result<SearchR
 
     Ok(SearchResult {
         results: hits,
+        file_count,
         tokens: TokenEstimate::new(
             0,
             estimate_tokens_str(query) + total_chars as u64 / MIN_FTS_TOKEN_LENGTH,
@@ -114,6 +130,7 @@ mod tests {
         assert_eq!(result.results.len(), 1);
         assert_eq!(result.results[0].name, "search_test");
         assert_eq!(result.results[0].kind, "fn");
+        assert_eq!(result.file_count, 1);
     }
 
     #[test]
@@ -121,5 +138,46 @@ mod tests {
         let db = test_db();
         let result = search_chunks(&db, "nonexistent_xyz_123", TEST_SEARCH_LIMIT).unwrap();
         assert!(result.results.is_empty());
+        assert_eq!(result.file_count, 0);
+    }
+
+    #[test]
+    fn file_count_deduplicates_hits_in_same_file() {
+        let db = test_db();
+
+        let file = FileRecord::new(
+            "src/lib.rs".into(),
+            "hash".into(),
+            "rust".into(),
+            TEST_FILE_BYTES,
+        );
+        let file_id = db.upsert_file(&file).unwrap();
+
+        // Two distinct chunks in the SAME file, both matching the query.
+        for ident in ["foo_alpha", "foo_beta"] {
+            let c = Chunk {
+                id: 0,
+                file_id,
+                start_line: TEST_START_LINE,
+                end_line: TEST_END_LINE,
+                start_byte: TEST_START_BYTE,
+                end_byte: TEST_END_BYTE,
+                kind: ChunkKind::Function,
+                ident: ident.into(),
+                parent: None,
+                signature: None,
+                visibility: None,
+                ui_ctx: None,
+                doc_comment: None,
+                attributes: None,
+                content: format!("fn {ident}() {{}}"),
+            };
+            db.insert_chunk(&c).unwrap();
+        }
+
+        let result = search_chunks(&db, "foo", TEST_SEARCH_LIMIT).unwrap();
+        assert_eq!(result.results.len(), 2);
+        // Two hits in one file → one distinct file.
+        assert_eq!(result.file_count, 1);
     }
 }

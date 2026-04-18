@@ -45,7 +45,7 @@ pub fn cmd_search(query: &str, limit: usize, formatter: Formatter) -> CmdResult 
     let result = operations::search_chunks(&db, query, limit).map_err(map_err)?;
     let meta = OperationMeta {
         command: "search",
-        files_touched: result.results.len() as u64,
+        files_touched: result.file_count,
         alternative: AlternativeCost::AtLeastBody {
             base: result.tokens.output,
         },

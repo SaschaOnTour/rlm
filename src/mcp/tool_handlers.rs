@@ -112,7 +112,7 @@ pub fn handle_search(
         Ok(result) => {
             let meta = OperationMeta {
                 command: "search",
-                files_touched: result.results.len() as u64,
+                files_touched: result.file_count,
                 alternative: AlternativeCost::AtLeastBody {
                     base: result.tokens.output,
                 },

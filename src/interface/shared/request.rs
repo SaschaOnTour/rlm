@@ -8,8 +8,10 @@
 #[derive(Debug, Clone)]
 pub struct OperationMeta {
     /// Identifier recorded in the savings table (e.g. `"search"`, `"refs"`).
-    /// `&'static str` so typos become compile errors when operations are
-    /// referenced through named constants.
+    /// `&'static str` avoids per-call allocation and lets adapters share
+    /// command names through named constants across CLI and MCP without
+    /// copying. Not a typo guard — any string literal compiles; for
+    /// compile-time validation use an enum instead.
     pub command: &'static str,
     /// Number of distinct source files the operation consults. Used for
     /// the "how many Reads would CC need" side of the savings calculation.
