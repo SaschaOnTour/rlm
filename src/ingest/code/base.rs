@@ -5,7 +5,9 @@
 
 use std::collections::HashSet;
 
-use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{Language, Parser, Query, Tree};
+
+use crate::infrastructure::parsing::query_runner::iter_matches;
 
 /// Build the (Language, chunk Query, ref Query) triple shared by every parser config.
 ///
@@ -228,8 +230,6 @@ impl<C: LanguageConfig> BaseParser<C> {
         };
 
         let mut chunks = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(self.config.chunk_query(), tree.root_node(), source_bytes);
         let mut import_decls: Vec<tree_sitter::Node> = Vec::new();
         let mut seen: HashSet<(String, u32)> = if self.config.needs_deduplication() {
             HashSet::new()
@@ -237,25 +237,31 @@ impl<C: LanguageConfig> BaseParser<C> {
             HashSet::with_capacity(0)
         };
 
-        while let Some(m) = matches.next() {
-            let match_result = process_query_match(m, source_bytes, &self.config, tree.root_node());
-            match match_result {
-                QueryMatchResult::Import(node) => {
-                    import_decls.push(node);
+        iter_matches(
+            self.config.chunk_query(),
+            tree.root_node(),
+            source_bytes,
+            |m| {
+                let match_result =
+                    process_query_match(m, source_bytes, &self.config, tree.root_node());
+                match match_result {
+                    QueryMatchResult::Import(node) => {
+                        import_decls.push(node);
+                    }
+                    QueryMatchResult::Chunk(data) => {
+                        let built = build_chunk_from_match_data(
+                            &data,
+                            source_bytes,
+                            file_id,
+                            &self.config,
+                            &mut seen,
+                        );
+                        chunks.extend(built);
+                    }
+                    QueryMatchResult::Skip => {}
                 }
-                QueryMatchResult::Chunk(data) => {
-                    let built = build_chunk_from_match_data(
-                        &data,
-                        source_bytes,
-                        file_id,
-                        &self.config,
-                        &mut seen,
-                    );
-                    chunks.extend(built);
-                }
-                QueryMatchResult::Skip => {}
-            }
-        }
+            },
+        );
 
         self.config
             .post_process_chunks(&mut chunks, tree, source_bytes, file_id);
@@ -276,38 +282,41 @@ impl<C: LanguageConfig> BaseParser<C> {
         chunks: &[Chunk],
     ) -> Vec<Reference> {
         let mut refs = Vec::new();
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(self.config.ref_query(), tree.root_node(), source_bytes);
 
-        while let Some(m) = matches.next() {
-            for cap in m.captures {
-                let cap_name = &self.config.ref_query().capture_names()[cap.index as usize];
-                let text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
-                let pos = cap.node.start_position();
+        iter_matches(
+            self.config.ref_query(),
+            tree.root_node(),
+            source_bytes,
+            |m| {
+                for cap in m.captures {
+                    let cap_name = &self.config.ref_query().capture_names()[cap.index as usize];
+                    let text = cap.node.utf8_text(source_bytes).unwrap_or("").to_string();
+                    let pos = cap.node.start_position();
 
-                let expanded = self.config.expand_ref_capture(cap_name, &text);
-                if expanded.is_empty() {
-                    continue;
+                    let expanded = self.config.expand_ref_capture(cap_name, &text);
+                    if expanded.is_empty() {
+                        continue;
+                    }
+
+                    let line = pos.row as u32 + 1;
+                    let chunk_id = chunks
+                        .iter()
+                        .find(|c| line >= c.start_line && line <= c.end_line)
+                        .map_or(0, |c| c.id);
+
+                    for (target, ref_kind) in expanded {
+                        refs.push(Reference {
+                            id: 0,
+                            chunk_id,
+                            target_ident: target,
+                            ref_kind,
+                            line,
+                            col: pos.column as u32,
+                        });
+                    }
                 }
-
-                let line = pos.row as u32 + 1;
-                let chunk_id = chunks
-                    .iter()
-                    .find(|c| line >= c.start_line && line <= c.end_line)
-                    .map_or(0, |c| c.id);
-
-                for (target, ref_kind) in expanded {
-                    refs.push(Reference {
-                        id: 0,
-                        chunk_id,
-                        target_ident: target,
-                        ref_kind,
-                        line,
-                        col: pos.column as u32,
-                    });
-                }
-            }
-        }
+            },
+        );
 
         refs
     }

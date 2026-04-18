@@ -39,11 +39,11 @@ enum CaptureClassification {
 ///
 /// Returns a list of `(classification, node)` pairs by calling `config.is_import_capture`
 /// and `config.map_chunk_capture` for each capture.
-fn classify_captures<'a, C: LanguageConfig>(
-    m: &tree_sitter::QueryMatch<'a, '_>,
+fn classify_captures<'tree, C: LanguageConfig>(
+    m: &tree_sitter::QueryMatch<'_, 'tree>,
     source_bytes: &[u8],
     config: &C,
-) -> Vec<(CaptureClassification, tree_sitter::Node<'a>)> {
+) -> Vec<(CaptureClassification, tree_sitter::Node<'tree>)> {
     m.captures
         .iter()
         .map(|cap| {
@@ -65,10 +65,10 @@ fn classify_captures<'a, C: LanguageConfig>(
 }
 
 /// Assemble a `QueryMatchResult` from pre-classified captures (operation: logic only).
-fn assemble_match_result<'a>(
-    classifications: Vec<(CaptureClassification, tree_sitter::Node<'a>)>,
-    root_node: tree_sitter::Node<'a>,
-) -> QueryMatchResult<'a> {
+fn assemble_match_result<'tree>(
+    classifications: Vec<(CaptureClassification, tree_sitter::Node<'tree>)>,
+    root_node: tree_sitter::Node<'tree>,
+) -> QueryMatchResult<'tree> {
     let mut name = String::new();
     let mut kind = ChunkKind::Other("unknown".into());
     let mut node = root_node;
@@ -102,12 +102,12 @@ fn assemble_match_result<'a>(
 }
 
 /// Process a single tree-sitter query match into a `QueryMatchResult`.
-pub(crate) fn process_query_match<'a, C: LanguageConfig>(
-    m: &tree_sitter::QueryMatch<'a, '_>,
+pub(crate) fn process_query_match<'tree, C: LanguageConfig>(
+    m: &tree_sitter::QueryMatch<'_, 'tree>,
     source_bytes: &[u8],
     config: &C,
-    root_node: tree_sitter::Node<'a>,
-) -> QueryMatchResult<'a> {
+    root_node: tree_sitter::Node<'tree>,
+) -> QueryMatchResult<'tree> {
     let classifications = classify_captures(m, source_bytes, config);
     assemble_match_result(classifications, root_node)
 }

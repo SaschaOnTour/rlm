@@ -5,4 +5,5 @@
 //! `interface/`) depend on these abstractions, never on the concrete
 //! crates (`rusqlite`, `tree_sitter`, `ignore`).
 
+pub mod parsing;
 pub mod persistence;
