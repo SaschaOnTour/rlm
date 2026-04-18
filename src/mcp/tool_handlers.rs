@@ -8,13 +8,16 @@
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 
+use crate::application::symbol::RefsQuery;
 use crate::config::Config;
 use crate::db::Database;
 use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
-use crate::interface::shared::{record_operation, AlternativeCost, OperationMeta};
+use crate::interface::shared::{
+    record_operation, record_symbol_query, AlternativeCost, OperationMeta,
+};
 use crate::models::chunk::Chunk;
 use crate::operations;
 use crate::operations::savings;
@@ -312,18 +315,8 @@ pub fn handle_refs(
     symbol: &str,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match operations::analyze_impact(db, symbol) {
-        Ok(result) => {
-            let meta = OperationMeta {
-                command: "refs",
-                files_touched: result.file_count(),
-                alternative: AlternativeCost::SymbolFiles {
-                    symbol: symbol.to_string(),
-                },
-            };
-            let response = record_operation(db, &meta, &result);
-            Ok(RlmServer::success_text(formatter, response.body))
-        }
+    match record_symbol_query::<RefsQuery>(db, symbol) {
+        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }

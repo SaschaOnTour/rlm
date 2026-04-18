@@ -3,6 +3,7 @@
 //! System/utility commands live in `cli::handlers_util`.
 //! Shared helpers live in `cli::helpers`.
 
+use crate::application::symbol::RefsQuery;
 use crate::cli::helpers::{
     cmd_single_file_op, emit_read_symbol, format_chunks, get_config, get_db, map_err,
     parse_strategy, print_str, print_write_result, CmdResult,
@@ -11,7 +12,9 @@ use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
-use crate::interface::shared::{record_operation, AlternativeCost, OperationMeta};
+use crate::interface::shared::{
+    record_operation, record_symbol_query, AlternativeCost, OperationMeta,
+};
 use crate::operations;
 use crate::operations::savings;
 use crate::output::{self, Formatter};
@@ -164,15 +167,7 @@ pub fn cmd_overview(detail: &str, path: Option<&str>, formatter: Formatter) -> C
 pub fn cmd_refs(symbol: &str, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
-    let result = operations::analyze_impact(&db, symbol).map_err(map_err)?;
-    let meta = OperationMeta {
-        command: "refs",
-        files_touched: result.file_count(),
-        alternative: AlternativeCost::SymbolFiles {
-            symbol: symbol.to_string(),
-        },
-    };
-    let response = record_operation(&db, &meta, &result);
+    let response = record_symbol_query::<RefsQuery>(&db, symbol).map_err(map_err)?;
     print_str(formatter, &response.body);
     Ok(())
 }

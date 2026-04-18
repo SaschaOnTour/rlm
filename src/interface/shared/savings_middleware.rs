@@ -15,8 +15,10 @@
 
 use serde::Serialize;
 
+use crate::application::symbol::SymbolQuery;
 use crate::db::Database;
 use crate::domain::token_budget::estimate_json_tokens;
+use crate::error::Result;
 use crate::operations::savings;
 use crate::output;
 
@@ -85,6 +87,24 @@ pub fn record_operation<T: Serialize>(
     };
 
     OperationResponse::new(json, tokens_out)
+}
+
+/// Run a [`SymbolQuery`] end-to-end: execute, record savings against the
+/// `SymbolFiles` cost model, and return an [`OperationResponse`]. Adapters
+/// use this as a one-liner wrapper around every symbol-scoped tool.
+pub fn record_symbol_query<Q: SymbolQuery>(
+    db: &Database,
+    symbol: &str,
+) -> Result<OperationResponse> {
+    let output = Q::execute(db, symbol)?;
+    let meta = OperationMeta {
+        command: Q::COMMAND,
+        files_touched: Q::file_count(&output),
+        alternative: AlternativeCost::SymbolFiles {
+            symbol: symbol.to_string(),
+        },
+    };
+    Ok(record_operation(db, &meta, &output))
 }
 
 #[cfg(test)]
