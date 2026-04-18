@@ -52,6 +52,7 @@ pub mod error;
 pub mod indexer;
 pub mod infrastructure;
 pub mod ingest;
+pub mod interface;
 pub mod mcp;
 pub mod models;
 pub mod operations;
