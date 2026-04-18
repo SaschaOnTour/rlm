@@ -240,8 +240,15 @@ fn handle_read_section(
     let sections: Vec<_> = chunks.into_iter().filter(|c| c.kind.is_section()).collect();
 
     if let Some(c) = sections.iter().find(|c| c.ident == *heading) {
-        let json = savings::record_file_op(db, "read_section", c, &params.path);
-        return Ok(RlmServer::success_text(formatter, json));
+        let meta = OperationMeta {
+            command: "read_section",
+            files_touched: 1,
+            alternative: AlternativeCost::SingleFile {
+                path: params.path.clone(),
+            },
+        };
+        let response = record_operation(db, &meta, c);
+        return Ok(RlmServer::success_text(formatter, response.body));
     }
 
     Ok(RlmServer::error_text(
@@ -258,28 +265,36 @@ pub fn handle_overview(
     path: Option<&str>,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
+    let meta = OperationMeta {
+        command: "overview",
+        files_touched: 0,
+        alternative: AlternativeCost::ScopedFiles {
+            prefix: path.map(String::from),
+        },
+    };
+
     match detail {
         "minimal" => {
             use crate::rlm::peek;
             match peek::peek(db, path) {
                 Ok(result) => {
-                    let json = savings::record_scoped_op(db, "overview", &result, path);
-                    Ok(RlmServer::success_text(formatter, json))
+                    let response = record_operation(db, &meta, &result);
+                    Ok(RlmServer::success_text(formatter, response.body))
                 }
                 Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
             }
         }
         "standard" => match operations::build_map(db, path) {
             Ok(entries) => {
-                let json = savings::record_scoped_op(db, "overview", &entries, path);
-                Ok(RlmServer::success_text(formatter, json))
+                let response = record_operation(db, &meta, &entries);
+                Ok(RlmServer::success_text(formatter, response.body))
             }
             Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
         },
         "tree" => match tree::build_tree(db, path) {
             Ok(nodes) => {
-                let json = savings::record_scoped_op(db, "overview", &nodes, path);
-                Ok(RlmServer::success_text(formatter, json))
+                let response = record_operation(db, &meta, &nodes);
+                Ok(RlmServer::success_text(formatter, response.body))
             }
             Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
         },
@@ -299,9 +314,15 @@ pub fn handle_refs(
 ) -> Result<CallToolResult, McpError> {
     match operations::analyze_impact(db, symbol) {
         Ok(result) => {
-            let files_touched = result.count as u64;
-            let json = savings::record_symbol_op(db, "refs", &result, symbol, files_touched);
-            Ok(RlmServer::success_text(formatter, json))
+            let meta = OperationMeta {
+                command: "refs",
+                files_touched: result.count as u64,
+                alternative: AlternativeCost::SymbolFiles {
+                    symbol: symbol.to_string(),
+                },
+            };
+            let response = record_operation(db, &meta, &result);
+            Ok(RlmServer::success_text(formatter, response.body))
         }
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
