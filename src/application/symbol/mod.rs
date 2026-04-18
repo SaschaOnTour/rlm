@@ -27,6 +27,7 @@ pub mod type_info;
 
 pub use context::{ContextQuery, ContextWithGraphQuery};
 pub use refs::RefsQuery;
+pub use scope::ScopeQuery;
 
 /// A read-only analysis of a symbol.
 ///

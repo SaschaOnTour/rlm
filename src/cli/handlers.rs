@@ -3,22 +3,25 @@
 //! System/utility commands live in `cli::handlers_util`.
 //! Shared helpers live in `cli::helpers`.
 
-use crate::application::symbol::{ContextQuery, ContextWithGraphQuery, RefsQuery};
+use crate::application::content::{
+    DepsQuery, DiffFileQuery, DiffSymbolQuery, PartitionQuery, SummarizeQuery,
+};
+use crate::application::symbol::{ContextQuery, ContextWithGraphQuery, RefsQuery, ScopeQuery};
 use crate::cli::helpers::{
-    cmd_single_file_op, emit_read_symbol, format_chunks, get_config, get_db, map_err,
-    parse_strategy, print_str, print_write_result, CmdResult,
+    emit_read_symbol, format_chunks, get_config, get_db, map_err, parse_strategy, print_str,
+    print_write_result, CmdResult,
 };
 use crate::edit::inserter::InsertPosition;
 use crate::edit::syntax_guard::SyntaxGuard;
 use crate::edit::{inserter, replacer};
 use crate::indexer;
 use crate::interface::shared::{
-    record_operation, record_symbol_query, AlternativeCost, OperationMeta,
+    record_file_query, record_operation, record_symbol_query, AlternativeCost, OperationMeta,
 };
 use crate::operations;
 use crate::operations::savings;
 use crate::output::{self, Formatter};
-use crate::rlm::{partition, peek, summarize};
+use crate::rlm::peek;
 use crate::search::tree;
 
 pub fn cmd_index(path: &str, formatter: Formatter) -> CmdResult {
@@ -228,44 +231,38 @@ pub fn cmd_insert(
 pub fn cmd_partition(path: &str, strategy_str: &str, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
-    let strategy = parse_strategy(strategy_str)?;
-    let result =
-        partition::partition_file(&db, path, &strategy, &config.project_root).map_err(map_err)?;
-    let meta = OperationMeta {
-        command: "partition",
-        files_touched: 1,
-        alternative: AlternativeCost::SingleFile {
-            path: path.to_string(),
-        },
+    let query = PartitionQuery {
+        strategy: parse_strategy(strategy_str)?,
+        project_root: config.project_root.clone(),
     };
-    let response = record_operation(&db, &meta, &result);
+    let response = record_file_query(&db, &query, path).map_err(map_err)?;
     print_str(formatter, &response.body);
     Ok(())
 }
 
 pub fn cmd_summarize(path: &str, formatter: Formatter) -> CmdResult {
-    cmd_single_file_op("summarize", path, summarize::summarize, formatter)
+    let config = get_config()?;
+    let db = get_db(&config)?;
+    let response = record_file_query(&db, &SummarizeQuery, path).map_err(map_err)?;
+    print_str(formatter, &response.body);
+    Ok(())
 }
 
 pub fn cmd_diff(path: &str, symbol: Option<&str>, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
 
-    let meta = OperationMeta {
-        command: "diff",
-        files_touched: 1,
-        alternative: AlternativeCost::SingleFile {
-            path: path.to_string(),
-        },
-    };
-
     let response = if let Some(sym) = symbol {
-        let result =
-            operations::diff_symbol(&db, path, sym, &config.project_root).map_err(map_err)?;
-        record_operation(&db, &meta, &result)
+        let query = DiffSymbolQuery {
+            symbol: sym.to_string(),
+            project_root: config.project_root.clone(),
+        };
+        record_file_query(&db, &query, path).map_err(map_err)?
     } else {
-        let result = operations::diff_file(&db, path, &config.project_root).map_err(map_err)?;
-        record_operation(&db, &meta, &result)
+        let query = DiffFileQuery {
+            project_root: config.project_root.clone(),
+        };
+        record_file_query(&db, &query, path).map_err(map_err)?
     };
     print_str(formatter, &response.body);
     Ok(())
@@ -284,14 +281,17 @@ pub fn cmd_context(symbol: &str, graph: bool, formatter: Formatter) -> CmdResult
 }
 
 pub fn cmd_deps(path: &str, formatter: Formatter) -> CmdResult {
-    cmd_single_file_op("deps", path, operations::get_deps, formatter)
+    let config = get_config()?;
+    let db = get_db(&config)?;
+    let response = record_file_query(&db, &DepsQuery, path).map_err(map_err)?;
+    print_str(formatter, &response.body);
+    Ok(())
 }
 
 pub fn cmd_scope(path: &str, line: u32, formatter: Formatter) -> CmdResult {
-    cmd_single_file_op(
-        "scope",
-        path,
-        |db, p| operations::get_scope(db, p, line),
-        formatter,
-    )
+    let config = get_config()?;
+    let db = get_db(&config)?;
+    let response = record_file_query(&db, &ScopeQuery { line }, path).map_err(map_err)?;
+    print_str(formatter, &response.body);
+    Ok(())
 }

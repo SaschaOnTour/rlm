@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 
+use crate::application::FileQuery;
 use crate::db::Database;
 use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
@@ -56,6 +57,18 @@ pub fn get_deps(db: &Database, path: &str) -> Result<DepsResult> {
     };
     result.tokens = estimate_output_tokens(&result);
     Ok(result)
+}
+
+/// `deps <path>` as a [`FileQuery`].
+pub struct DepsQuery;
+
+impl FileQuery for DepsQuery {
+    type Output = DepsResult;
+    const COMMAND: &'static str = "deps";
+
+    fn execute(&self, db: &Database, path: &str) -> Result<Self::Output> {
+        get_deps(db, path)
+    }
 }
 
 #[cfg(test)]

@@ -26,6 +26,9 @@
 
 pub mod content;
 pub mod edit;
+pub mod file_query;
 pub mod index;
 pub mod query;
 pub mod symbol;
+
+pub use file_query::FileQuery;
