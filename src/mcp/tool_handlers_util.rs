@@ -8,11 +8,13 @@
 
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
-use serde::Serialize;
 
+use crate::application::symbol::{ContextQuery, ContextWithGraphQuery};
 use crate::config::Config;
 use crate::db::Database;
-use crate::interface::shared::{record_operation, AlternativeCost, OperationMeta};
+use crate::interface::shared::{
+    record_operation, record_symbol_query, AlternativeCost, OperationMeta,
+};
 use crate::operations;
 use crate::operations::savings;
 use crate::output::Formatter;
@@ -152,37 +154,13 @@ pub fn handle_context(
     include_graph: bool,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match operations::build_context(db, symbol) {
-        Ok(ctx_result) => {
-            let meta = OperationMeta {
-                command: "context",
-                files_touched: ctx_result.file_count as u64,
-                alternative: AlternativeCost::SymbolFiles {
-                    symbol: symbol.to_string(),
-                },
-            };
-            if include_graph {
-                match operations::build_callgraph(db, symbol) {
-                    Ok(graph) => {
-                        #[derive(Serialize)]
-                        struct ContextWithGraph<'a> {
-                            context: &'a operations::ContextResult,
-                            callgraph: &'a operations::CallgraphResult,
-                        }
-                        let combined = ContextWithGraph {
-                            context: &ctx_result,
-                            callgraph: &graph,
-                        };
-                        let response = record_operation(db, &meta, &combined);
-                        Ok(RlmServer::success_text(formatter, response.body))
-                    }
-                    Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-                }
-            } else {
-                let response = record_operation(db, &meta, &ctx_result);
-                Ok(RlmServer::success_text(formatter, response.body))
-            }
-        }
+    let result = if include_graph {
+        record_symbol_query::<ContextWithGraphQuery>(db, symbol)
+    } else {
+        record_symbol_query::<ContextQuery>(db, symbol)
+    };
+    match result {
+        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }

@@ -3,7 +3,7 @@
 //! System/utility commands live in `cli::handlers_util`.
 //! Shared helpers live in `cli::helpers`.
 
-use crate::application::symbol::RefsQuery;
+use crate::application::symbol::{ContextQuery, ContextWithGraphQuery, RefsQuery};
 use crate::cli::helpers::{
     cmd_single_file_op, emit_read_symbol, format_chunks, get_config, get_db, map_err,
     parse_strategy, print_str, print_write_result, CmdResult,
@@ -274,25 +274,10 @@ pub fn cmd_diff(path: &str, symbol: Option<&str>, formatter: Formatter) -> CmdRe
 pub fn cmd_context(symbol: &str, graph: bool, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
-    let result = operations::build_context(&db, symbol).map_err(map_err)?;
-
-    let meta = OperationMeta {
-        command: "context",
-        files_touched: result.file_count as u64,
-        alternative: AlternativeCost::SymbolFiles {
-            symbol: symbol.to_string(),
-        },
-    };
-
     let response = if graph {
-        let callgraph = operations::build_callgraph(&db, symbol).map_err(map_err)?;
-        let combined = serde_json::json!({
-            "context": result,
-            "callgraph": callgraph,
-        });
-        record_operation(&db, &meta, &combined)
+        record_symbol_query::<ContextWithGraphQuery>(&db, symbol).map_err(map_err)?
     } else {
-        record_operation(&db, &meta, &result)
+        record_symbol_query::<ContextQuery>(&db, symbol).map_err(map_err)?
     };
     print_str(formatter, &response.body);
     Ok(())

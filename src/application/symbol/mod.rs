@@ -6,14 +6,26 @@
 //! cost model. The trait captures that contract so the adapters can
 //! treat every symbol query uniformly via
 //! `interface::shared::record_symbol_query`.
+//!
+//! `scope` lives here for the domain grouping (all symbol-related
+//! queries) but is keyed by `path + line` and uses the `SingleFile`
+//! cost model; slice 3.6b wires it to a `FileQuery` trait instead of
+//! `SymbolQuery`.
 
 use serde::Serialize;
 
 use crate::db::Database;
 use crate::error::Result;
 
+pub mod callgraph;
+pub mod context;
+pub mod impact;
 pub mod refs;
+pub mod scope;
+pub mod signature;
+pub mod type_info;
 
+pub use context::{ContextQuery, ContextWithGraphQuery};
 pub use refs::RefsQuery;
 
 /// A read-only analysis of a symbol.

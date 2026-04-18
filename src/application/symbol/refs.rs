@@ -1,14 +1,12 @@
 //! `refs` / impact analysis as a [`SymbolQuery`].
 //!
-//! Wraps `operations::impact::analyze_impact` (still physically in
-//! `operations::impact` until slice 3.6 moves it here) in the
-//! `SymbolQuery` trait so adapters can dispatch through
-//! `record_symbol_query::<RefsQuery>`.
+//! Wraps `analyze_impact` in the `SymbolQuery` trait so adapters can
+//! dispatch through `record_symbol_query::<RefsQuery>`.
 
 use crate::db::Database;
 use crate::error::Result;
-use crate::operations::impact::{analyze_impact, ImpactResult};
 
+use super::impact::{analyze_impact, ImpactResult};
 use super::SymbolQuery;
 
 /// Find all usages of a symbol and report distinct affected files.
@@ -38,7 +36,7 @@ mod tests {
 
     #[test]
     fn refs_query_delegates_file_count_to_impact_result() {
-        use crate::operations::impact::ImpactEntry;
+        use super::super::impact::ImpactEntry;
 
         let result = ImpactResult {
             symbol: "foo".into(),
