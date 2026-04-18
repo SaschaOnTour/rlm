@@ -2,11 +2,10 @@
 //!
 //! Owns the shared public types (`SetupMode`, `SetupAction`, `SetupReport`,
 //! `SetupError`), the `run_setup` entrypoint that dispatches to the
-//! per-concern sub-modules, the `setup_initial_index` step, and the
-//! `write_atomic` + `replace_file` primitives consumed by `settings` and
-//! `claude_md`. Slice 5.2 will pull the atomic-write primitives into
-//! `infrastructure/filesystem/atomic_writer` so every write path (setup,
-//! edit/validator) shares one implementation.
+//! per-concern sub-modules, and the `setup_initial_index` step. The
+//! atomic-write primitives that used to live here were hoisted into
+//! `infrastructure::filesystem::atomic_writer` in slice 5.2 so
+//! `edit::validator` and `setup` share one implementation.
 
 use std::path::Path;
 
@@ -32,11 +31,6 @@ pub enum SetupError {
         path: String,
         source: serde_json::Error,
     },
-
-    /// The atomic-write retry budget was exhausted without finding a free
-    /// temp filename. Only plausible under extreme contention or clock skew.
-    #[error("atomic write exhausted {attempts} temp-name attempts")]
-    AtomicWriteExhausted { attempts: u32 },
 }
 
 /// Which operation `rlm setup` should perform.
@@ -119,81 +113,4 @@ pub fn setup_initial_index(project_dir: &Path, mode: SetupMode) -> Result<SetupA
             }
         }
     }
-}
-
-/// Upper bound on temp-filename collision retries (pid + nanos + counter).
-/// Collisions are effectively impossible within this budget in practice.
-const MAX_TEMP_ATTEMPTS: u32 = 128;
-
-/// Atomic write via `O_EXCL`-style tempfile + rename.
-///
-/// Uses `OpenOptions::create_new` so we never follow a pre-existing symlink
-/// or overwrite an attacker-seeded file at the temp path. Retries with a
-/// monotonic counter suffix if the chosen temp name is already taken.
-/// Cross-platform replace: Unix `rename` overwrites atomically; on Windows
-/// we remove the target first (see `replace_file`).
-// qual:allow(iosp) reason: "retry loop with early-exit on success is inherent to atomic-write-with-collision-retry; per-attempt work is extracted to try_write_once"
-pub(super) fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let now_nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-
-    for attempt in 0..MAX_TEMP_ATTEMPTS {
-        let temp = parent.join(format!(
-            ".rlm_setup_tmp_{}_{}_{}",
-            std::process::id(),
-            now_nanos,
-            attempt
-        ));
-        if try_write_once(&temp, path, content)? {
-            return Ok(());
-        }
-    }
-    Err(SetupError::AtomicWriteExhausted {
-        attempts: MAX_TEMP_ATTEMPTS,
-    }
-    .into())
-}
-
-/// One attempt at atomic write. Returns `Ok(true)` on success, `Ok(false)` if
-/// the temp name already existed (caller retries), `Err` on any other failure.
-// qual:allow(iosp) reason: "single-attempt atomic write — O_EXCL open + write + rename form one atomic primitive that can't be meaningfully split further"
-fn try_write_once(temp: &Path, target: &Path, content: &[u8]) -> Result<bool> {
-    use std::io::Write;
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(temp)
-    {
-        Ok(mut file) => {
-            if let Err(e) = file.write_all(content) {
-                drop(file);
-                let _ = std::fs::remove_file(temp);
-                return Err(e.into());
-            }
-            drop(file);
-            if let Err(e) = replace_file(temp, target) {
-                let _ = std::fs::remove_file(temp);
-                return Err(e.into());
-            }
-            Ok(true)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Cross-platform file replacement: Unix `rename` atomically overwrites,
-/// Windows `rename` requires explicit target removal first.
-fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        if to.exists() {
-            std::fs::remove_file(to)?;
-        }
-    }
-    std::fs::rename(from, to)
 }

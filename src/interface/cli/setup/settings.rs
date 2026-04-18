@@ -10,8 +10,8 @@ use std::path::Path;
 use serde_json::{json, Map, Value};
 
 use crate::error::Result;
+use crate::infrastructure::filesystem::atomic_writer::write_atomic;
 
-use super::orchestrator::write_atomic;
 use super::orchestrator::{SetupAction, SetupError, SetupMode};
 
 /// Directory under `project_dir` holding Claude Code settings.
@@ -107,7 +107,8 @@ fn read_settings(path: &Path) -> Result<Value> {
 /// Atomic write for settings.json — pretty-printed JSON for hand-editability.
 fn write_settings_atomic(path: &Path, v: &Value) -> Result<()> {
     let body = serde_json::to_string_pretty(v)?;
-    write_atomic(path, body.as_bytes())
+    write_atomic(path, body.as_bytes())?;
+    Ok(())
 }
 
 /// Canonical JSON fragment that `rlm setup` contributes.

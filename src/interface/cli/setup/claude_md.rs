@@ -8,8 +8,8 @@
 use std::path::Path;
 
 use crate::error::Result;
+use crate::infrastructure::filesystem::atomic_writer::write_atomic;
 
-use super::orchestrator::write_atomic;
 use super::orchestrator::{SetupAction, SetupMode};
 
 /// Per-project instructions file that `rlm setup` augments.
@@ -202,7 +202,8 @@ fn classify_markdown_action(
 }
 
 fn write_text_atomic(path: &Path, content: &str) -> Result<()> {
-    write_atomic(path, content.as_bytes())
+    write_atomic(path, content.as_bytes())?;
+    Ok(())
 }
 
 /// The rlm-managed block, marker-wrapped.
