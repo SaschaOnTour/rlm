@@ -14,16 +14,20 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::operations;
 use crate::operations::savings;
+use crate::output::Formatter;
 use crate::rlm::{partition, summarize};
 
 use super::server::RlmServer;
 
 /// Handle the `stats` tool: get indexing statistics.
 // qual:api
-pub fn handle_stats(db: &Database) -> Result<CallToolResult, McpError> {
+pub fn handle_stats(db: &Database, formatter: Formatter) -> Result<CallToolResult, McpError> {
     match operations::get_stats(db) {
-        Ok(result) => Ok(RlmServer::success_text(RlmServer::to_json(&result))),
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Ok(result) => Ok(RlmServer::success_text(
+            formatter,
+            RlmServer::to_json(&result),
+        )),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
@@ -34,6 +38,7 @@ pub fn handle_partition(
     path: &str,
     strategy_str: &str,
     project_root: &std::path::Path,
+    formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
     let strategy = if strategy_str == "semantic" {
         partition::Strategy::Semantic
@@ -41,16 +46,23 @@ pub fn handle_partition(
         match rest.parse::<usize>() {
             Ok(0) => {
                 return Ok(RlmServer::error_text(
+                    formatter,
                     "uniform chunk size must be >= 1".into(),
                 ))
             }
             Ok(n) => partition::Strategy::Uniform(n),
-            Err(e) => return Ok(RlmServer::error_text(format!("invalid chunk size: {e}"))),
+            Err(e) => {
+                return Ok(RlmServer::error_text(
+                    formatter,
+                    format!("invalid chunk size: {e}"),
+                ))
+            }
         }
     } else if let Some(rest) = strategy_str.strip_prefix("keyword:") {
         partition::Strategy::Keyword(rest.to_string())
     } else {
         return Ok(RlmServer::error_text(
+            formatter,
             "strategy must be: semantic, uniform:N, or keyword:PATTERN".into(),
         ));
     };
@@ -58,22 +70,26 @@ pub fn handle_partition(
     match partition::partition_file(db, path, &strategy, project_root) {
         Ok(result) => {
             let json = savings::record_file_op(db, "partition", &result, path);
-            Ok(RlmServer::success_text(json))
+            Ok(RlmServer::success_text(formatter, json))
         }
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
 /// Handle the `summarize` tool: generate a condensed file summary.
 // qual:api
-pub fn handle_summarize(db: &Database, path: &str) -> Result<CallToolResult, McpError> {
+pub fn handle_summarize(
+    db: &Database,
+    path: &str,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
     let result = summarize::summarize(db, path);
     match result {
         Ok(val) => {
             let json = savings::record_file_op(db, "summarize", &val, path);
-            Ok(RlmServer::success_text(json))
+            Ok(RlmServer::success_text(formatter, json))
         }
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
@@ -84,22 +100,23 @@ pub fn handle_diff(
     path: &str,
     symbol: Option<&str>,
     project_root: &std::path::Path,
+    formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
     if let Some(sym) = symbol {
         match operations::diff_symbol(db, path, sym, project_root) {
             Ok(result) => {
                 let json = savings::record_file_op(db, "diff", &result, path);
-                Ok(RlmServer::success_text(json))
+                Ok(RlmServer::success_text(formatter, json))
             }
-            Err(e) => Ok(RlmServer::error_text(e.to_string())),
+            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
         }
     } else {
         match operations::diff_file(db, path, project_root) {
             Ok(result) => {
                 let json = savings::record_file_op(db, "diff", &result, path);
-                Ok(RlmServer::success_text(json))
+                Ok(RlmServer::success_text(formatter, json))
             }
-            Err(e) => Ok(RlmServer::error_text(e.to_string())),
+            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
         }
     }
 }
@@ -110,6 +127,7 @@ pub fn handle_context(
     db: &Database,
     symbol: &str,
     include_graph: bool,
+    formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
     match operations::build_context(db, symbol) {
         Ok(ctx_result) => {
@@ -132,9 +150,9 @@ pub fn handle_context(
                             symbol,
                             ctx_result.file_count as u64,
                         );
-                        Ok(RlmServer::success_text(json))
+                        Ok(RlmServer::success_text(formatter, json))
                     }
-                    Err(e) => Ok(RlmServer::error_text(e.to_string())),
+                    Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
                 }
             } else {
                 let json = savings::record_symbol_op(
@@ -144,54 +162,75 @@ pub fn handle_context(
                     symbol,
                     ctx_result.file_count as u64,
                 );
-                Ok(RlmServer::success_text(json))
+                Ok(RlmServer::success_text(formatter, json))
             }
         }
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
 /// Handle the `deps` tool: file dependency analysis.
 // qual:api
-pub fn handle_deps(db: &Database, path: &str) -> Result<CallToolResult, McpError> {
+pub fn handle_deps(
+    db: &Database,
+    path: &str,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
     let result = operations::get_deps(db, path);
     match result {
         Ok(val) => {
             let json = savings::record_file_op(db, "deps", &val, path);
-            Ok(RlmServer::success_text(json))
+            Ok(RlmServer::success_text(formatter, json))
         }
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
 /// Handle the `scope` tool: symbols visible at a specific line.
 // qual:api
-pub fn handle_scope(db: &Database, path: &str, line: u32) -> Result<CallToolResult, McpError> {
+pub fn handle_scope(
+    db: &Database,
+    path: &str,
+    line: u32,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
     match operations::get_scope(db, path, line) {
         Ok(result) => {
             let json = savings::record_file_op(db, "scope", &result, path);
-            Ok(RlmServer::success_text(json))
+            Ok(RlmServer::success_text(formatter, json))
         }
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
 /// Handle the `savings` tool: token savings report.
 // qual:api
-pub fn handle_savings(db: &Database, since: Option<&str>) -> Result<CallToolResult, McpError> {
+pub fn handle_savings(
+    db: &Database,
+    since: Option<&str>,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
     match savings::get_savings_report(db, since) {
-        Ok(report) => Ok(RlmServer::success_text(RlmServer::to_json(&report))),
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Ok(report) => Ok(RlmServer::success_text(
+            formatter,
+            RlmServer::to_json(&report),
+        )),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
 /// Handle the `verify` tool: verify index integrity.
 // qual:api
-pub fn handle_verify(config: &Config, fix: bool) -> Result<CallToolResult, McpError> {
+pub fn handle_verify(
+    config: &Config,
+    fix: bool,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
     let db = match crate::db::Database::open_required(&config.db_path) {
         Ok(db) => db,
         Err(crate::error::RlmError::IndexNotFound) => {
             return Ok(RlmServer::error_text(
+                formatter,
                 "Index not found. Call the 'index' tool first.".into(),
             ));
         }
@@ -200,23 +239,30 @@ pub fn handle_verify(config: &Config, fix: bool) -> Result<CallToolResult, McpEr
 
     let report = match operations::verify_index(&db, &config.project_root) {
         Ok(r) => r,
-        Err(e) => return Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => return Ok(RlmServer::error_text(formatter, e.to_string())),
     };
 
     if fix && !report.is_ok() {
         match operations::fix_integrity(&db, &report) {
-            Ok(fix_result) => Ok(RlmServer::success_text(RlmServer::to_json(&fix_result))),
-            Err(e) => Ok(RlmServer::error_text(e.to_string())),
+            Ok(fix_result) => Ok(RlmServer::success_text(
+                formatter,
+                RlmServer::to_json(&fix_result),
+            )),
+            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
         }
     } else {
-        Ok(RlmServer::success_text(RlmServer::to_json(&report)))
+        Ok(RlmServer::success_text(
+            formatter,
+            RlmServer::to_json(&report),
+        ))
     }
 }
 
 /// Handle the `supported` tool: list supported file extensions.
 // qual:api
-pub fn handle_supported() -> Result<CallToolResult, McpError> {
-    Ok(RlmServer::success_text(RlmServer::to_json(
-        &operations::list_supported(),
-    )))
+pub fn handle_supported(formatter: Formatter) -> Result<CallToolResult, McpError> {
+    Ok(RlmServer::success_text(
+        formatter,
+        RlmServer::to_json(&operations::list_supported()),
+    ))
 }

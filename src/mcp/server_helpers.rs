@@ -15,6 +15,7 @@ use crate::db::Database;
 use crate::domain::token_budget::estimate_json_tokens;
 use crate::operations;
 use crate::operations::savings;
+use crate::output::Formatter;
 
 use super::server::RlmServer;
 
@@ -61,12 +62,12 @@ impl RlmServer {
         crate::output::to_json(val)
     }
 
-    pub(crate) fn success_text(text: String) -> CallToolResult {
+    pub(crate) fn success_text(formatter: Formatter, text: String) -> CallToolResult {
         // Guard first (on raw JSON), then reformat. This keeps guard_output
         // format-agnostic and lets the caller-configured format apply uniformly
         // to both the payload and any truncation notice.
         let guarded = guard_output(text);
-        let cow = crate::output::reformat_str(&guarded);
+        let cow = formatter.reformat_str(&guarded);
         let formatted = if matches!(cow, std::borrow::Cow::Borrowed(_)) {
             guarded
         } else {
@@ -75,14 +76,14 @@ impl RlmServer {
         CallToolResult::success(vec![Content::text(formatted)])
     }
 
-    pub(crate) fn error_text(msg: String) -> CallToolResult {
+    pub(crate) fn error_text(formatter: Formatter, msg: String) -> CallToolResult {
         // Build raw JSON first, then guard it, then reformat. This matches
         // success_text: guard_output stays format-agnostic, while the
         // caller-configured formatter applies uniformly to the payload and
         // any truncation notice.
         let json = crate::output::to_json(&serde_json::json!({"error": msg}));
         let guarded = guard_output(json);
-        let cow = crate::output::reformat_str(&guarded);
+        let cow = formatter.reformat_str(&guarded);
         let formatted = if matches!(cow, std::borrow::Cow::Borrowed(_)) {
             guarded
         } else {
@@ -100,11 +101,12 @@ impl RlmServer {
         db: &Database,
         path: &str,
         val: &T,
+        formatter: Formatter,
     ) -> Result<CallToolResult, McpError> {
         let json = Self::to_json(val);
         let out_tokens = estimate_json_tokens(json.len());
         savings::record_read_symbol(db, out_tokens, path);
-        Ok(Self::success_text(json))
+        Ok(Self::success_text(formatter, json))
     }
 
     /// Build the read-symbol response, optionally enriching with metadata (integration: calls only).
@@ -113,6 +115,7 @@ impl RlmServer {
         db: &Database,
         params: &super::tools::ReadParams,
         chunks: &T,
+        formatter: Formatter,
     ) -> Result<CallToolResult, McpError> {
         let include_metadata = params.metadata.unwrap_or(false);
 
@@ -135,11 +138,11 @@ impl RlmServer {
                     type_info,
                     signature,
                 };
-                return Self::serialize_and_record(db, &params.path, &enriched);
+                return Self::serialize_and_record(db, &params.path, &enriched, formatter);
             }
         }
 
-        Self::serialize_and_record(db, &params.path, chunks)
+        Self::serialize_and_record(db, &params.path, chunks, formatter)
     }
 }
 
@@ -187,13 +190,11 @@ pub async fn start_mcp_server() -> crate::error::Result<()> {
     // Determine project root from current working directory
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-    // Initialize output format from config (MCP has no CLI flag)
+    // Construct the formatter from project config (MCP has no CLI flag).
     let config = crate::config::Config::new(&project_root);
-    crate::output::init(crate::output::OutputFormat::from_str_loose(
-        &config.settings.output.format,
-    ));
+    let formatter = Formatter::from_str_loose(&config.settings.output.format);
 
-    let server = RlmServer::new(project_root);
+    let server = RlmServer::new(project_root, formatter);
 
     let service = server
         .serve(rmcp::transport::stdio())
@@ -216,19 +217,19 @@ mod tests {
 
     #[test]
     fn error_text_sets_is_error_true() {
-        let result = RlmServer::error_text("something failed".into());
+        let result = RlmServer::error_text(Formatter::default(), "something failed".into());
         assert_eq!(result.is_error, Some(true));
     }
 
     #[test]
     fn success_text_does_not_set_is_error() {
-        let result = RlmServer::success_text("ok".into());
+        let result = RlmServer::success_text(Formatter::default(), "ok".into());
         assert_ne!(result.is_error, Some(true));
     }
 
     #[test]
     fn error_text_contains_message() {
-        let result = RlmServer::error_text("disk full".into());
+        let result = RlmServer::error_text(Formatter::default(), "disk full".into());
         let text = result
             .content
             .first()
@@ -272,7 +273,7 @@ mod tests {
         fs::write(tmp.path().join("new.rs"), "fn externally_added() {}").unwrap();
 
         // MCP path: ensure_db should reconcile before returning the DB.
-        let server = RlmServer::new(tmp.path().to_path_buf());
+        let server = RlmServer::new(tmp.path().to_path_buf(), Formatter::default());
         let db = server.ensure_db().expect("ensure_db succeeds");
 
         let new_symbol_file = db.get_file_by_path("new.rs").unwrap();

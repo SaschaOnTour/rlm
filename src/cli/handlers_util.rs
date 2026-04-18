@@ -7,24 +7,24 @@ use crate::cli::helpers::{get_config, get_db, map_err, should_filter_unknown, Cm
 use crate::ingest::code::quality_log;
 use crate::operations;
 use crate::operations::savings;
-use crate::output;
+use crate::output::Formatter;
 
-pub fn cmd_stats(show_savings: bool, since: Option<&str>) -> CmdResult {
+pub fn cmd_stats(show_savings: bool, since: Option<&str>, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = get_db(&config)?;
 
     if show_savings {
         let report = savings::get_savings_report(&db, since).map_err(map_err)?;
-        output::print(&report);
+        formatter.print(&report);
         return Ok(());
     }
 
     let result = operations::get_stats(&db).map_err(map_err)?;
-    output::print(&result);
+    formatter.print(&result);
 
     // Check for files with quality issues (output to stderr as diagnostic info)
     if let Ok(Some(quality_info)) = operations::get_quality_info(&db) {
-        eprintln!("{}", output::serialize(&quality_info));
+        eprintln!("{}", formatter.serialize(&quality_info));
     }
 
     Ok(())
@@ -40,18 +40,22 @@ pub fn cmd_mcp() -> CmdResult {
 }
 
 /// Clear the quality log and return early (integration: calls only).
-fn cmd_quality_clear(log_path: &std::path::Path) -> CmdResult {
+fn cmd_quality_clear(log_path: &std::path::Path, formatter: Formatter) -> CmdResult {
     let logger = quality_log::QualityLogger::new(log_path, true);
     logger.clear().map_err(map_err)?;
-    output::print(&serde_json::json!({"cleared": true}));
+    formatter.print(&serde_json::json!({"cleared": true}));
     Ok(())
 }
 
 /// Display quality issues or summary (integration: calls only).
-fn cmd_quality_display(issues: Vec<quality_log::QualityIssue>, summary: bool) {
+fn cmd_quality_display(
+    issues: Vec<quality_log::QualityIssue>,
+    summary: bool,
+    formatter: Formatter,
+) {
     if summary {
         let stats = quality_log::summarize_issues(&issues);
-        output::print(&stats);
+        formatter.print(&stats);
     } else {
         #[derive(serde::Serialize)]
         struct QualityOutput {
@@ -59,19 +63,25 @@ fn cmd_quality_display(issues: Vec<quality_log::QualityIssue>, summary: bool) {
             issues: Vec<quality_log::QualityIssue>,
         }
 
-        output::print(&QualityOutput {
+        formatter.print(&QualityOutput {
             count: issues.len(),
             issues,
         });
     }
 }
 
-pub fn cmd_quality(unknown_only: bool, all: bool, clear: bool, summary: bool) -> CmdResult {
+pub fn cmd_quality(
+    unknown_only: bool,
+    all: bool,
+    clear: bool,
+    summary: bool,
+    formatter: Formatter,
+) -> CmdResult {
     let config = get_config()?;
     let log_path = config.get_quality_log_path();
 
     if clear {
-        return cmd_quality_clear(&log_path);
+        return cmd_quality_clear(&log_path, formatter);
     }
 
     let mut issues = quality_log::read_quality_log(&log_path).map_err(map_err)?;
@@ -81,11 +91,16 @@ pub fn cmd_quality(unknown_only: bool, all: bool, clear: bool, summary: bool) ->
         issues = quality_log::filter_unknown(issues);
     }
 
-    cmd_quality_display(issues, summary);
+    cmd_quality_display(issues, summary, formatter);
     Ok(())
 }
 
-pub fn cmd_files(path_filter: Option<&str>, skipped_only: bool, indexed_only: bool) -> CmdResult {
+pub fn cmd_files(
+    path_filter: Option<&str>,
+    skipped_only: bool,
+    indexed_only: bool,
+    formatter: Formatter,
+) -> CmdResult {
     let config = get_config()?;
     let filter = operations::FilesFilter {
         path_prefix: path_filter.map(String::from),
@@ -93,11 +108,11 @@ pub fn cmd_files(path_filter: Option<&str>, skipped_only: bool, indexed_only: bo
         indexed_only,
     };
     let result = operations::list_files(&config.project_root, filter).map_err(map_err)?;
-    output::print(&result);
+    formatter.print(&result);
     Ok(())
 }
 
-pub fn cmd_verify(fix: bool) -> CmdResult {
+pub fn cmd_verify(fix: bool, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
     let db = match crate::db::Database::open_required(&config.db_path) {
         Ok(db) => db,
@@ -110,20 +125,20 @@ pub fn cmd_verify(fix: bool) -> CmdResult {
 
     if fix && !report.is_ok() {
         let fix_result = operations::fix_integrity(&db, &report).map_err(map_err)?;
-        output::print(&fix_result);
+        formatter.print(&fix_result);
     } else {
-        output::print(&report);
+        formatter.print(&report);
     }
     Ok(())
 }
 
-pub fn cmd_supported() -> CmdResult {
+pub fn cmd_supported(formatter: Formatter) -> CmdResult {
     let result = operations::list_supported();
-    output::print(&result);
+    formatter.print(&result);
     Ok(())
 }
 
-pub fn cmd_setup(check: bool, remove: bool) -> CmdResult {
+pub fn cmd_setup(check: bool, remove: bool, formatter: Formatter) -> CmdResult {
     let mode = if remove {
         crate::setup::SetupMode::Remove
     } else if check {
@@ -133,6 +148,6 @@ pub fn cmd_setup(check: bool, remove: bool) -> CmdResult {
     };
     let cwd = std::env::current_dir().map_err(map_err)?;
     let report = crate::setup::run_setup(&cwd, mode).map_err(map_err)?;
-    output::print(&report);
+    formatter.print(&report);
     Ok(())
 }

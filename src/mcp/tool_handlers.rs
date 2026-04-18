@@ -18,6 +18,7 @@ use crate::indexer;
 use crate::models::chunk::Chunk;
 use crate::operations;
 use crate::operations::savings;
+use crate::output::Formatter;
 use crate::search::tree;
 
 use super::server::RlmServer;
@@ -68,8 +69,9 @@ fn resolve_index_config(
 pub fn handle_index(
     path: Option<&str>,
     project_root: &std::path::Path,
+    formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    handle_index_with_progress(path, project_root, None)
+    handle_index_with_progress(path, project_root, None, formatter)
 }
 
 /// Handle index with optional progress callback (used by MCP async handler).
@@ -78,25 +80,34 @@ pub fn handle_index_with_progress(
     path: Option<&str>,
     project_root: &std::path::Path,
     progress: Option<&indexer::ProgressCallback>,
+    formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
     let config = resolve_index_config(path, project_root)?;
 
     if let Err(e) = config.ensure_rlm_dir() {
-        return Ok(RlmServer::error_text(e.to_string()));
+        return Ok(RlmServer::error_text(formatter, e.to_string()));
     }
 
     match indexer::run_index(&config, progress) {
         Ok(result) => {
             let output: operations::IndexOutput = result.into();
-            Ok(RlmServer::success_text(RlmServer::to_json(&output)))
+            Ok(RlmServer::success_text(
+                formatter,
+                RlmServer::to_json(&output),
+            ))
         }
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
 /// Handle the `search` tool: full-text search across indexed chunks.
 // qual:api
-pub fn handle_search(db: &Database, query: &str, limit: usize) -> Result<CallToolResult, McpError> {
+pub fn handle_search(
+    db: &Database,
+    query: &str,
+    limit: usize,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
     match operations::search_chunks(db, query, limit) {
         Ok(result) => {
             let json = RlmServer::to_json(&result);
@@ -109,19 +120,24 @@ pub fn handle_search(db: &Database, query: &str, limit: usize) -> Result<CallToo
                 alt_tokens,
                 result.results.len() as u64,
             );
-            Ok(RlmServer::success_text(json))
+            Ok(RlmServer::success_text(formatter, json))
         }
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
 /// Handle the `read` tool: read a specific symbol or markdown section.
 // qual:api
-pub fn handle_read(db: &Database, params: &ReadParams) -> Result<CallToolResult, McpError> {
+pub fn handle_read(
+    db: &Database,
+    params: &ReadParams,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
     match (&params.symbol, &params.section) {
-        (Some(_), _) => handle_read_symbol(db, params),
-        (_, Some(_)) => handle_read_section(db, params),
+        (Some(_), _) => handle_read_symbol(db, params, formatter),
+        (_, Some(_)) => handle_read_section(db, params, formatter),
         _ => Ok(RlmServer::error_text(
+            formatter,
             "read requires 'symbol' or 'section'. Use Claude Code's Read for full files or line ranges.".into(),
         )),
     }
@@ -143,25 +159,32 @@ fn filter_chunks_by_path<'a>(
 
 /// Resolve which chunks to return and build the result (integration: calls only).
 // qual:allow(iosp) reason: "MCP handler with inherent error matching and delegation"
-fn handle_read_symbol(db: &Database, params: &ReadParams) -> Result<CallToolResult, McpError> {
+fn handle_read_symbol(
+    db: &Database,
+    params: &ReadParams,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
     let sym = params.symbol.as_deref().unwrap_or_default();
     let chunks = match db.get_chunks_by_ident(sym) {
         Ok(c) => c,
-        Err(e) => return Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => return Ok(RlmServer::error_text(formatter, e.to_string())),
     };
 
     if chunks.is_empty() {
-        return Ok(RlmServer::error_text(format!(
-            "Symbol not found: {sym}. Use 'search' to find similar symbols, or check the 'path' parameter."
-        )));
+        return Ok(RlmServer::error_text(
+            formatter,
+            format!(
+                "Symbol not found: {sym}. Use 'search' to find similar symbols, or check the 'path' parameter."
+            ),
+        ));
     }
 
     let file_chunks = filter_chunks_by_path(db, &chunks, &params.path);
 
     if file_chunks.is_empty() {
-        RlmServer::read_symbol_result(db, params, &chunks)
+        RlmServer::read_symbol_result(db, params, &chunks, formatter)
     } else {
-        RlmServer::read_symbol_result(db, params, &file_chunks)
+        RlmServer::read_symbol_result(db, params, &file_chunks, formatter)
     }
 }
 
@@ -190,35 +213,43 @@ fn section_not_found_hint(heading: &str, chunks: &[Chunk]) -> String {
 /// Max sections to show in "not found" error hints.
 const MAX_HINT_SECTIONS: usize = 10;
 
-fn handle_read_section(db: &Database, params: &ReadParams) -> Result<CallToolResult, McpError> {
+fn handle_read_section(
+    db: &Database,
+    params: &ReadParams,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
     let heading = params.section.as_deref().unwrap_or_default();
 
     let file = match db.get_file_by_path(&params.path) {
         Ok(Some(f)) => f,
         Ok(None) => {
-            return Ok(RlmServer::error_text(format!(
-                "File not found: {}. Run 'index' to update, or check 'files' for available paths.",
-                params.path
-            )));
+            return Ok(RlmServer::error_text(
+                formatter,
+                format!(
+                    "File not found: {}. Run 'index' to update, or check 'files' for available paths.",
+                    params.path
+                ),
+            ));
         }
-        Err(e) => return Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => return Ok(RlmServer::error_text(formatter, e.to_string())),
     };
 
     let chunks = match db.get_chunks_for_file(file.id) {
         Ok(c) => c,
-        Err(e) => return Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => return Ok(RlmServer::error_text(formatter, e.to_string())),
     };
 
     let sections: Vec<_> = chunks.into_iter().filter(|c| c.kind.is_section()).collect();
 
     if let Some(c) = sections.iter().find(|c| c.ident == *heading) {
         let json = savings::record_file_op(db, "read_section", c, &params.path);
-        return Ok(RlmServer::success_text(json));
+        return Ok(RlmServer::success_text(formatter, json));
     }
 
-    Ok(RlmServer::error_text(section_not_found_hint(
-        heading, &sections,
-    )))
+    Ok(RlmServer::error_text(
+        formatter,
+        section_not_found_hint(heading, &sections),
+    ))
 }
 
 /// Handle the `overview` tool: project structure at three detail levels.
@@ -227,6 +258,7 @@ pub fn handle_overview(
     db: &Database,
     detail: &str,
     path: Option<&str>,
+    formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
     match detail {
         "minimal" => {
@@ -234,41 +266,46 @@ pub fn handle_overview(
             match peek::peek(db, path) {
                 Ok(result) => {
                     let json = savings::record_scoped_op(db, "overview", &result, path);
-                    Ok(RlmServer::success_text(json))
+                    Ok(RlmServer::success_text(formatter, json))
                 }
-                Err(e) => Ok(RlmServer::error_text(e.to_string())),
+                Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
             }
         }
         "standard" => match operations::build_map(db, path) {
             Ok(entries) => {
                 let json = savings::record_scoped_op(db, "overview", &entries, path);
-                Ok(RlmServer::success_text(json))
+                Ok(RlmServer::success_text(formatter, json))
             }
-            Err(e) => Ok(RlmServer::error_text(e.to_string())),
+            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
         },
         "tree" => match tree::build_tree(db, path) {
             Ok(nodes) => {
                 let json = savings::record_scoped_op(db, "overview", &nodes, path);
-                Ok(RlmServer::success_text(json))
+                Ok(RlmServer::success_text(formatter, json))
             }
-            Err(e) => Ok(RlmServer::error_text(e.to_string())),
+            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
         },
-        other => Ok(RlmServer::error_text(format!(
-            "unknown detail level: '{other}'. Use 'minimal', 'standard', or 'tree'."
-        ))),
+        other => Ok(RlmServer::error_text(
+            formatter,
+            format!("unknown detail level: '{other}'. Use 'minimal', 'standard', or 'tree'."),
+        )),
     }
 }
 
 /// Handle the `refs` tool: find all usages of a symbol with impact analysis.
 // qual:api
-pub fn handle_refs(db: &Database, symbol: &str) -> Result<CallToolResult, McpError> {
+pub fn handle_refs(
+    db: &Database,
+    symbol: &str,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
     match operations::analyze_impact(db, symbol) {
         Ok(result) => {
             let files_touched = result.count as u64;
             let json = savings::record_symbol_op(db, "refs", &result, symbol, files_touched);
-            Ok(RlmServer::success_text(json))
+            Ok(RlmServer::success_text(formatter, json))
         }
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
@@ -278,11 +315,15 @@ pub fn handle_replace(
     db: &Database,
     params: &super::tools::ReplaceParams,
     project_root: &std::path::Path,
+    formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
     if params.preview.unwrap_or(false) {
         match replacer::preview_replace(db, &params.path, &params.symbol, &params.code) {
-            Ok(diff) => Ok(RlmServer::success_text(RlmServer::to_json(&diff))),
-            Err(e) => Ok(RlmServer::error_text(e.to_string())),
+            Ok(diff) => Ok(RlmServer::success_text(
+                formatter,
+                RlmServer::to_json(&diff),
+            )),
+            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
         }
     } else {
         match replacer::replace_symbol(db, &params.path, &params.symbol, &params.code, project_root)
@@ -303,9 +344,9 @@ pub fn handle_replace(
                 ) {
                     savings::record_v2(db, &entry);
                 }
-                Ok(RlmServer::success_text(result_json))
+                Ok(RlmServer::success_text(formatter, result_json))
             }
-            Err(e) => Ok(RlmServer::error_text(e.to_string())),
+            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
         }
     }
 }
@@ -318,6 +359,7 @@ pub fn handle_insert(
     position: &InsertPosition,
     code: &str,
     project_root: &std::path::Path,
+    formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
     let guard = SyntaxGuard::new();
     match inserter::insert_code(project_root, path, position, code, &guard) {
@@ -330,14 +372,15 @@ pub fn handle_insert(
                 {
                     savings::record_v2(db, &entry);
                 }
-                Ok(RlmServer::success_text(result_json))
+                Ok(RlmServer::success_text(formatter, result_json))
             }
             None => Ok(RlmServer::success_text(
+                formatter,
                 serde_json::json!({"ok": true, "reindexed": false, "hint": "no index; call 'index' to enable auto-reindex"})
                     .to_string(),
             )),
         },
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
@@ -348,6 +391,7 @@ pub fn handle_files(
     path_prefix: Option<String>,
     skipped_only: bool,
     indexed_only: bool,
+    formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
     let filter = operations::FilesFilter {
         path_prefix,
@@ -356,8 +400,11 @@ pub fn handle_files(
     };
 
     match operations::list_files(project_root, filter) {
-        Ok(result) => Ok(RlmServer::success_text(RlmServer::to_json(&result))),
-        Err(e) => Ok(RlmServer::error_text(e.to_string())),
+        Ok(result) => Ok(RlmServer::success_text(
+            formatter,
+            RlmServer::to_json(&result),
+        )),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
@@ -382,6 +429,7 @@ mod tests {
             &InsertPosition::Top,
             "// header\n",
             dir.path(),
+            Formatter::default(),
         );
         assert!(
             result.is_ok(),
@@ -408,6 +456,7 @@ mod tests {
             &InsertPosition::Top,
             "// hi\n",
             dir.path(),
+            Formatter::default(),
         );
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(true));
