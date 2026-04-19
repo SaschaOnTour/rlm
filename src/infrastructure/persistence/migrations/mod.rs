@@ -86,13 +86,17 @@ pub fn apply(conn: &Connection) -> Result<()> {
     }
 }
 
-/// Body of `apply`, run with the write lock already held. Creating
-/// `schema_migrations` lives here (not in `apply` before `BEGIN
-/// IMMEDIATE`) so the bootstrap read that immediately follows sees
-/// the same transactional snapshot as the replay loop — otherwise a
-/// concurrent open could squeeze a migration replay into the gap
-/// between our CREATE-IF-NOT-EXISTS and the BEGIN.
+/// Body of `apply`, run with the write lock already held. The
+/// ancient-DB wipe runs here too (not in `Database::open` before
+/// `BEGIN IMMEDIATE`) so concurrent opens can't race against a
+/// half-wiped schema: one process holds the lock until every drop,
+/// bootstrap and replay has committed. Creating `schema_migrations`
+/// also lives inside the lock, so the bootstrap read that follows
+/// sees the same transactional snapshot as the replay loop.
 fn apply_locked(conn: &Connection) -> Result<()> {
+    if needs_ancient_wipe(conn) {
+        wipe_ancient_schema(conn)?;
+    }
     ensure_migrations_table(conn)?;
     bootstrap_existing_schema(conn)?;
     let applied = applied_versions(conn)?;
@@ -102,6 +106,47 @@ fn apply_locked(conn: &Connection) -> Result<()> {
         }
         apply_one(conn, m)?;
     }
+    Ok(())
+}
+
+/// Detect databases that predate even migration 001's shape.
+///
+/// A pre-base rlm DB has a `files` row but lacks `chunks.doc_comment`
+/// or `files.parse_quality`. We can't express that schema jump as a
+/// cumulative migration without risking data in a file no one still
+/// has; the pragmatic choice is to wipe and re-index, matching the
+/// behaviour of every prior rlm release.
+fn needs_ancient_wipe(conn: &Connection) -> bool {
+    let tables_exist = conn.prepare("SELECT id FROM files LIMIT 0").is_ok();
+    if !tables_exist {
+        return false;
+    }
+    let has_doc_comment = conn
+        .prepare("SELECT doc_comment FROM chunks LIMIT 0")
+        .is_ok();
+    let has_parse_quality = conn
+        .prepare("SELECT parse_quality FROM files LIMIT 0")
+        .is_ok();
+    !has_doc_comment || !has_parse_quality
+}
+
+fn wipe_ancient_schema(conn: &Connection) -> Result<()> {
+    // Drop `savings` too: a pre-V1 DB may carry a savings table of
+    // unknown shape, and migration 001's `CREATE TABLE IF NOT EXISTS`
+    // would leave that stale shape in place; migration 002's
+    // ALTER TABLE ADD COLUMN statements would then run against it and
+    // produce a mixed schema. Dropping lets 001 recreate it cleanly.
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS chunks_fts;\
+         DROP TRIGGER IF EXISTS chunks_ai;\
+         DROP TRIGGER IF EXISTS chunks_ad;\
+         DROP TRIGGER IF EXISTS chunks_au;\
+         DROP TABLE IF EXISTS refs;\
+         DROP TABLE IF EXISTS chunks;\
+         DROP TABLE IF EXISTS files;\
+         DROP TABLE IF EXISTS savings;\
+         DROP TABLE IF EXISTS schema_migrations;",
+    )?;
     Ok(())
 }
 
@@ -118,36 +163,26 @@ fn ensure_migrations_table(conn: &Connection) -> Result<()> {
 
 /// Seed `schema_migrations` for databases that predate this framework.
 ///
-/// A DB opened by the legacy inline `CREATE_SCHEMA` path already has the
-/// final-shape tables but no tracking rows. Re-running the migrations
-/// against it would fail (e.g. `ALTER TABLE ... ADD COLUMN` on an
-/// existing column). Instead we inspect the columns and mark each
-/// migration applied iff its effect is already present.
-// qual:allow(iosp) reason: "integration: count check gates three column probes"
+/// A DB opened by the legacy inline `CREATE_SCHEMA` path already has
+/// the final-shape tables but no tracking rows. Blindly replaying the
+/// `ALTER TABLE ... ADD COLUMN` statements in migrations 002 / 003
+/// would fail on the first column that already exists, so we mark
+/// each of them applied iff its effect is already present.
+///
+/// Migration 001 is intentionally never marked here: its SQL is all
+/// `CREATE TABLE / INDEX / VIRTUAL TABLE / TRIGGER IF NOT EXISTS`, so
+/// replaying it is safe and idempotent. Running it unconditionally
+/// means a legacy DB that lost the `chunks_fts` virtual table, any
+/// index, or any of the FTS sync triggers (e.g. from a manual drop)
+/// gets those objects recreated on the next open — a narrow-probe
+/// "is 001 applied?" check could miss the missing object.
+// qual:allow(iosp) reason: "integration: count check gates two column probes"
 fn bootstrap_existing_schema(conn: &Connection) -> Result<()> {
     let already_tracked: i64 =
         conn.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))?;
     if already_tracked > 0 {
         return Ok(());
     }
-
-    // Migration 001 is "applied" iff the current-shape base tables
-    // exist. We key the detection on two columns added by the base
-    // schema: chunks.doc_comment and files.parse_quality. Ancient DBs
-    // that lack those columns are wiped by the caller before `apply` is
-    // reached, so we never see a half-shaped schema here.
-    let base_applied = conn
-        .prepare("SELECT doc_comment FROM chunks LIMIT 0")
-        .is_ok()
-        && conn
-            .prepare("SELECT parse_quality FROM files LIMIT 0")
-            .is_ok();
-    if !base_applied {
-        // Fresh DB: no tables at all. Leave schema_migrations empty and
-        // let `apply` run every migration in order.
-        return Ok(());
-    }
-    mark_applied(conn, 1, "base")?;
 
     if conn
         .prepare("SELECT alt_calls FROM savings LIMIT 0")
@@ -287,6 +322,47 @@ mod tests {
         assert!(conn
             .prepare("SELECT mtime_nanos FROM files LIMIT 0")
             .is_ok());
+    }
+
+    #[test]
+    fn replay_recreates_missing_fts_objects_on_legacy_db() {
+        // Regression: a legacy DB has the current-shape column set
+        // (doc_comment / parse_quality / alt_calls / mtime_nanos) but
+        // lost its FTS virtual table or trigger — e.g. a user manually
+        // dropped `chunks_fts` to reclaim space. The old bootstrap
+        // marked 001 as applied based on column probes alone, so the
+        // FTS objects never got recreated. After the fix, 001 always
+        // runs and its `CREATE ... IF NOT EXISTS` statements put
+        // every missing object back.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATION_001_BASE).unwrap();
+        conn.execute_batch(MIGRATION_002_SAVINGS_V2).unwrap();
+        conn.execute_batch(MIGRATION_003_MTIME).unwrap();
+        // Simulate FTS-loss post-hoc.
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS chunks_ai;\
+             DROP TRIGGER IF EXISTS chunks_ad;\
+             DROP TRIGGER IF EXISTS chunks_au;\
+             DROP TABLE IF EXISTS chunks_fts;",
+        )
+        .unwrap();
+        // Sanity: FTS really is gone.
+        assert!(conn
+            .prepare("SELECT rowid FROM chunks_fts LIMIT 0")
+            .is_err());
+
+        apply(&conn).unwrap();
+
+        // FTS objects reinstated.
+        assert!(conn.prepare("SELECT rowid FROM chunks_fts LIMIT 0").is_ok());
+        let trigger_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name IN ('chunks_ai','chunks_ad','chunks_au')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(trigger_count, 3);
     }
 
     #[test]

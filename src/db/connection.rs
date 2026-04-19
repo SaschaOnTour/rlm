@@ -13,8 +13,11 @@ pub struct Database {
 
 impl Database {
     /// Open (or create) a database at the given path and apply every
-    /// pending schema migration.
-    // qual:allow(iosp) reason: "integration: open + pragmas + ancient-wipe + migration run"
+    /// pending schema migration. The migration runner owns the
+    /// ancient-DB wipe (it runs inside the same `BEGIN IMMEDIATE`
+    /// transaction as the replay), so concurrent opens of the same
+    /// file cannot observe a half-wiped state.
+    // qual:allow(iosp) reason: "integration: open + pragmas + migration run"
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch(
@@ -24,9 +27,6 @@ impl Database {
              PRAGMA cache_size=-64000;\
              PRAGMA temp_store=MEMORY;",
         )?;
-        if needs_ancient_wipe(&conn) {
-            wipe_ancient_schema(&conn)?;
-        }
         migrations::apply(&conn)?;
         Ok(Self { conn })
     }
@@ -78,49 +78,6 @@ impl Database {
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
-}
-
-/// Detect databases that predate even the base migration's shape.
-///
-/// A pre-base rlm DB has a `files` row but lacks `chunks.doc_comment`
-/// or `files.parse_quality`. We can't express that schema jump as a
-/// cumulative migration without risking data in a file no one still
-/// has; the pragmatic choice is to wipe and re-index, matching the
-/// behaviour of every prior rlm release.
-fn needs_ancient_wipe(conn: &Connection) -> bool {
-    let tables_exist = conn.prepare("SELECT id FROM files LIMIT 0").is_ok();
-    if !tables_exist {
-        return false;
-    }
-    let has_doc_comment = conn
-        .prepare("SELECT doc_comment FROM chunks LIMIT 0")
-        .is_ok();
-    let has_parse_quality = conn
-        .prepare("SELECT parse_quality FROM files LIMIT 0")
-        .is_ok();
-    !has_doc_comment || !has_parse_quality
-}
-
-fn wipe_ancient_schema(conn: &Connection) -> Result<()> {
-    // Drop `savings` too, even though the pre-V1 detection in
-    // `needs_ancient_wipe` only looks at chunks/files columns. A very-old
-    // DB may carry a savings table of unknown shape; migration 001's
-    // `CREATE TABLE IF NOT EXISTS savings` would leave that stale shape
-    // in place and migration 002's ALTER TABLE ADD COLUMN statements
-    // would then run against it, risking a mixed schema. Dropping lets
-    // 001 recreate it cleanly.
-    conn.execute_batch(
-        "DROP TABLE IF EXISTS chunks_fts;\
-         DROP TRIGGER IF EXISTS chunks_ai;\
-         DROP TRIGGER IF EXISTS chunks_ad;\
-         DROP TRIGGER IF EXISTS chunks_au;\
-         DROP TABLE IF EXISTS refs;\
-         DROP TABLE IF EXISTS chunks;\
-         DROP TABLE IF EXISTS files;\
-         DROP TABLE IF EXISTS savings;\
-         DROP TABLE IF EXISTS schema_migrations;",
-    )?;
-    Ok(())
 }
 
 #[cfg(test)]
