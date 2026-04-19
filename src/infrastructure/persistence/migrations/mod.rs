@@ -29,6 +29,17 @@ struct Migration {
     version: i64,
     name: &'static str,
     sql: &'static str,
+    /// If true, the SQL is a sequence of idempotent single statements
+    /// (`ALTER TABLE ... ADD COLUMN`) that the runner executes one at a
+    /// time so it can tolerate `duplicate column` errors. Needed when
+    /// replaying a legacy DB whose schema is partially upgraded (e.g.
+    /// some of migration 002's four columns already exist because an
+    /// older rlm ran the pre-framework probe-and-alter logic but
+    /// crashed mid-way). Migrations that include multi-statement
+    /// constructs like FTS triggers (001) must not use this mode —
+    /// splitting on `;` would cut `BEGIN ... END;` trigger bodies in
+    /// half.
+    tolerate_duplicate_column: bool,
 }
 
 const MIGRATIONS: &[Migration] = &[
@@ -36,28 +47,48 @@ const MIGRATIONS: &[Migration] = &[
         version: 1,
         name: "base",
         sql: MIGRATION_001_BASE,
+        tolerate_duplicate_column: false,
     },
     Migration {
         version: 2,
         name: "savings_v2",
         sql: MIGRATION_002_SAVINGS_V2,
+        tolerate_duplicate_column: true,
     },
     Migration {
         version: 3,
         name: "mtime",
         sql: MIGRATION_003_MTIME,
+        tolerate_duplicate_column: true,
     },
 ];
 
 /// Apply every pending migration to `conn`.
 ///
-/// Creates `schema_migrations` if missing, bootstraps legacy DBs, then
-/// replays any migration whose version is not yet present in the
-/// tracking table. Each migration runs inside a transaction so a
-/// partial failure cannot leave the DB half-migrated.
-// qual:allow(iosp) reason: "integration: ensure-table + bootstrap + replay pipeline"
+/// Takes a single `BEGIN IMMEDIATE` write lock for the whole sequence
+/// (bootstrap + replay), so concurrent rlm processes opening the same
+/// DB are serialised and cannot both observe the same "pending" set
+/// and re-apply a non-idempotent migration. The lock is held across
+/// `bootstrap_existing_schema` / `applied_versions` / every pending
+/// `apply_one`, and released on COMMIT (or ROLLBACK on any failure).
+// qual:allow(iosp) reason: "integration: lock + ensure-table + bootstrap + replay + commit"
 pub fn apply(conn: &Connection) -> Result<()> {
     ensure_migrations_table(conn)?;
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+    match apply_locked(conn) {
+        Ok(()) => {
+            conn.execute_batch("COMMIT;")?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(e)
+        }
+    }
+}
+
+/// Body of `apply`, run with the write lock already held.
+fn apply_locked(conn: &Connection) -> Result<()> {
     bootstrap_existing_schema(conn)?;
     let applied = applied_versions(conn)?;
     for m in MIGRATIONS {
@@ -140,21 +171,46 @@ fn applied_versions(conn: &Connection) -> Result<HashSet<i64>> {
 }
 
 fn apply_one(conn: &Connection, m: &Migration) -> Result<()> {
-    conn.execute_batch("BEGIN IMMEDIATE;")?;
-    let outcome = conn
-        .execute_batch(m.sql)
-        .map_err(crate::error::RlmError::from)
-        .and_then(|()| mark_applied(conn, m.version, m.name));
-    match outcome {
-        Ok(()) => {
-            conn.execute_batch("COMMIT;")?;
-            Ok(())
+    // The outer transaction in `apply` provides atomicity; here we
+    // just execute the SQL (all-at-once for multi-statement constructs
+    // like FTS triggers, or statement-by-statement for idempotent
+    // ALTER TABLE sequences so a partially-upgraded legacy DB can
+    // finish cleanly).
+    if m.tolerate_duplicate_column {
+        for stmt in m.sql.split(';') {
+            // Skip chunks that contain no executable SQL once line
+            // comments and whitespace are stripped. Checking only the
+            // first trimmed char would drop statements preceded by a
+            // comment block (as every migration file has at the top).
+            if is_blank_sql(stmt) {
+                continue;
+            }
+            match conn.execute_batch(stmt) {
+                Ok(()) => {}
+                Err(e) if is_duplicate_column(&e) => {
+                    // Column already added by an earlier partial run.
+                }
+                Err(e) => return Err(e.into()),
+            }
         }
-        Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK;");
-            Err(e)
-        }
+    } else {
+        conn.execute_batch(m.sql)?;
     }
+    mark_applied(conn, m.version, m.name)?;
+    Ok(())
+}
+
+/// Match rusqlite's duplicate-column error without coupling to its
+/// internal error code constants — the text is stable across versions
+/// and the same probe the pre-framework savings migration used.
+fn is_duplicate_column(e: &rusqlite::Error) -> bool {
+    e.to_string().contains("duplicate column")
+}
+
+/// True if `stmt` consists only of whitespace and `-- line comments`.
+fn is_blank_sql(stmt: &str) -> bool {
+    stmt.lines()
+        .all(|l| l.trim().is_empty() || l.trim_start().starts_with("--"))
 }
 
 fn mark_applied(conn: &Connection, version: i64, name: &str) -> Result<()> {
@@ -226,5 +282,39 @@ mod tests {
         assert!(conn
             .prepare("SELECT mtime_nanos FROM files LIMIT 0")
             .is_ok());
+    }
+
+    #[test]
+    fn replay_of_002_survives_partial_column_set() {
+        // Regression: a DB where migration 002 is half-applied (some of
+        // the four savings columns already exist because an older rlm
+        // ran the pre-framework probe-and-alter logic and crashed
+        // mid-way). `bootstrap_existing_schema` only marks 002 as
+        // applied if `alt_calls` exists, so here 002 is pending. The
+        // replay must not abort on the first `ALTER TABLE ... ADD
+        // COLUMN` that hits an existing column.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATION_001_BASE).unwrap();
+        // Partial 002: first two columns present, last two missing.
+        conn.execute_batch(
+            "ALTER TABLE savings ADD COLUMN rlm_input_tokens INTEGER NOT NULL DEFAULT 0;\
+             ALTER TABLE savings ADD COLUMN alt_input_tokens INTEGER NOT NULL DEFAULT 0;",
+        )
+        .unwrap();
+
+        apply(&conn).unwrap();
+
+        let applied = applied_versions(&conn).unwrap();
+        assert!(applied.contains(&2));
+        // All four columns present after replay.
+        for col in [
+            "rlm_input_tokens",
+            "alt_input_tokens",
+            "rlm_calls",
+            "alt_calls",
+        ] {
+            let sql = format!("SELECT {col} FROM savings LIMIT 0");
+            assert!(conn.prepare(&sql).is_ok(), "{col} missing");
+        }
     }
 }
