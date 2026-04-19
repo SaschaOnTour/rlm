@@ -77,7 +77,8 @@ fn upsert_claude_local_md(path: &Path, mode: SetupMode) -> Result<SetupAction> {
 /// Return the full file content with the rlm block replaced or appended.
 #[must_use]
 fn build_updated_markdown(existing: &str) -> String {
-    let new_block = render_claude_local_md_section();
+    let eol = detect_eol(existing);
+    let new_block = render_claude_local_md_section(eol);
     let mut out = match (existing.find(MARKER_BEGIN), existing.find(MARKER_END)) {
         (Some(start), Some(end)) if start < end => {
             // Well-formed block: replace content between markers.
@@ -99,20 +100,34 @@ fn build_updated_markdown(existing: &str) -> String {
             s.push_str(&new_block);
             s
         }
-        (None, _) => append_block(existing, &new_block),
+        (None, _) => append_block(existing, &new_block, eol),
     };
     normalize_trailing_newline(&mut out);
     out
 }
 
+/// Pick the EOL style to use for any new content we write.
+///
+/// Returns `"\r\n"` as soon as `existing` contains a CRLF (a single
+/// hit is a reliable Windows-authored-file signal in practice) and
+/// `"\n"` otherwise — including for empty files, which is the sane
+/// default for rlm's own rendered block.
+fn detect_eol(existing: &str) -> &'static str {
+    if existing.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
 /// Append `new_block` to `existing`, separated by a blank line if `existing` is non-empty.
-fn append_block(existing: &str, new_block: &str) -> String {
+fn append_block(existing: &str, new_block: &str, eol: &str) -> String {
     let mut out = existing.to_string();
     if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
+        out.push_str(eol);
     }
     if !out.is_empty() {
-        out.push('\n');
+        out.push_str(eol);
     }
     out.push_str(new_block);
     out
@@ -206,10 +221,12 @@ fn write_text_atomic(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-/// The rlm-managed block, marker-wrapped.
+/// The rlm-managed block, marker-wrapped, rendered with `eol` as the
+/// line separator so it matches the surrounding file's EOL style
+/// (CRLF on Windows-authored `CLAUDE.local.md`, LF everywhere else).
 #[must_use]
-fn render_claude_local_md_section() -> String {
-    format!(
+fn render_claude_local_md_section(eol: &str) -> String {
+    let body = format!(
         "{MARKER_BEGIN}
 ## rlm Workflow Instructions
 
@@ -237,7 +254,12 @@ fn render_claude_local_md_section() -> String {
 - Set `RLM_SKIP_REFRESH=1` to bypass the check in performance-sensitive scripts.
 {MARKER_END}
 "
-    )
+    );
+    if eol == "\r\n" {
+        body.replace('\n', "\r\n")
+    } else {
+        body
+    }
 }
 
 #[cfg(test)]
@@ -246,10 +268,63 @@ mod tests {
 
     #[test]
     fn render_block_contains_markers() {
-        let section = render_claude_local_md_section();
+        let section = render_claude_local_md_section("\n");
         assert!(section.starts_with(MARKER_BEGIN));
         assert!(section.trim_end().ends_with(MARKER_END));
         assert!(section.contains("rlm Workflow Instructions"));
+    }
+
+    #[test]
+    fn render_block_uses_requested_eol() {
+        let lf = render_claude_local_md_section("\n");
+        assert!(!lf.contains('\r'), "LF render must not contain \\r");
+
+        let crlf = render_claude_local_md_section("\r\n");
+        // Every LF in the body is paired with a preceding CR.
+        let bytes = crlf.as_bytes();
+        for i in 0..bytes.len() {
+            if bytes[i] == b'\n' {
+                assert!(i > 0 && bytes[i - 1] == b'\r', "orphaned \\n at byte {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn build_markdown_preserves_crlf_in_windows_authored_file() {
+        // Regression: the rendered rlm block used to be hardcoded LF,
+        // so a CRLF-authored CLAUDE.local.md ended up with mixed
+        // \r\n\n line endings and a noisy Windows diff. Detecting the
+        // EOL from `existing` keeps the output all-CRLF.
+        let existing =
+            "# Project\r\n\r\n<!-- rlm:begin -->\r\nOLD\r\n<!-- rlm:end -->\r\n\r\n## Footer\r\n";
+        let out = build_updated_markdown(existing);
+        let bytes = out.as_bytes();
+        for i in 0..bytes.len() {
+            if bytes[i] == b'\n' {
+                assert!(
+                    i > 0 && bytes[i - 1] == b'\r',
+                    "orphaned \\n at byte {i} in output: {out:?}"
+                );
+            }
+        }
+        assert!(out.contains("## Footer"));
+        assert!(out.contains("rlm Workflow Instructions"));
+    }
+
+    #[test]
+    fn build_markdown_crlf_append_when_no_markers() {
+        // Same EOL concern, append-to-EOF path.
+        let existing = "# Project\r\nLine 1\r\n";
+        let out = build_updated_markdown(existing);
+        let bytes = out.as_bytes();
+        for i in 0..bytes.len() {
+            if bytes[i] == b'\n' {
+                assert!(
+                    i > 0 && bytes[i - 1] == b'\r',
+                    "orphaned \\n at byte {i} in output: {out:?}"
+                );
+            }
+        }
     }
 
     #[test]
