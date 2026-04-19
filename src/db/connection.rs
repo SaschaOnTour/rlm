@@ -102,6 +102,13 @@ fn needs_ancient_wipe(conn: &Connection) -> bool {
 }
 
 fn wipe_ancient_schema(conn: &Connection) -> Result<()> {
+    // Drop `savings` too, even though the pre-V1 detection in
+    // `needs_ancient_wipe` only looks at chunks/files columns. A very-old
+    // DB may carry a savings table of unknown shape; migration 001's
+    // `CREATE TABLE IF NOT EXISTS savings` would leave that stale shape
+    // in place and migration 002's ALTER TABLE ADD COLUMN statements
+    // would then run against it, risking a mixed schema. Dropping lets
+    // 001 recreate it cleanly.
     conn.execute_batch(
         "DROP TABLE IF EXISTS chunks_fts;\
          DROP TRIGGER IF EXISTS chunks_ai;\
@@ -110,6 +117,7 @@ fn wipe_ancient_schema(conn: &Connection) -> Result<()> {
          DROP TABLE IF EXISTS refs;\
          DROP TABLE IF EXISTS chunks;\
          DROP TABLE IF EXISTS files;\
+         DROP TABLE IF EXISTS savings;\
          DROP TABLE IF EXISTS schema_migrations;",
     )?;
     Ok(())
@@ -194,15 +202,18 @@ mod tests {
     #[test]
     fn ancient_schema_is_wiped_and_reseeded() {
         // Simulate an ancient rlm DB: `files` exists but without
-        // `doc_comment` / `parse_quality`. Every modern column is
-        // missing too.
+        // `doc_comment` / `parse_quality`. A savings table of an
+        // unknown old shape is also present — the wipe must drop it
+        // so migration 001 recreates it with the current columns
+        // rather than leaving the stale shape behind.
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("ancient.db");
         {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(
                 "CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT);\
-                 CREATE TABLE chunks (id INTEGER PRIMARY KEY);",
+                 CREATE TABLE chunks (id INTEGER PRIMARY KEY);\
+                 CREATE TABLE savings (id INTEGER PRIMARY KEY, stale_only_column TEXT);",
             )
             .unwrap();
         }
@@ -220,5 +231,11 @@ mod tests {
             .conn()
             .prepare("SELECT mtime_nanos FROM files LIMIT 0")
             .is_ok());
+        // The stale-only column from the pre-wipe savings table must
+        // be gone — otherwise the wipe preserved the old shape.
+        assert!(db
+            .conn()
+            .prepare("SELECT stale_only_column FROM savings LIMIT 0")
+            .is_err());
     }
 }
