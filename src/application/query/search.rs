@@ -93,11 +93,15 @@ fn run_fts(db: &Database, query: &str, limit: usize) -> Result<Vec<Chunk>> {
 
 /// Sanitize a user query for FTS5.
 ///
-/// Strips every character that isn't `[A-Za-z0-9_ -]`, splits on
-/// whitespace, wraps each remaining term in double quotes so FTS5
-/// treats it as a phrase, and joins the phrases with `OR`. Returns an
-/// empty string when the input has no usable characters — the caller
-/// short-circuits and returns no hits in that case.
+/// Keeps characters that `char::is_alphanumeric` accepts (which is
+/// Unicode-wide — letters and digits from any script, so identifiers
+/// like `größe` or `日本語` survive), plus whitespace, `_`, and `-`.
+/// Drops everything else (quotes, parens, operators, FTS5
+/// meta-chars). Splits the cleaned string on whitespace, wraps each
+/// term in double quotes so FTS5 treats it as a phrase, and joins the
+/// phrases with `OR`. Returns an empty string when the input has no
+/// usable characters — the caller short-circuits and returns no hits
+/// in that case.
 fn sanitize_fts_query(query: &str) -> String {
     let cleaned: String = query
         .chars()
