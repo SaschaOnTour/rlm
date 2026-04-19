@@ -91,8 +91,13 @@ fn run_fts(db: &Database, query: &str, limit: usize) -> Result<Vec<Chunk>> {
     db.search_fts(&sanitized, limit)
 }
 
-/// Sanitize a user query for FTS5 by escaping special characters and
-/// converting to a prefix match for better results.
+/// Sanitize a user query for FTS5.
+///
+/// Strips every character that isn't `[A-Za-z0-9_ -]`, splits on
+/// whitespace, wraps each remaining term in double quotes so FTS5
+/// treats it as a phrase, and joins the phrases with `OR`. Returns an
+/// empty string when the input has no usable characters — the caller
+/// short-circuits and returns no hits in that case.
 fn sanitize_fts_query(query: &str) -> String {
     let cleaned: String = query
         .chars()

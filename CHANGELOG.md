@@ -74,12 +74,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - Transitional `pub use` bridges left behind during the refactoring slices
-  (`src/setup.rs`, `src/indexer.rs`, `src/operations/mod.rs`, `src/rlm/mod.rs`,
-  `src/search/mod.rs`, `src/edit/mod.rs`). Import paths now point directly at
+  (`src/setup.rs`, `src/indexer.rs`, `src/rlm/mod.rs`, `src/search/mod.rs`,
+  `src/edit/mod.rs`). Import paths now point directly at
   `crate::interface::cli::setup`, `crate::application::index`,
-  `crate::application::query`, `crate::application::content`,
-  `crate::application::edit`, and `crate::application::symbol`. **Breaking for
-  library consumers.** CLI binary unchanged.
+  `crate::application::query`, `crate::application::content`, and
+  `crate::application::edit`. **Breaking for library consumers.** CLI binary
+  unchanged. `src/operations/` stays — it still owns the `index`, `refs`, and
+  `savings` output modules; a follow-up slice will fold them into the
+  application layer.
 - `src/db/schema.rs` and its `CREATE_SCHEMA` / `MIGRATE_SAVINGS_V2` /
   `MIGRATE_FILES_MTIME` constants — replaced by the migration runner.
 

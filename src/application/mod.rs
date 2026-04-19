@@ -19,10 +19,13 @@
 //! never on the concrete backends. Adapters in [`crate::interface`] call
 //! into here.
 //!
-//! This module is the skeleton introduced by slice 3.1. Later slices
-//! migrate existing code from `crate::operations`, `crate::rlm`,
-//! `crate::application::query`, `crate::application::edit`, and `crate::application::index` into the
-//! corresponding sub-domains.
+//! This module started as the skeleton introduced by slice 3.1. Phases
+//! 3–5 then migrated existing code from the former top-level
+//! `crate::operations`, `crate::rlm`, `crate::search`, `crate::edit`,
+//! and `crate::indexer` modules into the sub-domains here. Those
+//! bridges have been removed; `crate::operations` is the one remaining
+//! top-level module of its vintage and still holds its own code
+//! (refs, savings, index output envelope).
 
 pub mod content;
 pub mod edit;
