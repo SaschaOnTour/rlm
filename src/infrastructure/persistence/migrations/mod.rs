@@ -73,7 +73,6 @@ const MIGRATIONS: &[Migration] = &[
 /// `apply_one`, and released on COMMIT (or ROLLBACK on any failure).
 // qual:allow(iosp) reason: "integration: lock + ensure-table + bootstrap + replay + commit"
 pub fn apply(conn: &Connection) -> Result<()> {
-    ensure_migrations_table(conn)?;
     conn.execute_batch("BEGIN IMMEDIATE;")?;
     match apply_locked(conn) {
         Ok(()) => {
@@ -87,8 +86,14 @@ pub fn apply(conn: &Connection) -> Result<()> {
     }
 }
 
-/// Body of `apply`, run with the write lock already held.
+/// Body of `apply`, run with the write lock already held. Creating
+/// `schema_migrations` lives here (not in `apply` before `BEGIN
+/// IMMEDIATE`) so the bootstrap read that immediately follows sees
+/// the same transactional snapshot as the replay loop — otherwise a
+/// concurrent open could squeeze a migration replay into the gap
+/// between our CREATE-IF-NOT-EXISTS and the BEGIN.
 fn apply_locked(conn: &Connection) -> Result<()> {
+    ensure_migrations_table(conn)?;
     bootstrap_existing_schema(conn)?;
     let applied = applied_versions(conn)?;
     for m in MIGRATIONS {
