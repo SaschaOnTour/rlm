@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use rmcp::ServerHandler;
 use tempfile::TempDir;
 
+use rlm::application::index as indexer;
 use rlm::config::Config;
-use rlm::indexer;
 use rlm::mcp::server::RlmServer;
 use rlm::output::Formatter;
 

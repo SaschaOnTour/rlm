@@ -1,8 +1,8 @@
 use thiserror::Error;
 
-use crate::edit::error::EditError;
+use crate::application::edit::error::EditError;
 use crate::infrastructure::filesystem::atomic_writer::AtomicWriteError;
-use crate::setup::SetupError;
+use crate::interface::cli::setup::SetupError;
 
 #[derive(Error, Debug)]
 pub enum RlmError {

@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 
-use crate::indexer::IndexResult;
+use crate::application::index::IndexResult;
 
 /// Serializable index output with all diagnostic fields.
 ///

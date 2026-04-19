@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::db::Database;
 use crate::domain::token_budget::{estimate_tokens_str, TokenEstimate};
 use crate::error::Result;
-use crate::search::fts;
+use crate::models::chunk::Chunk;
 
 /// Approximate number of characters per token for output size estimation.
 const MIN_FTS_TOKEN_LENGTH: u64 = 4;
@@ -47,7 +47,7 @@ pub struct SearchHit {
 pub fn search_chunks(db: &Database, query: &str, limit: usize) -> Result<SearchResult> {
     use std::collections::HashSet;
 
-    let results = fts::search(db, query, limit)?;
+    let results = run_fts(db, query, limit)?;
 
     let file_count = results
         .iter()
@@ -76,6 +76,45 @@ pub fn search_chunks(db: &Database, query: &str, limit: usize) -> Result<SearchR
             estimate_tokens_str(query) + total_chars as u64 / MIN_FTS_TOKEN_LENGTH,
         ),
     })
+}
+
+/// Run the FTS5 query with sanitised input, returning raw chunks.
+///
+/// Inlined from the former `crate::search::fts::search` when the
+/// transitional `src/search/` bridge was removed. Keeps the single
+/// call site (this module) and its helper in one place.
+fn run_fts(db: &Database, query: &str, limit: usize) -> Result<Vec<Chunk>> {
+    let sanitized = sanitize_fts_query(query);
+    if sanitized.is_empty() {
+        return Ok(Vec::new());
+    }
+    db.search_fts(&sanitized, limit)
+}
+
+/// Sanitize a user query for FTS5.
+///
+/// Keeps characters that `char::is_alphanumeric` accepts (which is
+/// Unicode-wide — letters and digits from any script, so identifiers
+/// like `größe` or `日本語` survive), plus whitespace, `_`, and `-`.
+/// Drops everything else (quotes, parens, operators, FTS5
+/// meta-chars). Splits the cleaned string on whitespace, wraps each
+/// term in double quotes so FTS5 treats it as a phrase, and joins the
+/// phrases with `OR`. Returns an empty string when the input has no
+/// usable characters — the caller short-circuits and returns no hits
+/// in that case.
+fn sanitize_fts_query(query: &str) -> String {
+    let cleaned: String = query
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '_' || *c == '-')
+        .collect();
+
+    let terms: Vec<String> = cleaned
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("\"{t}\""))
+        .collect();
+
+    terms.join(" OR ")
 }
 
 #[cfg(test)]
@@ -139,6 +178,32 @@ mod tests {
         let result = search_chunks(&db, "nonexistent_xyz_123", TEST_SEARCH_LIMIT).unwrap();
         assert!(result.results.is_empty());
         assert_eq!(result.file_count, 0);
+    }
+
+    #[test]
+    fn sanitize_fts_query_basic() {
+        let result = sanitize_fts_query("hello world");
+        assert!(result.contains("\"hello\""));
+        assert!(result.contains("\"world\""));
+    }
+
+    #[test]
+    fn sanitize_fts_query_special_chars() {
+        let result = sanitize_fts_query("fn main() {}");
+        assert!(result.contains("\"fn\""));
+        assert!(result.contains("\"main\""));
+    }
+
+    #[test]
+    fn sanitize_fts_query_empty() {
+        assert_eq!(sanitize_fts_query(""), "");
+    }
+
+    #[test]
+    fn run_fts_empty_db_returns_empty() {
+        let db = test_db();
+        let results = run_fts(&db, "hello", TEST_SEARCH_LIMIT).unwrap();
+        assert!(results.is_empty());
     }
 
     #[test]

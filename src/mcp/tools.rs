@@ -6,7 +6,7 @@
 use rmcp::schemars;
 use serde::Deserialize;
 
-use crate::edit::inserter::InsertPosition;
+use crate::application::edit::inserter::InsertPosition;
 
 // ── Index ───────────────────────────────────────────────────────
 

@@ -140,14 +140,14 @@ pub fn cmd_supported(formatter: Formatter) -> CmdResult {
 
 pub fn cmd_setup(check: bool, remove: bool, formatter: Formatter) -> CmdResult {
     let mode = if remove {
-        crate::setup::SetupMode::Remove
+        crate::interface::cli::setup::SetupMode::Remove
     } else if check {
-        crate::setup::SetupMode::Check
+        crate::interface::cli::setup::SetupMode::Check
     } else {
-        crate::setup::SetupMode::Apply
+        crate::interface::cli::setup::SetupMode::Apply
     };
     let cwd = std::env::current_dir().map_err(map_err)?;
-    let report = crate::setup::run_setup(&cwd, mode).map_err(map_err)?;
+    let report = crate::interface::cli::setup::run_setup(&cwd, mode).map_err(map_err)?;
     formatter.print(&report);
     Ok(())
 }

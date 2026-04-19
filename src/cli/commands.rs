@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::edit::inserter::InsertPosition;
+use crate::application::edit::inserter::InsertPosition;
 
 /// Output format for CLI commands.
 #[derive(Debug, Clone, Copy, ValueEnum)]
