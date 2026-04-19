@@ -102,7 +102,7 @@ fn build_updated_markdown(existing: &str) -> String {
         }
         (None, _) => append_block(existing, &new_block, eol),
     };
-    normalize_trailing_newline(&mut out);
+    normalize_trailing_newline(&mut out, eol);
     out
 }
 
@@ -138,8 +138,10 @@ fn append_block(existing: &str, new_block: &str, eol: &str) -> String {
 /// Required for idempotency — slicing between markers can leave double
 /// newlines of either EOL style. Trims `\r\n\r\n` (CRLF files) and `\n\n`
 /// (LF files) alike, so Windows-authored `CLAUDE.local.md` stays clean
-/// across repeat runs.
-fn normalize_trailing_newline(s: &mut String) {
+/// across repeat runs. When the input is missing a trailing newline, we
+/// append one using `eol` so a CRLF file with a no-EOL footer doesn't
+/// end up with a stray bare `\n` at EOF.
+fn normalize_trailing_newline(s: &mut String, eol: &str) {
     loop {
         if s.ends_with("\r\n\r\n") {
             s.truncate(s.len() - 2);
@@ -150,7 +152,7 @@ fn normalize_trailing_newline(s: &mut String) {
         }
     }
     if !s.is_empty() && !s.ends_with('\n') {
-        s.push('\n');
+        s.push_str(eol);
     }
 }
 
@@ -402,28 +404,60 @@ mod tests {
         // Regression: CRLF files ending in `\r\n\r\n` must collapse to a
         // single `\r\n`, just like LF files collapse `\n\n` to `\n`.
         let mut crlf = String::from("body\r\n\r\n");
-        normalize_trailing_newline(&mut crlf);
+        normalize_trailing_newline(&mut crlf, "\r\n");
         assert_eq!(crlf, "body\r\n");
 
         let mut crlf_multi = String::from("body\r\n\r\n\r\n");
-        normalize_trailing_newline(&mut crlf_multi);
+        normalize_trailing_newline(&mut crlf_multi, "\r\n");
         assert_eq!(crlf_multi, "body\r\n");
 
         let mut lf = String::from("body\n\n");
-        normalize_trailing_newline(&mut lf);
+        normalize_trailing_newline(&mut lf, "\n");
         assert_eq!(lf, "body\n");
 
         let mut already_clean_lf = String::from("body\n");
-        normalize_trailing_newline(&mut already_clean_lf);
+        normalize_trailing_newline(&mut already_clean_lf, "\n");
         assert_eq!(already_clean_lf, "body\n");
 
         let mut already_clean_crlf = String::from("body\r\n");
-        normalize_trailing_newline(&mut already_clean_crlf);
+        normalize_trailing_newline(&mut already_clean_crlf, "\r\n");
         assert_eq!(already_clean_crlf, "body\r\n");
 
         let mut no_newline = String::from("body");
-        normalize_trailing_newline(&mut no_newline);
+        normalize_trailing_newline(&mut no_newline, "\n");
         assert_eq!(no_newline, "body\n");
+    }
+
+    #[test]
+    fn normalize_uses_detected_eol_on_no_newline_input() {
+        // Regression: a CRLF-authored file whose footer lacked a final
+        // EOL used to get a lone `\n` tacked on by normalize_trailing_newline,
+        // producing mixed line endings at EOF. The detected EOL now
+        // propagates so we append `\r\n` instead.
+        let mut crlf_no_eol = String::from("body");
+        normalize_trailing_newline(&mut crlf_no_eol, "\r\n");
+        assert_eq!(crlf_no_eol, "body\r\n");
+    }
+
+    #[test]
+    fn build_markdown_preserves_crlf_when_footer_has_no_final_eol() {
+        // End-to-end version of the regression above: Windows-authored
+        // CLAUDE.local.md whose last line (a footer after the rlm
+        // block) has no trailing newline must still produce an
+        // all-CRLF output after build_updated_markdown.
+        let existing =
+            "# Project\r\n\r\n<!-- rlm:begin -->\r\nOLD\r\n<!-- rlm:end -->\r\n\r\n## Footer";
+        let out = build_updated_markdown(existing);
+        let bytes = out.as_bytes();
+        for i in 0..bytes.len() {
+            if bytes[i] == b'\n' {
+                assert!(
+                    i > 0 && bytes[i - 1] == b'\r',
+                    "orphaned \\n at byte {i} in output: {out:?}"
+                );
+            }
+        }
+        assert!(out.ends_with("\r\n"), "output should end with CRLF");
     }
 
     #[test]
