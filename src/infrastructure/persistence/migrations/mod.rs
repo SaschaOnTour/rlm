@@ -203,11 +203,15 @@ fn bootstrap_existing_schema(conn: &Connection) -> Result<()> {
 
 fn applied_versions(conn: &Connection) -> Result<HashSet<i64>> {
     let mut stmt = conn.prepare("SELECT version FROM schema_migrations")?;
-    let versions: HashSet<i64> = stmt
+    // Collecting into Result propagates per-row errors instead of
+    // swallowing them via filter_map(Ok). A corrupted schema_migrations
+    // row (unexpected type, truncated page) used to silently drop its
+    // version and make the runner re-execute a migration that is
+    // already applied; bubbling the error aborts the open instead.
+    let versions = stmt
         .query_map([], |r| r.get::<_, i64>(0))?
-        .filter_map(std::result::Result::ok)
-        .collect();
-    Ok(versions)
+        .collect::<std::result::Result<Vec<i64>, _>>()?;
+    Ok(versions.into_iter().collect())
 }
 
 fn apply_one(conn: &Connection, m: &Migration) -> Result<()> {
