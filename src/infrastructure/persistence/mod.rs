@@ -12,6 +12,7 @@
 
 pub mod chunk_repo;
 pub mod file_repo;
+pub mod migrations;
 pub mod ref_repo;
 pub mod savings_repo;
 pub mod search_repo;
