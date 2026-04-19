@@ -6,23 +6,22 @@
 use crate::application::content::{
     DepsQuery, DiffFileQuery, DiffSymbolQuery, PartitionQuery, SummarizeQuery,
 };
+use crate::application::edit::inserter::InsertPosition;
+use crate::application::edit::validator::SyntaxGuard;
+use crate::application::edit::{inserter, replacer};
+use crate::application::query::peek;
+use crate::application::query::tree;
 use crate::application::symbol::{ContextQuery, ContextWithGraphQuery, RefsQuery, ScopeQuery};
 use crate::cli::helpers::{
     emit_read_symbol, format_chunks, get_config, get_db, map_err, parse_strategy, print_str,
     print_write_result, CmdResult,
 };
-use crate::edit::inserter::InsertPosition;
-use crate::edit::syntax_guard::SyntaxGuard;
-use crate::edit::{inserter, replacer};
-use crate::indexer;
 use crate::interface::shared::{
     record_file_query, record_operation, record_symbol_query, AlternativeCost, OperationMeta,
 };
 use crate::operations;
 use crate::operations::savings;
 use crate::output::{self, Formatter};
-use crate::rlm::peek;
-use crate::search::tree;
 
 pub fn cmd_index(path: &str, formatter: Formatter) -> CmdResult {
     let config = if path == "." {
@@ -36,7 +35,7 @@ pub fn cmd_index(path: &str, formatter: Formatter) -> CmdResult {
             eprint!("\rIndexing... {current}/{total} files");
         }
     };
-    let result = crate::indexer::run_index(&config, Some(&progress)).map_err(map_err)?;
+    let result = crate::application::index::run_index(&config, Some(&progress)).map_err(map_err)?;
     if result.files_scanned > 0 {
         eprintln!();
     }
@@ -195,7 +194,7 @@ pub fn cmd_replace(
             &db,
             &config,
             path,
-            indexer::PreviewSource::Symbol(symbol),
+            crate::application::index::PreviewSource::Symbol(symbol),
             formatter,
         );
         if let Ok(entry) = savings::alternative_replace_entry(

@@ -8,13 +8,14 @@
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 
+use crate::application::edit::inserter::InsertPosition;
+use crate::application::edit::validator::SyntaxGuard;
+use crate::application::edit::{inserter, replacer};
+use crate::application::index as indexer;
+use crate::application::query::tree;
 use crate::application::symbol::RefsQuery;
 use crate::config::Config;
 use crate::db::Database;
-use crate::edit::inserter::InsertPosition;
-use crate::edit::syntax_guard::SyntaxGuard;
-use crate::edit::{inserter, replacer};
-use crate::indexer;
 use crate::interface::shared::{
     record_operation, record_symbol_query, AlternativeCost, OperationMeta,
 };
@@ -22,7 +23,6 @@ use crate::models::chunk::Chunk;
 use crate::operations;
 use crate::operations::savings;
 use crate::output::Formatter;
-use crate::search::tree;
 
 use super::server::RlmServer;
 use super::tools::ReadParams;
@@ -278,7 +278,7 @@ pub fn handle_overview(
 
     match detail {
         "minimal" => {
-            use crate::rlm::peek;
+            use crate::application::query::peek;
             match peek::peek(db, path) {
                 Ok(result) => {
                     let response = record_operation(db, &meta, &result);
@@ -423,7 +423,7 @@ pub fn handle_files(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::edit::inserter::InsertPosition;
+    use crate::application::edit::inserter::InsertPosition;
 
     #[test]
     fn insert_with_relative_path_resolves_to_project_root() {

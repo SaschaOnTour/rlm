@@ -108,7 +108,7 @@ pub fn setup_initial_index(project_dir: &Path, mode: SetupMode) -> Result<SetupA
             if index_exists {
                 Ok(SetupAction::Skipped)
             } else {
-                crate::indexer::run_index(&config, None)?;
+                crate::application::index::run_index(&config, None)?;
                 Ok(SetupAction::Created)
             }
         }

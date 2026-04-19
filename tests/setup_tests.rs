@@ -3,7 +3,7 @@
 //! Covers: create, `--check` dry-run, `--remove` cleanup, idempotency,
 //! and merge-with-existing-user-config.
 
-use rlm::setup::{run_setup, setup_settings_json, SetupAction, SetupMode};
+use rlm::interface::cli::setup::{run_setup, setup_settings_json, SetupAction, SetupMode};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;

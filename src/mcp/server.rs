@@ -433,7 +433,7 @@ fn internal() {
         .expect("write test file");
 
         let config = crate::config::Config::new(tmp.path());
-        crate::indexer::run_index(&config, None).expect("index project");
+        crate::application::index::run_index(&config, None).expect("index project");
         let db = crate::db::Database::open(&config.db_path).expect("open db");
 
         (tmp, config, db)
@@ -472,7 +472,7 @@ fn internal() {
 
     #[test]
     fn test_overview_minimal_operation() {
-        use crate::rlm::peek;
+        use crate::application::query::peek;
         let (_tmp, _config, db) = setup_indexed_project();
         let result = peek::peek(&db, None).expect("peek");
         assert!(!result.files.is_empty());
@@ -488,7 +488,7 @@ fn internal() {
     #[test]
     fn test_overview_tree_operation() {
         let (_tmp, _config, db) = setup_indexed_project();
-        let result = crate::search::tree::build_tree(&db, None).expect("tree");
+        let result = crate::application::query::tree::build_tree(&db, None).expect("tree");
         assert!(!result.results.is_empty());
     }
 

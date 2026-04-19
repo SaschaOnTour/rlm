@@ -47,7 +47,7 @@ impl RlmServer {
             }
             other => McpError::internal_error(other.to_string(), None),
         })?;
-        crate::indexer::staleness::ensure_index_fresh(&db, &config)
+        crate::application::index::staleness::ensure_index_fresh(&db, &config)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(db)
     }
@@ -267,7 +267,7 @@ mod tests {
 
         // Index once so the DB exists.
         let config = Config::new(tmp.path());
-        crate::indexer::run_index(&config, None).unwrap();
+        crate::application::index::run_index(&config, None).unwrap();
 
         // Add a new symbol externally (not via rlm) — index now stale.
         fs::write(tmp.path().join("new.rs"), "fn externally_added() {}").unwrap();

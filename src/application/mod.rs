@@ -21,7 +21,7 @@
 //!
 //! This module is the skeleton introduced by slice 3.1. Later slices
 //! migrate existing code from `crate::operations`, `crate::rlm`,
-//! `crate::search`, `crate::edit`, and `crate::indexer` into the
+//! `crate::application::query`, `crate::application::edit`, and `crate::application::index` into the
 //! corresponding sub-domains.
 
 pub mod content;

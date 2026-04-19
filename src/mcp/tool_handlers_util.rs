@@ -9,6 +9,7 @@
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 
+use crate::application::content::partition;
 use crate::application::content::{
     DepsQuery, DiffFileQuery, DiffSymbolQuery, PartitionQuery, SummarizeQuery,
 };
@@ -19,7 +20,6 @@ use crate::interface::shared::{record_file_query, record_symbol_query};
 use crate::operations;
 use crate::operations::savings;
 use crate::output::Formatter;
-use crate::rlm::partition;
 
 use super::server::RlmServer;
 

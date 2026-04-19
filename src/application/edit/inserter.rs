@@ -64,10 +64,10 @@ impl InsertPosition {
 
     /// Build the appropriate preview source for this insert position.
     #[must_use]
-    pub fn preview_source(&self) -> crate::indexer::PreviewSource<'static> {
+    pub fn preview_source(&self) -> crate::application::index::PreviewSource<'static> {
         match self.target_line() {
-            Some(line) => crate::indexer::PreviewSource::Line(line),
-            None => crate::indexer::PreviewSource::Last,
+            Some(line) => crate::application::index::PreviewSource::Line(line),
+            None => crate::application::index::PreviewSource::Last,
         }
     }
 }
@@ -346,7 +346,7 @@ mod tests {
     fn preview_source_bottom_is_last() {
         assert!(matches!(
             InsertPosition::Bottom.preview_source(),
-            crate::indexer::PreviewSource::Last
+            crate::application::index::PreviewSource::Last
         ));
     }
 
@@ -354,7 +354,7 @@ mod tests {
     fn preview_source_after_is_line() {
         assert!(matches!(
             InsertPosition::AfterLine(5).preview_source(),
-            crate::indexer::PreviewSource::Line(6)
+            crate::application::index::PreviewSource::Line(6)
         ));
     }
 }

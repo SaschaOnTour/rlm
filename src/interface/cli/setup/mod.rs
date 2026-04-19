@@ -9,7 +9,7 @@
 //! 3. Initial index — run `rlm index` if `.rlm/index.db` is missing.
 //!
 //! No PostToolUse hook is installed: the self-healing index
-//! (`crate::indexer::staleness`) picks up external edits at each tool call.
+//! (`crate::application::index::staleness`) picks up external edits at each tool call.
 //!
 //! Slice 5.1 split the module into three sub-modules:
 //! - `orchestrator` owns the user-facing `run_setup` + the shared

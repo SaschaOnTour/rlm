@@ -3,10 +3,10 @@
 //! Extracted from `handlers.rs` for SRP compliance. Contains common
 //! error-mapping, config/db access, and reusable sub-operations.
 
+use crate::application::index as indexer;
 use crate::config::Config;
 use crate::db::Database;
 use crate::domain::token_budget::estimate_json_tokens;
-use crate::indexer;
 use crate::operations::savings;
 use crate::output::{self, Formatter};
 
@@ -80,17 +80,19 @@ pub fn emit_read_symbol(db: &Database, path: &str, json: &str, formatter: Format
 /// Parse a partition strategy string into a `Strategy` enum.
 pub fn parse_strategy(
     s: &str,
-) -> Result<crate::rlm::partition::Strategy, Box<dyn std::fmt::Display>> {
+) -> Result<crate::application::content::partition::Strategy, Box<dyn std::fmt::Display>> {
     if s == "semantic" {
-        Ok(crate::rlm::partition::Strategy::Semantic)
+        Ok(crate::application::content::partition::Strategy::Semantic)
     } else if let Some(rest) = s.strip_prefix("uniform:") {
         let n: usize = rest.parse().map_err(map_err)?;
         if n == 0 {
             return Err(map_err("uniform chunk size must be >= 1"));
         }
-        Ok(crate::rlm::partition::Strategy::Uniform(n))
+        Ok(crate::application::content::partition::Strategy::Uniform(n))
     } else if let Some(rest) = s.strip_prefix("keyword:") {
-        Ok(crate::rlm::partition::Strategy::Keyword(rest.to_string()))
+        Ok(crate::application::content::partition::Strategy::Keyword(
+            rest.to_string(),
+        ))
     } else {
         Err(map_err(
             "strategy must be: semantic, uniform:N, or keyword:PATTERN",

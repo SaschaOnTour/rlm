@@ -45,12 +45,9 @@
 pub mod application;
 pub mod cli;
 pub mod config;
-
 pub mod db;
 pub mod domain;
-pub mod edit;
 pub mod error;
-pub mod indexer;
 pub mod infrastructure;
 pub mod ingest;
 pub mod interface;
@@ -59,6 +56,3 @@ pub mod models;
 pub mod operations;
 /// Centralized output formatting (JSON/Pretty/TOON). Used by CLI and MCP.
 pub mod output;
-pub mod rlm;
-pub mod search;
-pub mod setup;

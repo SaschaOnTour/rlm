@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-19
+
 ### Added
 
 - **`rlm setup` command** (P07-01/02/04): automates Claude Code integration. Creates
@@ -24,10 +26,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Architecture refactoring (P1–P5)**: migrated from a flat module layout to a
+  four-layer hexagonal-lite architecture. Breaking change for library
+  consumers — see below.
+  - **`domain/`** now holds pure entities (`Chunk`, `File`, `Reference`) with
+    newtype IDs (`ChunkId`, `FileId`, `ReferenceId`), plus the token-budget
+    calculator and savings formulas. No `rusqlite` / `tree_sitter` imports.
+  - **`application/`** owns the use-case logic split by concern: `query/`
+    (peek/grep/search/map/tree/files/stats/supported/verify), `symbol/`
+    (refs/signature/callgraph/impact/context/type_info/scope), `content/`
+    (partition/summarize/deps/diff), `edit/` (replace/insert/validator), and
+    `index/` (scan/parse/insert pipeline). Three query-trait patterns coexist:
+    `SymbolQuery`, `FileQuery`, and the inline `read_section` path.
+  - **`interface/`** is the CLI + MCP adapter layer. Shared DTOs
+    (`OperationMeta`, `OperationResponse`, `SavingsMiddleware::record_operation`)
+    centralise the previous CLI↔MCP duplication. `Formatter` is a copy-by-value
+    context object; the `OnceLock<OutputFormat>` singleton is gone.
+  - **`infrastructure/`** holds external-system adapters: six `*Repo` traits
+    backed by `Database` (`FileRepo`, `ChunkRepo`, `RefRepo`, `SearchRepo`,
+    `SavingsRepo`, `StatsRepo`), the tree-sitter primitives (`tree_walker`,
+    `query_runner` with `iter_matches`), a consolidated `filesystem::atomic_writer`
+    (shared by `setup` and `edit::validator`), and a numbered SQL migration
+    runner (`001_base.sql`, `002_savings_v2.sql`, `003_mtime.sql`) that
+    replaces the inline `CREATE_SCHEMA` plus probe-and-alter logic.
+- **Parser layer** (P4): every per-language parser (rust, typescript, python,
+  java, csharp, php, javascript, go, html, css) migrated onto shared
+  `tree_walker` helpers and moved its test module into a companion
+  `<lang>_tests.rs` file via `#[cfg(test)] #[path] mod tests;`. Per-parser
+  production code dropped from 650–1000 lines to 150–310 lines. Tree-sitter
+  query sources live as external `.scm` files pulled in via `include_str!`.
+- **Error handling**: `RlmError::Other(String)` retired in favour of typed
+  variants (`Setup`, `Edit`, `InvalidPattern`, `Mcp`) and a new
+  `AtomicWriteError` wired through `#[from]`. `SetupError::AtomicWriteExhausted`
+  folded into `AtomicWriteError::Exhausted`.
+- **N+1 query elimination** (P3.7): `analyze_impact` and `build_callgraph` now
+  pull ref rows with chunk + file context via a single three-way JOIN
+  (`Database::get_refs_with_context`) instead of one chunk-lookup and one
+  files-list per ref.
 - **DB-open consolidation**: extracted `Database::open_required` for the
   "existing-index-only" path (used by `verify`). Canonical read paths now funnel
   through `get_db` / `ensure_db`, giving a single seam for future concerns
   (schema migration, health checks, ...).
+- **CLAUDE.local.md EOL handling**: `rlm setup` now detects the file's EOL
+  style (CRLF vs LF) and renders / appends / normalises using the matching
+  sequence, so Windows-authored files stay all-CRLF after repeat runs.
+
+### Removed
+
+- Transitional `pub use` bridges left behind during the refactoring slices
+  (`src/setup.rs`, `src/indexer.rs`, `src/operations/mod.rs`, `src/rlm/mod.rs`,
+  `src/search/mod.rs`, `src/edit/mod.rs`). Import paths now point directly at
+  `crate::interface::cli::setup`, `crate::application::index`,
+  `crate::application::query`, `crate::application::content`,
+  `crate::application::edit`, and `crate::application::symbol`. **Breaking for
+  library consumers.** CLI binary unchanged.
+- `src/db/schema.rs` and its `CREATE_SCHEMA` / `MIGRATE_SAVINGS_V2` /
+  `MIGRATE_FILES_MTIME` constants — replaced by the migration runner.
+
+### Performance
+
+- Parser-independent test suite grew from ~528 to 658 tests. Full-reindex on
+  self (rlm tree) holds at ~0.58 s user / ~1.85 s wall across the entire
+  refactoring, within measurement noise of the pre-refactor baseline.
 
 ## [0.3.6] - 2026-04-15
 

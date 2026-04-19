@@ -279,7 +279,7 @@ fn apply_changes(db: &Database, config: &Config, changes: ChangeSet) -> Result<C
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indexer::run_index;
+    use crate::application::index::run_index;
     use std::fs;
     use tempfile::TempDir;
 
