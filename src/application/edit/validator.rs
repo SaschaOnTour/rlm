@@ -1,4 +1,5 @@
 use crate::error::{Result, RlmError};
+use crate::infrastructure::filesystem::atomic_writer::write_atomic;
 use crate::ingest::dispatcher::Dispatcher;
 
 /// STRICT syntax validation. No bypass mechanism.
@@ -36,7 +37,11 @@ impl SyntaxGuard {
 }
 
 /// Validate syntax then write file atomically (free function, decoupled from `SyntaxGuard`).
-/// First validates via `guard.validate()`, then writes to a temp file and renames.
+///
+/// First validates via `guard.validate()`, then delegates the on-disk
+/// replacement to the shared `infrastructure::filesystem::atomic_writer`
+/// so source-edit writes use the same O_EXCL-protected path as
+/// `rlm setup`.
 pub fn validate_and_write(
     guard: &SyntaxGuard,
     lang: &str,
@@ -44,26 +49,7 @@ pub fn validate_and_write(
     path: &std::path::Path,
 ) -> Result<()> {
     guard.validate(lang, source)?;
-
-    // Atomic write: write to temp file, then rename
-    let parent = path.parent().unwrap_or(std::path::Path::new("."));
-    let temp_path = parent.join(format!(
-        ".rlm_tmp_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-
-    std::fs::write(&temp_path, source)?;
-
-    if let Err(e) = std::fs::rename(&temp_path, path) {
-        // Clean up temp file on rename failure
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(e.into());
-    }
-
+    write_atomic(path, source.as_bytes())?;
     Ok(())
 }
 

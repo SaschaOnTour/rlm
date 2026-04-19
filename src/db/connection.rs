@@ -2,8 +2,8 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::db::schema::{CREATE_SCHEMA, MIGRATE_FILES_MTIME, MIGRATE_SAVINGS_V2};
 use crate::error::Result;
+use crate::infrastructure::persistence::migrations;
 
 /// Database wrapper for the rlm index.
 // qual:allow(srp_lcom4) reason: "facade for 6 query modules — LCOM4 reflects domain boundaries, not SRP violation"
@@ -12,8 +12,12 @@ pub struct Database {
 }
 
 impl Database {
-    /// Open (or create) a database at the given path and apply schema.
-    // qual:allow(iosp) reason: "check-then-act: migration check before schema setup"
+    /// Open (or create) a database at the given path and apply every
+    /// pending schema migration. The migration runner owns the
+    /// ancient-DB wipe (it runs inside the same `BEGIN IMMEDIATE`
+    /// transaction as the replay), so concurrent opens of the same
+    /// file cannot observe a half-wiped state.
+    // qual:allow(iosp) reason: "integration: open + pragmas + migration run"
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch(
@@ -23,82 +27,8 @@ impl Database {
              PRAGMA cache_size=-64000;\
              PRAGMA temp_store=MEMORY;",
         )?;
-        // Check if schema needs migration (old DB without new columns)
-        let needs_recreate = Self::needs_schema_migration(&conn);
-        if needs_recreate {
-            // Drop all tables and recreate with new schema
-            conn.execute_batch(
-                "DROP TABLE IF EXISTS chunks_fts;\
-                 DROP TRIGGER IF EXISTS chunks_ai;\
-                 DROP TRIGGER IF EXISTS chunks_ad;\
-                 DROP TRIGGER IF EXISTS chunks_au;\
-                 DROP TABLE IF EXISTS refs;\
-                 DROP TABLE IF EXISTS chunks;\
-                 DROP TABLE IF EXISTS files;",
-            )?;
-        }
-        conn.execute_batch(CREATE_SCHEMA)?;
-        Self::migrate_savings_v2(&conn);
-        Self::migrate_files_mtime(&conn)?;
+        migrations::apply(&conn)?;
         Ok(Self { conn })
-    }
-
-    /// Apply `files.mtime_nanos` migration (required, idempotent).
-    ///
-    /// Probes for the column before altering; treats "duplicate column" as a
-    /// no-op (concurrent/replayed migration), but propagates every other
-    /// failure. Returning early from `Database::open` on failure prevents a
-    /// half-migrated schema from showing up as cryptic SELECT errors later.
-    fn migrate_files_mtime(conn: &Connection) -> Result<()> {
-        if conn
-            .prepare("SELECT mtime_nanos FROM files LIMIT 0")
-            .is_ok()
-        {
-            return Ok(());
-        }
-        match conn.execute(MIGRATE_FILES_MTIME, []) {
-            Ok(_) => Ok(()),
-            Err(e) if e.to_string().contains("duplicate column") => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Apply savings V2 migration (best-effort, idempotent).
-    ///
-    /// Probes for the last added column to avoid 4 failing ALTERs on every open.
-    /// Checks `alt_calls` (last in migration order) so partial migrations are retried.
-    fn migrate_savings_v2(conn: &Connection) {
-        if conn
-            .prepare("SELECT alt_calls FROM savings LIMIT 0")
-            .is_ok()
-        {
-            return;
-        }
-        for sql in MIGRATE_SAVINGS_V2.split(';') {
-            let trimmed = sql.trim();
-            if !trimmed.is_empty() {
-                if let Err(e) = conn.execute(trimmed, []) {
-                    let msg = e.to_string();
-                    if !msg.contains("duplicate column") {
-                        eprintln!("warning: savings migration failed: {msg}");
-                    }
-                }
-            }
-        }
-    }
-
-    /// Check if the database needs schema migration (missing new columns).
-    fn needs_schema_migration(conn: &Connection) -> bool {
-        // Check if chunks table has doc_comment column
-        let has_doc_comment: bool = conn
-            .prepare("SELECT doc_comment FROM chunks LIMIT 0")
-            .is_ok();
-        let has_parse_quality: bool = conn
-            .prepare("SELECT parse_quality FROM files LIMIT 0")
-            .is_ok();
-        // If tables exist but lack new columns, need migration
-        let tables_exist: bool = conn.prepare("SELECT id FROM files LIMIT 0").is_ok();
-        tables_exist && (!has_doc_comment || !has_parse_quality)
     }
 
     /// Open an existing database, returning `None` if the file does not exist.
@@ -140,7 +70,7 @@ impl Database {
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        conn.execute_batch(CREATE_SCHEMA)?;
+        migrations::apply(&conn)?;
         Ok(Self { conn })
     }
 
@@ -224,5 +154,45 @@ mod tests {
         }
         // Err(other) is the expected correct behavior; Ok is only possible
         // as root (permission bypass) and is treated as inconclusive.
+    }
+
+    #[test]
+    fn ancient_schema_is_wiped_and_reseeded() {
+        // Simulate an ancient rlm DB: `files` exists but without
+        // `doc_comment` / `parse_quality`. A savings table of an
+        // unknown old shape is also present — the wipe must drop it
+        // so migration 001 recreates it with the current columns
+        // rather than leaving the stale shape behind.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("ancient.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT);\
+                 CREATE TABLE chunks (id INTEGER PRIMARY KEY);\
+                 CREATE TABLE savings (id INTEGER PRIMARY KEY, stale_only_column TEXT);",
+            )
+            .unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        // After wipe + migrate, the modern schema is in place.
+        assert!(db
+            .conn()
+            .prepare("SELECT doc_comment FROM chunks LIMIT 0")
+            .is_ok());
+        assert!(db
+            .conn()
+            .prepare("SELECT alt_calls FROM savings LIMIT 0")
+            .is_ok());
+        assert!(db
+            .conn()
+            .prepare("SELECT mtime_nanos FROM files LIMIT 0")
+            .is_ok());
+        // The stale-only column from the pre-wipe savings table must
+        // be gone — otherwise the wipe preserved the old shape.
+        assert!(db
+            .conn()
+            .prepare("SELECT stale_only_column FROM savings LIMIT 0")
+            .is_err());
     }
 }

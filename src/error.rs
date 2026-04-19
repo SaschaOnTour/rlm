@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::edit::error::EditError;
+use crate::infrastructure::filesystem::atomic_writer::AtomicWriteError;
 use crate::setup::SetupError;
 
 #[derive(Error, Debug)]
@@ -58,6 +59,9 @@ pub enum RlmError {
 
     #[error(transparent)]
     Edit(#[from] EditError),
+
+    #[error(transparent)]
+    AtomicWrite(#[from] AtomicWriteError),
 }
 
 pub type Result<T> = std::result::Result<T, RlmError>;
