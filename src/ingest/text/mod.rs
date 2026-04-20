@@ -6,8 +6,8 @@ pub mod toml_parser;
 pub mod yaml;
 pub mod yaml_helpers;
 
+use crate::domain::chunk::{Chunk, ChunkKind};
 use crate::error::Result;
-use crate::models::chunk::{Chunk, ChunkKind};
 
 /// Trait for structure-aware text parsers (non-code).
 pub trait TextParser: Send + Sync {
@@ -130,7 +130,6 @@ fn collect_structured_entries(
 /// `serde_json::Value` and then call this function.  Delegates entry analysis
 /// to `collect_structured_entries` and per-entry processing to `process_structured_entry`.
 // qual:recursive
-// qual:allow(iosp) reason: "recursive tree traversal inherently mixes iteration with delegation"
 pub fn extract_structured_chunks<FK, FS, FL, FV, FI>(
     value: &serde_json::Value,
     path: &str,

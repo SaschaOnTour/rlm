@@ -195,5 +195,8 @@ pub fn annotate_known_issues(issues: &mut [QualityIssue]) {
 }
 
 #[cfg(test)]
+#[path = "quality_log_date_tests.rs"]
+mod date_tests;
+#[cfg(test)]
 #[path = "quality_log_tests.rs"]
 mod tests;

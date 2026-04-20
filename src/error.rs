@@ -1,8 +1,41 @@
 use thiserror::Error;
 
-use crate::application::edit::error::EditError;
-use crate::infrastructure::filesystem::atomic_writer::AtomicWriteError;
-use crate::interface::cli::setup::SetupError;
+/// Failures that can occur while applying a code edit.
+#[derive(Error, Debug)]
+pub enum EditError {
+    /// The target line is beyond the end of the file.
+    #[error("line {line} is beyond file length ({max})")]
+    LineOutOfBounds { line: usize, max: usize },
+}
+
+/// Errors raised by atomic-write primitives.
+#[derive(Error, Debug)]
+pub enum AtomicWriteError {
+    /// Any underlying filesystem error (directory creation, temp open,
+    /// write, or rename).
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    /// The retry budget was exhausted without finding a free temp
+    /// filename. Only plausible under extreme contention or clock skew.
+    #[error("atomic write exhausted {attempts} temp-name attempts")]
+    Exhausted { attempts: u32 },
+}
+
+/// Failures specific to `rlm setup`.
+#[derive(Error, Debug)]
+pub enum SetupError {
+    /// The existing settings file is valid JSON but not an object; we refuse
+    /// to overwrite user content of unknown shape.
+    #[error("{path} is not a JSON object — rlm refuses to overwrite it. Remove or replace the file before re-running setup.")]
+    NotJsonObject { path: String },
+
+    /// The existing settings file is not parseable JSON.
+    #[error("{path} is not valid JSON ({source}) — rlm refuses to overwrite it. Fix the file before re-running setup.")]
+    InvalidJson {
+        path: String,
+        source: serde_json::Error,
+    },
+}
 
 #[derive(Error, Debug)]
 pub enum RlmError {

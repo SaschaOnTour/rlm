@@ -13,3 +13,7 @@ pub use deps::DepsQuery;
 pub use diff::{DiffFileQuery, DiffSymbolQuery};
 pub use partition::PartitionQuery;
 pub use summarize::SummarizeQuery;
+
+#[cfg(test)]
+#[path = "fixtures_tests.rs"]
+mod fixtures;

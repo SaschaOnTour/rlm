@@ -6,6 +6,7 @@
 use crate::application::content::{
     DepsQuery, DiffFileQuery, DiffSymbolQuery, PartitionQuery, SummarizeQuery,
 };
+use crate::application::dto::chunk_dto::ChunkDto;
 use crate::application::edit::inserter::InsertPosition;
 use crate::application::edit::validator::SyntaxGuard;
 use crate::application::edit::{inserter, replacer};
@@ -14,7 +15,7 @@ use crate::application::query::tree;
 use crate::application::symbol::{ContextQuery, ContextWithGraphQuery, RefsQuery, ScopeQuery};
 use crate::cli::helpers::{
     emit_read_symbol, format_chunks, get_config, get_db, map_err, parse_strategy, print_str,
-    print_write_result, CmdResult,
+    print_write_result, run_file_pipeline, run_symbol_pipeline, CmdResult,
 };
 use crate::interface::shared::{
     record_file_query, record_operation, record_symbol_query, AlternativeCost, OperationMeta,
@@ -40,7 +41,7 @@ pub fn cmd_index(path: &str, formatter: Formatter) -> CmdResult {
         eprintln!();
     }
     let output: operations::IndexOutput = result.into();
-    formatter.print(&output);
+    output::print(formatter, &output);
     Ok(())
 }
 
@@ -92,9 +93,16 @@ fn cmd_read_symbol(path: &str, sym: &str, metadata: bool, formatter: Formatter) 
         if chunks.is_empty() {
             return Err(map_err(format!("symbol not found: {sym}")));
         }
-        serde_json::json!(chunks)
+        let dtos: Vec<ChunkDto> = chunks.iter().cloned().map(Into::into).collect();
+        serde_json::json!(dtos)
     } else {
-        serde_json::json!(file_chunks)
+        let dtos: Vec<ChunkDto> = file_chunks
+            .iter()
+            .copied()
+            .cloned()
+            .map(Into::into)
+            .collect();
+        serde_json::json!(dtos)
     };
 
     let json = format_chunks(&db, sym, &target_json, metadata);
@@ -121,7 +129,8 @@ fn cmd_read_section(path: &str, heading: &str, formatter: Formatter) -> CmdResul
                     path: path.to_string(),
                 },
             };
-            let response = record_operation(&db, &meta, c);
+            let dto: ChunkDto = c.clone().into();
+            let response = record_operation(&db, &meta, &dto);
             print_str(formatter, &response.body);
         }
         None => return Err(map_err(format!("section not found: {heading}"))),
@@ -167,11 +176,7 @@ pub fn cmd_overview(detail: &str, path: Option<&str>, formatter: Formatter) -> C
 }
 
 pub fn cmd_refs(symbol: &str, formatter: Formatter) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let response = record_symbol_query::<RefsQuery>(&db, symbol).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_symbol_pipeline::<RefsQuery>(symbol, formatter)
 }
 
 pub fn cmd_replace(
@@ -186,7 +191,7 @@ pub fn cmd_replace(
 
     if preview {
         let diff = replacer::preview_replace(&db, path, symbol, code).map_err(map_err)?;
-        formatter.print(&diff);
+        output::print(formatter, &diff);
     } else {
         let outcome = replacer::replace_symbol(&db, path, symbol, code, &config.project_root)
             .map_err(map_err)?;
@@ -240,11 +245,7 @@ pub fn cmd_partition(path: &str, strategy_str: &str, formatter: Formatter) -> Cm
 }
 
 pub fn cmd_summarize(path: &str, formatter: Formatter) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let response = record_file_query(&db, &SummarizeQuery, path).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_file_pipeline(&SummarizeQuery, path, formatter)
 }
 
 pub fn cmd_diff(path: &str, symbol: Option<&str>, formatter: Formatter) -> CmdResult {
@@ -280,17 +281,9 @@ pub fn cmd_context(symbol: &str, graph: bool, formatter: Formatter) -> CmdResult
 }
 
 pub fn cmd_deps(path: &str, formatter: Formatter) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let response = record_file_query(&db, &DepsQuery, path).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_file_pipeline(&DepsQuery, path, formatter)
 }
 
 pub fn cmd_scope(path: &str, line: u32, formatter: Formatter) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let response = record_file_query(&db, &ScopeQuery { line }, path).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_file_pipeline(&ScopeQuery { line }, path, formatter)
 }

@@ -1,5 +1,6 @@
 use tree_sitter::{Language, Query};
 
+use crate::domain::chunk::{ChunkKind, RefKind};
 use crate::infrastructure::parsing::tree_walker::{
     collect_prev_siblings, find_parent_by_kind, SiblingCollectConfig,
 };
@@ -7,7 +8,6 @@ use crate::ingest::code::base::{
     build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig,
 };
 use crate::ingest::code::helpers::{extract_keyword_visibility, extract_type_signature_to_brace};
-use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = include_str!("queries/php/chunk.scm");
 
@@ -163,6 +163,9 @@ impl PhpParser {
     }
 }
 
+#[cfg(test)]
+#[path = "php_advanced_tests.rs"]
+mod advanced_tests;
 #[cfg(test)]
 #[path = "php_tests.rs"]
 mod tests;

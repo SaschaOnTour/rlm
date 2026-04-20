@@ -1,8 +1,8 @@
 //! Full-text search across indexed chunks.
 
 use crate::db::Database;
+use crate::domain::chunk::Chunk;
 use crate::error::Result;
-use crate::models::chunk::Chunk;
 
 /// FTS5-backed search over chunk content, identifiers, signatures, and doc comments.
 pub trait SearchRepo {

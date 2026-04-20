@@ -1,8 +1,8 @@
 //! Storage operations for `Chunk`.
 
 use crate::db::Database;
+use crate::domain::chunk::Chunk;
 use crate::error::Result;
-use crate::models::chunk::Chunk;
 
 /// Read and write access to indexed chunks.
 pub trait ChunkRepo {

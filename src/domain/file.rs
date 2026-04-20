@@ -1,66 +1,53 @@
-//! File entity — a source file known to the index.
-
-use serde::{Deserialize, Serialize};
-
-use super::FileId;
-
-/// A file known to the index.
-///
-/// Fields beyond `id` and `path` reflect what the indexer captures to drive
-/// staleness detection and language dispatch. They are carried here rather
-/// than split off into separate entities because every consumer that holds
-/// a `File` today needs all of them; a split would only add indirection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct File {
-    pub id: FileId,
-    /// Project-relative path, forward slashes.
+/// A file record stored in the index database.
+#[derive(Debug, Clone)]
+pub struct FileRecord {
+    /// Database row ID (0 if not yet persisted).
+    pub id: i64,
+    /// Project-relative file path (forward slashes).
     pub path: String,
-    /// Hex-encoded SHA-256 of file contents at index time.
+    /// SHA-256 hash of file contents.
     pub hash: String,
-    /// Language identifier (e.g. `"rust"`, `"markdown"`).
+    /// Detected language identifier.
     pub lang: String,
+    /// File size in bytes.
     pub size_bytes: u64,
-    /// File mtime at index time, nanoseconds since the Unix epoch. Used by
-    /// staleness detection to skip hashing unchanged files. `0` means
-    /// "unknown / legacy row"; callers treat that as a forced re-hash.
+    /// File's own mtime at index time, in nanoseconds since the Unix epoch.
+    /// Used by staleness detection to skip hashing files whose mtime is
+    /// unchanged since last index. Nanosecond precision prevents same-second
+    /// false negatives on modern filesystems. Defaults to 0 (sentinel for
+    /// "unknown / legacy row", which forces a hash verification).
     pub mtime_nanos: i64,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn file_constructs_with_expected_fields() {
-        let f = File {
-            id: FileId::UNPERSISTED,
-            path: "src/main.rs".into(),
-            hash: "abc123".into(),
-            lang: "rust".into(),
-            size_bytes: 1024,
-            mtime_nanos: 1_700_000_000,
-        };
-        assert_eq!(f.path, "src/main.rs");
-        assert_eq!(f.lang, "rust");
-        assert_eq!(f.size_bytes, 1024);
-        assert_eq!(f.mtime_nanos, 1_700_000_000);
-        assert!(!f.id.is_persisted());
+impl FileRecord {
+    /// Create a record with `mtime_nanos = 0`. Convenient for tests that don't
+    /// exercise staleness; production indexing code should use `with_mtime`.
+    #[must_use]
+    pub fn new(path: String, hash: String, lang: String, size_bytes: u64) -> Self {
+        Self::with_mtime(path, hash, lang, size_bytes, 0)
     }
 
-    #[test]
-    fn file_serializes_round_trip() {
-        let original = File {
-            id: FileId::new(7),
-            path: "docs/readme.md".into(),
-            hash: "deadbeef".into(),
-            lang: "markdown".into(),
-            size_bytes: 4096,
-            mtime_nanos: 0,
-        };
-        let json = serde_json::to_string(&original).unwrap();
-        let back: File = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.id, original.id);
-        assert_eq!(back.path, original.path);
-        assert_eq!(back.mtime_nanos, original.mtime_nanos);
+    /// Create a record with an explicit file-mtime. Used by the indexer so the
+    /// staleness detector can compare on-disk mtime against this value.
+    #[must_use]
+    pub fn with_mtime(
+        path: String,
+        hash: String,
+        lang: String,
+        size_bytes: u64,
+        mtime_nanos: i64,
+    ) -> Self {
+        Self {
+            id: 0,
+            path,
+            hash,
+            lang,
+            size_bytes,
+            mtime_nanos,
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "file_tests.rs"]
+mod tests;

@@ -26,37 +26,5 @@ impl SymbolQuery for RefsQuery {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn refs_query_command_is_stable() {
-        assert_eq!(RefsQuery::COMMAND, "refs");
-    }
-
-    #[test]
-    fn refs_query_delegates_file_count_to_impact_result() {
-        use super::super::impact::ImpactEntry;
-
-        let result = ImpactResult {
-            symbol: "foo".into(),
-            impacted: vec![
-                ImpactEntry {
-                    file: "src/a.rs".into(),
-                    in_symbol: "caller".into(),
-                    line: 10,
-                    ref_kind: "call".into(),
-                },
-                ImpactEntry {
-                    file: "src/a.rs".into(),
-                    in_symbol: "other".into(),
-                    line: 20,
-                    ref_kind: "call".into(),
-                },
-            ],
-            count: 2,
-            tokens: Default::default(),
-        };
-        assert_eq!(RefsQuery::file_count(&result), 1);
-    }
-}
+#[path = "refs_tests.rs"]
+mod tests;

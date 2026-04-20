@@ -1,11 +1,11 @@
 use tree_sitter::{Language, Query};
 
+use crate::domain::chunk::{ChunkKind, RefKind};
 use crate::infrastructure::parsing::tree_walker::find_parent_by_kind;
 use crate::ingest::code::base::{
     build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig,
 };
 use crate::ingest::code::helpers::extract_type_signature_to_colon;
-use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = include_str!("queries/python/chunk.scm");
 
@@ -221,6 +221,9 @@ fn collect_python_comment(node: tree_sitter::Node, source: &[u8]) -> Option<Stri
     }
 }
 
+#[cfg(test)]
+#[path = "python_advanced_tests.rs"]
+mod advanced_tests;
 #[cfg(test)]
 #[path = "python_tests.rs"]
 mod tests;

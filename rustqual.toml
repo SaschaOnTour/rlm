@@ -13,8 +13,10 @@ ignore_functions = [
 ]
 
 # Glob patterns for files to exclude from analysis.
-# Examples: "generated/**", "tests/**"
-exclude_files = []
+# `fixtures/` holds intentionally-malformed or minimal sample source
+# used as parser test input; it's not production code and shouldn't
+# be graded.
+exclude_files = ["fixtures/**"]
 
 # If true, closures count as "logic" even when passed to iterator adaptors.
 # Default: false (lenient — closures inside .map()/.filter() are ignored).
@@ -103,19 +105,386 @@ check_sdp = true
 
 # ── Test Quality Analysis ──────────────────────────────────────────────
 
-[test]
+[test_quality]
 enabled = true
 # Optional: path to LCOV coverage file for TQ-004/TQ-005 checks.
 # coverage_file = "lcov.info"
+
+# ── Architecture (4-Layer Hexagonal-Lite) ──────────────────────────────
+#
+# Enforces the layering rlm's 0.4.0 refactoring put in place:
+#
+#   domain (pure entities, newtype IDs)
+#     ↑
+#   infrastructure (adapters: persistence, parsing, filesystem)
+#     ↑
+#   application (use cases: query / symbol / content / edit / index)
+#     ↑
+#   interface (CLI + MCP adapters + output formatters)
+#
+# Lower layers cannot import higher ones. Wiring files (main.rs, lib.rs,
+# error.rs, config.rs) stay unmatched and fall into the composition-root
+# default — they may import from any layer but no layer may depend on
+# them circularly (rustqual reports orphan-assignments so we notice
+# accidents).
+
+[architecture]
+enabled = true
+
+[architecture.layers]
+order = ["domain", "infrastructure", "application", "interface"]
+unmatched_behavior = "composition_root"
+
+[architecture.layers.domain]
+paths = [
+    "src/domain/**",
+    # models/* still carries the legacy Chunk / FileRecord / RefKind
+    # structs the indexer writes; they're domain-shape value objects
+    # even though they haven't been fully folded into src/domain/ yet.
+    "src/models/**",
+]
+
+[architecture.layers.infrastructure]
+paths = [
+    "src/infrastructure/**",
+    # db/ is a rusqlite façade; ingest/ owns the per-language tree-sitter
+    # parsers and text parsers. Both are adapter-shaped and sit in the
+    # infrastructure tier.
+    "src/db/**",
+    "src/ingest/**",
+]
+
+[architecture.layers.application]
+paths = [
+    "src/application/**",
+    # operations/ still holds savings / refs / index-output envelopes that
+    # belong to the application layer; a follow-up slice will fold them
+    # into src/application/.
+    "src/operations/**",
+]
+
+[architecture.layers.interface]
+paths = [
+    "src/interface/**",
+    "src/cli/**",
+    "src/mcp/**",
+    "src/output.rs",
+]
+
+# ── Re-Export Points ───────────────────────────────────────────────────
+#
+# Only lib.rs and main.rs may freely `pub use` across layers (default).
+# The transitional bridges from Phase 3–5 were removed in 0.4.0 so no
+# extra re-export points are needed.
+
+[architecture.reexport_points]
+paths = ["src/lib.rs", "src/main.rs"]
+
+# ── Peer Isolations ────────────────────────────────────────────────────
+
+# Parsers must not touch the database layer — they take &str and emit
+# pure chunks / refs. The indexer (application/index) is the seam where
+# parsed data meets persistence.
+[[architecture.forbidden]]
+from = "src/ingest/**"
+to = "src/db/**"
+reason = "Parsers stay pure — DB writes happen in application/index, not in the parser."
+
+# Symmetrically: DB façade doesn't reach back into parsers.
+[[architecture.forbidden]]
+from = "src/db/**"
+to = "src/ingest/**"
+reason = "Database module knows nothing about how source files are parsed."
+
+# CLI and MCP are peer adapters — both entry points to the same
+# application logic, neither drives the other.
+[[architecture.forbidden]]
+from = "src/cli/**"
+to = "src/mcp/**"
+reason = "CLI must not depend on the MCP server (and vice versa)."
+
+[[architecture.forbidden]]
+from = "src/mcp/**"
+to = "src/cli/**"
+reason = "MCP must not depend on the CLI dispatcher (and vice versa)."
+
+# Sub-domains inside application/ are independent use cases. Cross-pollination
+# means a missing abstraction — refactor rather than import sideways.
+[[architecture.forbidden]]
+from = "src/application/symbol/**"
+to = "src/application/content/**"
+reason = "Symbol operations and content operations are independent use cases."
+
+[[architecture.forbidden]]
+from = "src/application/content/**"
+to = "src/application/symbol/**"
+reason = "Symbol operations and content operations are independent use cases."
+
+[[architecture.forbidden]]
+from = "src/application/query/**"
+to = "src/application/edit/**"
+reason = "Read-side queries must not pull in the write-side validator / inserter / replacer."
+
+# Per-language parsers are siblings — no rust.rs → python.rs kind of
+# dependency. They all share base.rs / helpers.rs / the tree_walker and
+# query_runner from infrastructure::parsing.
+[[architecture.forbidden]]
+from = "src/ingest/code/rust.rs"
+to = "src/ingest/code/*.rs"
+except = [
+    "src/ingest/code/base.rs",
+    "src/ingest/code/base_ops.rs",
+    "src/ingest/code/helpers.rs",
+    "src/ingest/code/rust_impl_methods.rs",
+    "src/ingest/code/rust_tests.rs",
+]
+reason = "Parsers are peers — no cross-language coupling."
+
+# Domain stays framework-free. Nothing below/above matters — domain only
+# sees domain plus std / serde / thiserror.
+[[architecture.forbidden]]
+from = "src/domain/**"
+to = "**"
+except = [
+    "src/domain/**",
+    "src/models/**",
+]
+reason = "Domain is the bottom of the stack; no outward dependencies."
+
+# ── Symbol Rules (typed AST matchers, no raw regex) ───────────────────
+
+# Async in domain is banned. Domain logic is synchronous value math.
+[[architecture.pattern]]
+name = "no_async_fn_in_domain"
+forbid_item_kind = ["async_fn"]
+forbidden_in = ["src/domain/**", "src/models/**"]
+reason = "Domain stays synchronous — async is an adapter concern."
+
+# Tokio / tracing are runtime/logging libraries; neither belongs in the
+# domain or application core. Adapter layers may use them freely.
+[[architecture.pattern]]
+name = "no_runtime_libs_in_core"
+forbid_path_prefix = ["tokio::", "tracing::"]
+forbidden_in = ["src/domain/**", "src/application/**", "src/models/**"]
+reason = "Domain + application stay runtime-agnostic."
+
+# rusqlite types must not leak above the infrastructure layer. Query
+# modules live in db/queries but the traits in infrastructure/persistence
+# own the public surface — `Result<T, RlmError>` + domain structs only.
+[[architecture.pattern]]
+name = "no_rusqlite_outside_infrastructure"
+forbid_path_prefix = ["rusqlite::"]
+allowed_in = [
+    "src/db/**",
+    "src/infrastructure/persistence/**",
+    "src/error.rs",
+    # Test fixtures that intentionally corrupt the DB (orphan chunks,
+    # missing files) need direct rusqlite access; regular Database
+    # methods don't expose FK-bypass helpers.
+    "src/**/*_tests.rs",
+]
+reason = "rusqlite is an adapter detail; it must not leak into application or interface code."
+
+# tree-sitter primitives belong to the parser adapter. Application /
+# domain / interface code talks to the parser via `CodeParser` +
+# `ParseResult` abstractions.
+[[architecture.pattern]]
+name = "no_tree_sitter_outside_parsers"
+forbid_path_prefix = ["tree_sitter::", "tree_sitter_"]
+allowed_in = [
+    "src/infrastructure/parsing/**",
+    "src/ingest/**",
+]
+reason = "Tree-sitter types are a parser-adapter implementation detail."
+
+# Serde derives on domain entities. The big ones — Chunk, FileRecord,
+# Reference, RefKind, ChunkKind — got moved behind the DTO layer in
+# slice 6.3/6.4: they're pure now, serialisation happens via
+# `application::dto::ChunkDto` etc.
+#
+# `token_budget.rs` (TokenEstimate) and `savings.rs` (SavingsReport,
+# CommandSavings) are explicit exceptions. They're value-objects that
+# live at the math/wire boundary by design: every query result embeds
+# `TokenEstimate` as its `tokens` field, and the savings report is
+# both consumed by the savings calculator and serialised to the
+# `rlm stats --savings` output. Splitting them into domain-value +
+# wire-DTO pairs would touch ~50 call-sites for no gain — the types
+# already carry only primitives. We document the exception rather
+# than pretend it isn't there.
+[[architecture.pattern]]
+name = "no_serde_derive_in_domain_entities"
+forbid_derive = ["Serialize", "Deserialize"]
+forbidden_in = ["src/domain/**"]
+except = [
+    "src/domain/token_budget.rs",
+    "src/domain/savings.rs",
+    # Test-internal helper structs (`struct Wrapper { ... }`) used to
+    # check `estimate_output_tokens`'s fixed-point behaviour; they live
+    # inside a test function.
+    "src/**/*_tests.rs",
+]
+reason = "Domain entities should stay format-free; DTOs belong in application/interface."
+
+# println / eprintln / dbg belong to the CLI progress UX or tests only.
+[[architecture.pattern]]
+name = "no_stdout_in_production"
+forbid_macro_call = ["println", "eprintln", "dbg"]
+forbidden_in = ["src/**"]
+except = [
+    "src/main.rs",
+    # Formatter::print / print_str write the command's actual JSON /
+    # TOON output to stdout; this is the CLI's primary data channel.
+    "src/output.rs",
+    # CLI handlers legitimately emit progress ("Indexing... N/M files")
+    # directly to stderr rather than through a logger.
+    "src/cli/handlers.rs",
+    # Quality-info diagnostic written to stderr under the `rlm stats`
+    # command — visible to the user without polluting the JSON stdout.
+    "src/cli/handlers_util.rs",
+    # Staleness detector writes user-facing warnings when the index
+    # drifts ("rlm: staleness hash failed for X"). These are CLI/MCP UX
+    # messages; rlm is a one-shot tool with no tracing subscriber.
+    "src/application/index/staleness.rs",
+    # Test fixtures may print setup diagnostics.
+    "src/**/*_tests.rs",
+    "src/**/tests.rs",
+]
+reason = "rlm is a single-shot CLI/MCP tool; stderr is the diagnostic channel."
+
+# Panic macros never appear in production. todo!/unimplemented! are
+# actively harmful in a shipped CLI.
+[[architecture.pattern]]
+name = "no_panic_macros_in_production"
+forbid_macro_call = ["panic", "todo", "unimplemented", "unreachable"]
+forbidden_in = ["src/**"]
+except = [
+    # Tree-sitter Query::new() is validated at crate init; a panic there
+    # is a build-time invariant failure, not a runtime error.
+    "src/ingest/code/base.rs",
+    # Test code legitimately uses `panic!("unexpected variant")` as a
+    # match-arm failure marker; that's how tests signal broken
+    # invariants. Excluded from this production-only rule.
+    "src/**/*_tests.rs",
+    "src/**/tests.rs",
+]
+reason = "Production propagates errors typed; panics are for unrecoverable invariants only."
+
+# Unwrap / expect only in tests. ASPIRATIONAL — rlm still has ~hundreds
+# of unwraps in parser code and inserter/replacer plumbing; each flagged
+# site should either become `?`-propagation or gain an explicit
+# `qual:allow` with a reason.
+[[architecture.pattern]]
+name = "no_panic_helpers_in_production"
+forbid_method_call = ["unwrap", "expect"]
+forbidden_in = ["src/**"]
+except = [
+    "src/**/*_tests.rs",
+    "src/**/tests.rs",
+    # Tree-sitter query compilation happens once at init; any failure is
+    # a build-time bug, not a runtime condition. The unwraps there are
+    # intentional panic-on-dev-error.
+    "src/ingest/code/base.rs",
+    "src/ingest/code/rust_impl_methods.rs",
+]
+reason = "Production propagates Result<T, RlmError>. Flagged sites need `?` or an explicit `qual:allow`."
+
+# Per-language parsers and the quality_log (~500–1000 lines each,
+# tests grew to 500+) moved their `#[cfg(test)] mod tests { ... }`
+# into companion `<mod>_tests.rs` files in slices 4.3–4.9 via
+# `#[cfg(test)] #[path] mod tests;`. This rule catches regressions on
+# that specific set. Smaller utility modules (hasher, dispatcher,
+# lang_map) keep their inline tests — the split pays off only when the
+# parser-like file is large enough to benefit from the separation.
+[[architecture.pattern]]
+name = "no_inline_cfg_test_modules_in_parsers"
+forbid_item_kind = ["inline_cfg_test_module"]
+forbidden_in = [
+    "src/ingest/code/csharp.rs",
+    "src/ingest/code/css.rs",
+    "src/ingest/code/go.rs",
+    "src/ingest/code/html.rs",
+    "src/ingest/code/java.rs",
+    "src/ingest/code/javascript.rs",
+    "src/ingest/code/php.rs",
+    "src/ingest/code/python.rs",
+    "src/ingest/code/rust.rs",
+    "src/ingest/code/typescript.rs",
+    "src/ingest/code/quality_log.rs",
+]
+reason = "Language parsers + quality_log keep tests in companion `<mod>_tests.rs` files (Phase 4 convention)."
+
+# `unsafe` has no business in rlm. No FFI, no raw pointers, no
+# lock-free data structures — if it shows up, it's wrong.
+[[architecture.pattern]]
+name = "no_unsafe"
+forbid_item_kind = ["unsafe_fn", "unsafe_impl", "static_mut", "extern_c_block"]
+forbidden_in = ["src/**"]
+reason = "rlm is a pure safe-Rust tool; there is no reason for unsafe."
+
+# Boxing is for the wiring edge (main.rs) and registry-style adapters
+# only — everywhere else smells like "I avoided a generic" or "I
+# typed-erased too eagerly".
+[[architecture.pattern]]
+name = "boxing_only_at_wiring_edge"
+forbid_function_call = ["Box::new"]
+allowed_in = [
+    "src/main.rs",
+    "src/cli/helpers.rs",         # map_err wraps strings as Box<dyn Display>
+    "src/ingest/dispatcher.rs",   # Vec<Box<dyn CodeParser>> parser registry
+    # serde_yaml_ng::Value::Tagged carries a Box<TaggedValue> by design;
+    # the yaml module's test fixtures construct those values.
+    "src/ingest/text/yaml.rs",
+    "src/**/*_tests.rs",
+    "src/**/tests.rs",
+]
+reason = "Boxed trait objects are fine at the composition root and parser registry; elsewhere prefer generics or enums."
+
+# ── Trait Contracts ────────────────────────────────────────────────────
+
+# Repo traits in infrastructure/persistence are the object-safe seam
+# between Database (concrete) and the rest of the code. Enforce that
+# shape so a future in-memory fake impl can slot in without surprises.
+[[architecture.trait_contract]]
+name = "repo_traits"
+scope = "src/infrastructure/persistence/{file,chunk,ref,search,savings,stats}_repo.rs"
+
+# Every repo method is a read-or-write on a shared DB handle; no owned
+# self, no &mut self (Database uses interior-mutability via rusqlite).
+receiver_may_be = ["shared_ref"]
+
+# Returns must be typed through crate::error::Result — no anyhow, no
+# `Box<dyn Error>`.
+forbidden_return_type_contains = ["anyhow::", "Box<dyn Error"]
+
+# Repo traits should stay dyn-safe so tests can swap in fakes. The
+# conservative object-safety check catches method-level generics and
+# bare `Self`-returns — both show up in rlm today would be caught.
+must_be_object_safe = true
+
+# ASPIRATIONAL — RlmError currently carries `#[from] rusqlite::Error`,
+# which means rusqlite appears in every Result<T, RlmError> leak from
+# these traits. The clean fix is a dedicated `RepoError` wrapping the
+# rusqlite variants so the adapter error doesn't reach callers.
+forbidden_error_variant_contains = ["rusqlite::"]
+
+# `Send + Sync` supertraits intentionally omitted: rusqlite's Connection
+# holds a RefCell internally and is `!Sync`, so Database (the concrete
+# impl) cannot satisfy a Sync bound without a Mutex wrapper. rlm is a
+# single-threaded CLI / tool-per-request MCP server, so this bound
+# would buy nothing and block compilation. If rlm grows a concurrent
+# workload, the fix is a pooled/wrapped Connection, not relaxing this
+# rule.
+# required_supertraits_contain = ["Send", "Sync"]
 
 # ── Quality Score Weights ──────────────────────────────────────────────
 # Weights for each dimension in the overall quality score.
 # Must sum to approximately 1.0.
 
 [weights]
-iosp = 0.25
-complexity = 0.20
-dry = 0.15
-srp = 0.20
-coupling = 0.10
-test = 0.10
+iosp = 0.22
+complexity = 0.18
+dry = 0.13
+srp = 0.18
+coupling = 0.09
+test_quality = 0.10
+architecture = 0.10

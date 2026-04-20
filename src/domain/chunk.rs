@@ -1,54 +1,5 @@
-//! Chunk entity — a coherent unit of code or document content.
-
-use serde::{Deserialize, Serialize};
-
-use super::{ChunkId, FileId};
-
-/// A byte range within a source file, half-open: `[start, end)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ByteRange {
-    pub start: u32,
-    pub end: u32,
-}
-
-impl ByteRange {
-    #[must_use]
-    pub const fn new(start: u32, end: u32) -> Self {
-        Self { start, end }
-    }
-
-    #[must_use]
-    pub const fn len(&self) -> u32 {
-        self.end.saturating_sub(self.start)
-    }
-
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.end <= self.start
-    }
-}
-
-/// A line range within a source file. 1-based, inclusive on both ends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LineRange {
-    pub start: u32,
-    pub end: u32,
-}
-
-impl LineRange {
-    #[must_use]
-    pub const fn new(start: u32, end: u32) -> Self {
-        Self { start, end }
-    }
-
-    #[must_use]
-    pub const fn line_count(&self) -> u32 {
-        self.end.saturating_sub(self.start).saturating_add(1)
-    }
-}
-
-/// The kind of a code or document chunk.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The kind of a code/document chunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChunkKind {
     Function,
     Method,
@@ -60,13 +11,14 @@ pub enum ChunkKind {
     Interface,
     Module,
     Constant,
-    Section,
-    Page,
+    Section, // markdown heading
+    Page,    // PDF page
     Other(String),
 }
 
 impl ChunkKind {
     #[must_use]
+    // qual:allow(dry) reason: "inverse of parse — same match arms but opposite direction (serialize vs deserialize)"
     pub fn as_str(&self) -> &str {
         match self {
             Self::Function => "fn",
@@ -85,7 +37,14 @@ impl ChunkKind {
         }
     }
 
+    /// Whether this kind represents a document section (not a code symbol).
     #[must_use]
+    pub fn is_section(&self) -> bool {
+        matches!(self, Self::Section | Self::Page)
+    }
+
+    #[must_use]
+    // qual:allow(dry) reason: "inverse of as_str — same match arms but opposite direction (deserialize vs serialize)"
     pub fn parse(s: &str) -> Self {
         match s {
             "fn" => Self::Function,
@@ -103,122 +62,60 @@ impl ChunkKind {
             other => Self::Other(other.to_string()),
         }
     }
-
-    #[must_use]
-    pub fn is_section(&self) -> bool {
-        matches!(self, Self::Section | Self::Page)
-    }
 }
 
-/// A chunk of code or document content produced by the indexer.
-///
-/// Positional information is carried by the `bytes` and `lines` value
-/// objects rather than as four loose `u32` fields, which matches how chunks
-/// are naturally reasoned about (a region of a file) and avoids argument
-/// order mistakes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A chunk of code or document content extracted during indexing.
+#[derive(Debug, Clone)]
 pub struct Chunk {
-    pub id: ChunkId,
-    pub file_id: FileId,
-    pub bytes: ByteRange,
-    pub lines: LineRange,
+    /// Database row ID (0 if not yet persisted).
+    pub id: i64,
+    /// Foreign key to the file record.
+    pub file_id: i64,
+    /// Start line (1-based).
+    pub start_line: u32,
+    /// End line (1-based, inclusive).
+    pub end_line: u32,
+    /// Start byte offset.
+    pub start_byte: u32,
+    /// End byte offset.
+    pub end_byte: u32,
+    /// Kind of chunk.
     pub kind: ChunkKind,
+    /// Identifier (symbol name or heading text).
     pub ident: String,
+    /// Parent container (e.g. class name for a method, parent heading for subsection).
     pub parent: Option<String>,
+    /// Function/method signature.
     pub signature: Option<String>,
+    /// Visibility (pub, private, protected, etc.).
     pub visibility: Option<String>,
+    /// UI context tag (pages, components, screens).
     pub ui_ctx: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Doc comment preceding this item (///, /**, #, docstrings).
     pub doc_comment: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Attributes/decorators/annotations (e.g. #[derive(Debug)], @Override).
     pub attributes: Option<String>,
+    /// Full content of the chunk.
     pub content: String,
 }
 
 impl Chunk {
+    /// Create a stub chunk with common defaults for the given `file_id`.
+    ///
+    /// All positional fields are zeroed, optional fields are `None`, and
+    /// strings are empty.  Callers override what they need via struct update syntax:
+    /// `Chunk { kind, ident, content, ..Chunk::stub(file_id) }`.
     #[must_use]
-    pub fn line_count(&self) -> u32 {
-        self.lines.line_count()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn byte_range_len_and_empty() {
-        let r = ByteRange::new(10, 25);
-        assert_eq!(r.len(), 15);
-        assert!(!r.is_empty());
-
-        let empty = ByteRange::new(5, 5);
-        assert_eq!(empty.len(), 0);
-        assert!(empty.is_empty());
-
-        let inverted = ByteRange::new(10, 3);
-        assert_eq!(inverted.len(), 0);
-        assert!(inverted.is_empty());
-    }
-
-    #[test]
-    fn line_range_counts_inclusive() {
-        assert_eq!(LineRange::new(5, 5).line_count(), 1);
-        assert_eq!(LineRange::new(1, 10).line_count(), 10);
-        assert_eq!(LineRange::new(42, 50).line_count(), 9);
-    }
-
-    #[test]
-    fn chunk_kind_round_trip() {
-        let kinds = [
-            ChunkKind::Function,
-            ChunkKind::Method,
-            ChunkKind::Struct,
-            ChunkKind::Enum,
-            ChunkKind::Trait,
-            ChunkKind::Impl,
-            ChunkKind::Class,
-            ChunkKind::Interface,
-            ChunkKind::Module,
-            ChunkKind::Constant,
-            ChunkKind::Section,
-            ChunkKind::Page,
-        ];
-        for k in kinds {
-            assert_eq!(ChunkKind::parse(k.as_str()), k);
-        }
-    }
-
-    #[test]
-    fn chunk_kind_other_round_trip() {
-        let k = ChunkKind::Other("namespace".into());
-        assert_eq!(k.as_str(), "namespace");
-        assert_eq!(ChunkKind::parse("namespace"), k);
-    }
-
-    #[test]
-    fn chunk_kind_is_section_only_for_document_kinds() {
-        assert!(ChunkKind::Section.is_section());
-        assert!(ChunkKind::Page.is_section());
-        assert!(!ChunkKind::Function.is_section());
-        assert!(!ChunkKind::Class.is_section());
-        assert!(!ChunkKind::Other("tag".into()).is_section());
-    }
-
-    #[test]
-    fn chunk_line_count_delegates_to_range() {
-        let c = sample_chunk(LineRange::new(5, 15));
-        assert_eq!(c.line_count(), 11);
-    }
-
-    fn sample_chunk(lines: LineRange) -> Chunk {
-        Chunk {
-            id: ChunkId::UNPERSISTED,
-            file_id: FileId::new(1),
-            bytes: ByteRange::new(0, 100),
-            lines,
-            kind: ChunkKind::Function,
-            ident: "foo".into(),
+    pub fn stub(file_id: i64) -> Self {
+        Self {
+            id: 0,
+            file_id,
+            start_line: 0,
+            end_line: 0,
+            start_byte: 0,
+            end_byte: 0,
+            kind: ChunkKind::Other(String::new()),
+            ident: String::new(),
             parent: None,
             signature: None,
             visibility: None,
@@ -228,4 +125,76 @@ mod tests {
             content: String::new(),
         }
     }
+
+    #[must_use]
+    pub fn line_count(&self) -> u32 {
+        self.end_line.saturating_sub(self.start_line) + 1
+    }
 }
+
+/// A reference (call site, import, type usage) found in a chunk.
+#[derive(Debug, Clone)]
+pub struct Reference {
+    pub id: i64,
+    pub chunk_id: i64,
+    /// The identifier being referenced.
+    pub target_ident: String,
+    /// Kind of reference.
+    pub ref_kind: RefKind,
+    /// Line number where the reference occurs.
+    pub line: u32,
+    /// Column number.
+    pub col: u32,
+}
+
+impl Reference {
+    /// Create a stub reference with common defaults for the given
+    /// `chunk_id`. Callers override what they need via struct update
+    /// syntax: `Reference { target_ident, ref_kind, line, ..Reference::stub(chunk_id) }`.
+    #[must_use]
+    pub fn stub(chunk_id: i64) -> Self {
+        Self {
+            id: 0,
+            chunk_id,
+            target_ident: String::new(),
+            ref_kind: RefKind::Call,
+            line: 0,
+            col: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefKind {
+    Call,
+    Import,
+    TypeUse,
+    FieldAccess,
+}
+
+impl RefKind {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Call => "call",
+            Self::Import => "import",
+            Self::TypeUse => "type_use",
+            Self::FieldAccess => "field_access",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "call" => Self::Call,
+            "import" => Self::Import,
+            "type_use" => Self::TypeUse,
+            "field_access" => Self::FieldAccess,
+            _ => Self::Call,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "chunk_tests.rs"]
+mod tests;

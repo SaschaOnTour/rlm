@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-04-21
+
+Quality-focused follow-up to the 0.4.0 architecture refactor. No user-facing
+behavior changes — every CLI command and MCP tool produces byte-identical
+output. Score under rustqual 1.0.1 is 100.0% across all seven dimensions;
+`cargo nextest run` reports 652 passing tests.
+
+### Added
+
+- **`ChunkDto` / `ReferenceDto` / `ChunkKindDto` / `RefKindDto`** in
+  `application/dto/chunk_dto.rs`: serde-facing wire-format mirrors of the
+  domain types. Adapters convert at the serialization boundary so the domain
+  layer stays format-free (`no_serde_derive_in_domain_entities`).
+- **`Chunk::stub(file_id)` / `Reference::stub(chunk_id)` constructors**: zero/
+  default initializers for struct-update syntax in tests
+  (`Chunk { kind, ident, content, ..Chunk::stub(file_id) }`). Replaces the
+  14-field boilerplate patterns (BP-009) the duplicate detector was flagging.
+
+### Changed
+
+- **Error types centralised in `error.rs`**: `EditError`, `SetupError`,
+  `AtomicWriteError` now live alongside `RlmError` instead of in the
+  `application::edit`, `interface::cli::setup`, and
+  `infrastructure::filesystem::atomic_writer` submodules. Breaks the
+  `error → infrastructure → ... → error` dependency cycle rustqual's
+  coupling analyzer flagged. The original modules re-export the types so
+  existing call sites stay unchanged.
+- **MCP `tool_handlers` split by concern** into four sibling modules
+  (`tool_handlers_index`, `tool_handlers_query`, `tool_handlers_read`,
+  `tool_handlers_edit`), with `tool_handlers.rs` now a thin re-export facade.
+  `InsertInput` groups the former `handle_insert` args to stay under the
+  SRP-param ceiling.
+- **CLI dispatch unified**: `run_symbol_pipeline::<Q>` and `run_file_pipeline`
+  helpers in `cli::helpers` collapse the open-config / open-db / record-op /
+  print-body boilerplate that `cmd_refs` / `cmd_summarize` / `cmd_deps` /
+  `cmd_scope` each repeated.
+- **`Formatter::print` / `Formatter::print_str` → free functions**
+  (`output::print` / `output::print_str`). Fixes the `SLM` structural warning
+  and the `Formatter` LCOM4 cohesion finding — the struct now only holds
+  format + serialize + reformat concerns, no stdout side-effects.
+- **`detect_changes` in `application::index::staleness` refactored**: the
+  per-file classification body is extracted to `classify_scanned_file`, the
+  deletion phase to `detect_deleted_ids`. The orchestrator drops below the
+  function-length threshold and each helper is testable in isolation.
+- **Test fixtures deduplicated** per-directory in `fixtures_tests.rs` modules
+  (`application/symbol/`, `application/query/`, `application/content/`,
+  `application/index/`, `interface/shared/`, `db/queries/`, `operations/`).
+  Split-sibling test companions (e.g. `impact_tests.rs` +
+  `impact_ref_kind_tests.rs`) share their `setup_test_db` /
+  `setup_test_db_and_dir` / `setup_indexed` helpers instead of duplicating them.
+- **Test files use explicit imports** — all `use super::*;` in `_tests.rs`
+  companion files replaced with named imports (wildcard detector).
+- **Migration version literals** replaced with `MIGRATIONS[idx].version /
+  .name` references in `db::migrations::bootstrap_existing_schema` to drop
+  the magic-number warning.
+
+### Fixed
+
+- **Test-companion `#[path]`-wired files misclassified as production code**
+  by rustqual's SRP-module analyzer — resolved by upgrading the dev-loop to
+  rustqual 1.0.1 (its `ChildPathResolver` now follows `#[path]` overrides
+  and picks up inner `#![cfg(test)]` attributes).
+- **Stale `// qual:allow(iosp)` markers** on 26 integration-class functions
+  that rustqual 1.0.1's IOSP analyzer no longer misclassifies. Removed to
+  keep the orphan-suppression count at zero.
+
 ## [0.4.0] - 2026-04-19
 
 ### Added

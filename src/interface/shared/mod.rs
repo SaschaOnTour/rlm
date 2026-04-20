@@ -7,3 +7,7 @@ pub mod savings_middleware;
 pub use request::{AlternativeCost, OperationMeta};
 pub use response::OperationResponse;
 pub use savings_middleware::{record_file_query, record_operation, record_symbol_query};
+
+#[cfg(test)]
+#[path = "fixtures_tests.rs"]
+mod fixtures;

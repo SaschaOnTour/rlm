@@ -19,8 +19,8 @@ pub(super) fn parse_file_chunks(
     file_id: i64,
 ) -> std::result::Result<
     (
-        Vec<crate::models::chunk::Chunk>,
-        Vec<crate::models::chunk::Reference>,
+        Vec<crate::domain::chunk::Chunk>,
+        Vec<crate::domain::chunk::Reference>,
     ),
     SkipReason,
 > {
@@ -51,7 +51,7 @@ fn quality_label(quality: &crate::ingest::code::ParseQuality) -> &'static str {
 }
 
 /// Tag every chunk with the UI context string, if present.
-pub(super) fn apply_ui_context(chunks: &mut [crate::models::chunk::Chunk], ui_ctx: &str) {
+pub(super) fn apply_ui_context(chunks: &mut [crate::domain::chunk::Chunk], ui_ctx: &str) {
     for chunk in chunks.iter_mut() {
         chunk.ui_ctx = Some(ui_ctx.to_string());
     }

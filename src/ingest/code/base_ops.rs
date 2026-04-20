@@ -5,8 +5,8 @@
 
 use std::collections::HashSet;
 
+use crate::domain::chunk::{Chunk, ChunkKind};
 use crate::ingest::code::base::{ChunkCaptureResult, LanguageConfig};
-use crate::models::chunk::{Chunk, ChunkKind};
 
 /// Result of processing a single tree-sitter query match.
 pub(crate) enum QueryMatchResult<'a> {

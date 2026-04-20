@@ -7,7 +7,7 @@ use crate::cli::helpers::{get_config, get_db, map_err, should_filter_unknown, Cm
 use crate::ingest::code::quality_log;
 use crate::operations;
 use crate::operations::savings;
-use crate::output::Formatter;
+use crate::output::{self, Formatter};
 
 pub fn cmd_stats(show_savings: bool, since: Option<&str>, formatter: Formatter) -> CmdResult {
     let config = get_config()?;
@@ -15,12 +15,12 @@ pub fn cmd_stats(show_savings: bool, since: Option<&str>, formatter: Formatter) 
 
     if show_savings {
         let report = savings::get_savings_report(&db, since).map_err(map_err)?;
-        formatter.print(&report);
+        output::print(formatter, &report);
         return Ok(());
     }
 
     let result = operations::get_stats(&db).map_err(map_err)?;
-    formatter.print(&result);
+    output::print(formatter, &result);
 
     // Check for files with quality issues (output to stderr as diagnostic info)
     if let Ok(Some(quality_info)) = operations::get_quality_info(&db) {
@@ -43,7 +43,7 @@ pub fn cmd_mcp() -> CmdResult {
 fn cmd_quality_clear(log_path: &std::path::Path, formatter: Formatter) -> CmdResult {
     let logger = quality_log::QualityLogger::new(log_path, true);
     logger.clear().map_err(map_err)?;
-    formatter.print(&serde_json::json!({"cleared": true}));
+    output::print(formatter, &serde_json::json!({"cleared": true}));
     Ok(())
 }
 
@@ -55,7 +55,7 @@ fn cmd_quality_display(
 ) {
     if summary {
         let stats = quality_log::summarize_issues(&issues);
-        formatter.print(&stats);
+        output::print(formatter, &stats);
     } else {
         #[derive(serde::Serialize)]
         struct QualityOutput {
@@ -63,10 +63,13 @@ fn cmd_quality_display(
             issues: Vec<quality_log::QualityIssue>,
         }
 
-        formatter.print(&QualityOutput {
-            count: issues.len(),
-            issues,
-        });
+        output::print(
+            formatter,
+            &QualityOutput {
+                count: issues.len(),
+                issues,
+            },
+        );
     }
 }
 
@@ -108,7 +111,7 @@ pub fn cmd_files(
         indexed_only,
     };
     let result = operations::list_files(&config.project_root, filter).map_err(map_err)?;
-    formatter.print(&result);
+    output::print(formatter, &result);
     Ok(())
 }
 
@@ -125,16 +128,16 @@ pub fn cmd_verify(fix: bool, formatter: Formatter) -> CmdResult {
 
     if fix && !report.is_ok() {
         let fix_result = operations::fix_integrity(&db, &report).map_err(map_err)?;
-        formatter.print(&fix_result);
+        output::print(formatter, &fix_result);
     } else {
-        formatter.print(&report);
+        output::print(formatter, &report);
     }
     Ok(())
 }
 
 pub fn cmd_supported(formatter: Formatter) -> CmdResult {
     let result = operations::list_supported();
-    formatter.print(&result);
+    output::print(formatter, &result);
     Ok(())
 }
 
@@ -148,6 +151,6 @@ pub fn cmd_setup(check: bool, remove: bool, formatter: Formatter) -> CmdResult {
     };
     let cwd = std::env::current_dir().map_err(map_err)?;
     let report = crate::interface::cli::setup::run_setup(&cwd, mode).map_err(map_err)?;
-    formatter.print(&report);
+    output::print(formatter, &report);
     Ok(())
 }

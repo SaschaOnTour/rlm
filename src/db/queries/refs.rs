@@ -1,7 +1,7 @@
 use rusqlite::params;
 
+use crate::domain::chunk::{RefKind, Reference};
 use crate::error::Result;
-use crate::models::chunk::{RefKind, Reference};
 
 use super::super::Database;
 

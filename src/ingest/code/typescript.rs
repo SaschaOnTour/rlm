@@ -10,13 +10,13 @@
 
 use tree_sitter::{Language, Query};
 
+use crate::domain::chunk::{ChunkKind, RefKind};
 use crate::infrastructure::parsing::tree_walker::{
     collect_prev_siblings, first_child_text_by_kind, SiblingCollectConfig,
 };
 use crate::ingest::code::base::{
     build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig,
 };
-use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = include_str!("queries/typescript/chunk.scm");
 
@@ -299,6 +299,9 @@ fn find_ts_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     }
 }
 
+#[cfg(test)]
+#[path = "typescript_advanced_tests.rs"]
+mod advanced_tests;
 #[cfg(test)]
 #[path = "typescript_tests.rs"]
 mod tests;

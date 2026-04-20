@@ -5,7 +5,7 @@
 
 use serde_yaml_ng::Value;
 
-use crate::models::chunk::ChunkKind;
+use crate::domain::chunk::ChunkKind;
 
 /// Maximum string length before truncation in YAML value previews.
 const MAX_PREVIEW_LENGTH: usize = 100;
