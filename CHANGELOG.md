@@ -16,10 +16,13 @@ output. Score under rustqual 1.0.1 is 100.0% across all seven dimensions;
 
 ### Added
 
-- **`ChunkDto` / `ReferenceDto` / `ChunkKindDto` / `RefKindDto`** in
-  `application/dto/chunk_dto.rs`: serde-facing wire-format mirrors of the
-  domain types. Adapters convert at the serialization boundary so the domain
-  layer stays format-free (`no_serde_derive_in_domain_entities`).
+- **`ChunkDto<'a>` / `ReferenceDto<'a>` / `ChunkKindDto<'a>` / `RefKindDto`**
+  in `application/dto/chunk_dto.rs`: serde-facing wire-format mirrors of
+  the domain types. Adapters convert at the serialization boundary so the
+  domain layer stays format-free (`no_serde_derive_in_domain_entities`).
+  The DTOs **borrow** every string field (`&'a str` / `Option<&'a str>`)
+  from the source `Chunk`/`Reference`, so JSON emission is zero-copy on
+  the payload — no per-`Chunk` clone on the read path.
 - **`Chunk::stub(file_id)` / `Reference::stub(chunk_id)` constructors**:
   zero/default initializers for struct-update syntax in tests
   (`Chunk { kind, ident, content, ..Chunk::stub(file_id) }`). Replaces the

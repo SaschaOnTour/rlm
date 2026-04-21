@@ -67,11 +67,12 @@ fn handle_read_symbol(
     let file_chunks = filter_chunks_by_path(db, &chunks, &params.path);
 
     if file_chunks.is_empty() {
-        let dtos: Vec<ChunkDto> = chunks.iter().cloned().map(Into::into).collect();
+        let dtos: Vec<ChunkDto> = chunks.iter().map(ChunkDto::from).collect();
         RlmServer::read_symbol_result(db, params, &dtos, formatter)
     } else {
-        // file_chunks: Vec<&Chunk> — clone each borrowed Chunk, then convert into the DTO.
-        let dtos: Vec<ChunkDto> = file_chunks.into_iter().cloned().map(Into::into).collect();
+        // file_chunks: Vec<&Chunk> — deref once so ChunkDto::<'a>::from(&Chunk)
+        // borrows directly from the underlying chunks without cloning.
+        let dtos: Vec<ChunkDto> = file_chunks.iter().map(|c| ChunkDto::from(*c)).collect();
         RlmServer::read_symbol_result(db, params, &dtos, formatter)
     }
 }
@@ -134,7 +135,7 @@ fn handle_read_section(
                 path: params.path.clone(),
             },
         };
-        let dto: ChunkDto = c.clone().into();
+        let dto = ChunkDto::from(c);
         let response = record_operation(db, &meta, &dto);
         return Ok(RlmServer::success_text(formatter, response.body));
     }

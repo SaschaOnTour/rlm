@@ -93,11 +93,12 @@ fn cmd_read_symbol(path: &str, sym: &str, metadata: bool, formatter: Formatter) 
         if chunks.is_empty() {
             return Err(map_err(format!("symbol not found: {sym}")));
         }
-        let dtos: Vec<ChunkDto> = chunks.iter().cloned().map(Into::into).collect();
+        let dtos: Vec<ChunkDto> = chunks.iter().map(ChunkDto::from).collect();
         serde_json::json!(dtos)
     } else {
-        // file_chunks: Vec<&Chunk> — clone each borrowed Chunk, then convert into the DTO.
-        let dtos: Vec<ChunkDto> = file_chunks.into_iter().cloned().map(Into::into).collect();
+        // file_chunks: Vec<&Chunk> — deref once so ChunkDto::<'a>::from(&Chunk)
+        // borrows directly from the underlying chunks without cloning.
+        let dtos: Vec<ChunkDto> = file_chunks.iter().map(|c| ChunkDto::from(*c)).collect();
         serde_json::json!(dtos)
     };
 
@@ -125,7 +126,7 @@ fn cmd_read_section(path: &str, heading: &str, formatter: Formatter) -> CmdResul
                     path: path.to_string(),
                 },
             };
-            let dto: ChunkDto = c.clone().into();
+            let dto = ChunkDto::from(c);
             let response = record_operation(&db, &meta, &dto);
             print_str(formatter, &response.body);
         }

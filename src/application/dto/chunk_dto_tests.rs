@@ -17,7 +17,8 @@ fn chunk_kind_named_variant_serialises_as_bare_string() {
 
 #[test]
 fn chunk_kind_other_variant_serialises_as_its_inner_string() {
-    let dto: ChunkKindDto = (&ChunkKind::Other("macro".into())).into();
+    let kind = ChunkKind::Other("macro".into());
+    let dto: ChunkKindDto = (&kind).into();
     let json = serde_json::to_string(&dto).unwrap();
     assert_eq!(json, "\"macro\"");
 }
@@ -41,10 +42,10 @@ fn chunk_dto_round_trips_core_fields() {
         attributes: None,
         content: "fn hello() {}".into(),
     };
-    let dto = ChunkDto::from(chunk);
+    let dto = ChunkDto::from(&chunk);
     assert_eq!(dto.id, 42);
     assert_eq!(dto.ident, "hello");
-    assert_eq!(dto.signature.as_deref(), Some("fn hello()"));
+    assert_eq!(dto.signature, Some("fn hello()"));
 
     let json = serde_json::to_string(&dto).unwrap();
     // Fields that were present survive the wire trip.
@@ -66,7 +67,7 @@ fn reference_dto_mirrors_domain_reference() {
         line: 42,
         col: 8,
     };
-    let dto = ReferenceDto::from(r);
+    let dto = ReferenceDto::from(&r);
     assert_eq!(dto.id, 3);
     assert_eq!(dto.chunk_id, 11);
     assert_eq!(dto.target_ident, "do_thing");
