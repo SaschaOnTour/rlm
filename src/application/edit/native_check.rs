@@ -11,13 +11,10 @@
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::config::EditSettings;
-
-/// Size of each pipe-read chunk. 4 KiB matches Linux's default pipe
-/// buffer page size; anything larger just over-allocates.
-const STDERR_CHUNK_BYTES: usize = 4096;
 
 /// Polling interval for `Child::try_wait`. 50 ms is well below human
 /// perceptibility while keeping CPU use trivial for a seconds-scale
@@ -140,7 +137,8 @@ fn kill_and_reap(child: &mut Child) {
 
 // ─── Subprocess wait with timeout ───────────────────────────────────────
 
-enum WaitOutcome {
+#[cfg_attr(test, derive(Debug))]
+pub(crate) enum WaitOutcome {
     Exited {
         status: std::process::ExitStatus,
         stderr: String,
@@ -149,22 +147,27 @@ enum WaitOutcome {
     Io(std::io::Error),
 }
 
-/// Wait for the child with a wall-clock timeout, streaming stderr so
-/// the pipe buffer doesn't fill and deadlock.
-fn wait_with_timeout(child: &mut Child, timeout: Duration) -> WaitOutcome {
+/// Wait for the child with a wall-clock timeout.
+///
+/// A dedicated reader thread consumes the full `stderr` stream so the
+/// main loop only has to `try_wait()` + check the deadline. The
+/// previous polling-drain approach called `ChildStderr::read()` —
+/// which is blocking — from the same loop as the timeout check, and
+/// races against a fast-exiting child: if the child exits before the
+/// main loop's first drain pass, stderr can be silently lost or
+/// truncated depending on OS pipe buffering (Copilot finding #5).
+/// The reader thread reads until EOF, which happens when the pipe
+/// closes (child exit or explicit `kill`), so capture is
+/// timing-independent.
+pub(crate) fn wait_with_timeout(child: &mut Child, timeout: Duration) -> WaitOutcome {
+    let stderr_reader = spawn_stderr_reader(child.stderr.take());
     let deadline = Instant::now() + timeout;
-    let mut stderr_buf = String::new();
-    let mut stderr_pipe = child.stderr.take();
 
     loop {
-        drain_once(stderr_pipe.as_mut(), &mut stderr_buf);
         match child.try_wait() {
             Ok(Some(status)) => {
-                drain_rest(stderr_pipe, &mut stderr_buf);
-                return WaitOutcome::Exited {
-                    status,
-                    stderr: stderr_buf,
-                };
+                let stderr = collect_stderr(stderr_reader);
+                return WaitOutcome::Exited { status, stderr };
             }
             Ok(None) if Instant::now() >= deadline => return WaitOutcome::TimedOut,
             Ok(None) => std::thread::sleep(Duration::from_millis(WAIT_POLL_MS)),
@@ -173,21 +176,28 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> WaitOutcome {
     }
 }
 
-fn drain_once(pipe: Option<&mut std::process::ChildStderr>, buf: &mut String) {
-    let Some(p) = pipe else { return };
-    let mut chunk = [0_u8; STDERR_CHUNK_BYTES];
-    if let Ok(n) = p.read(&mut chunk) {
-        if n > 0 {
-            buf.push_str(&String::from_utf8_lossy(&chunk[..n]));
-        }
-    }
+/// Drain a `ChildStderr` to completion on a worker thread. Returns
+/// `None` when the child was spawned without a captured stderr.
+fn spawn_stderr_reader(pipe: Option<std::process::ChildStderr>) -> Option<JoinHandle<String>> {
+    pipe.map(|mut p| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            // `read_to_string` blocks until EOF — i.e. the child exits
+            // or is killed. A non-UTF-8 byte sequence is rare for
+            // `cargo` output but we silently keep whatever UTF-8 was
+            // read up to that point.
+            let _ = p.read_to_string(&mut buf);
+            buf
+        })
+    })
 }
 
-fn drain_rest(pipe: Option<std::process::ChildStderr>, buf: &mut String) {
-    let Some(mut p) = pipe else { return };
-    let mut rest = String::new();
-    let _ = p.read_to_string(&mut rest);
-    buf.push_str(&rest);
+/// Join the reader thread and return whatever it collected. A panic
+/// inside the reader (shouldn't happen — `read_to_string` can't
+/// panic on its own) or a thread-join failure yields an empty string
+/// rather than propagating.
+fn collect_stderr(reader: Option<JoinHandle<String>>) -> String {
+    reader.and_then(|h| h.join().ok()).unwrap_or_default()
 }
 
 // ─── Diagnostic parsing ────────────────────────────────────────────────

@@ -85,6 +85,12 @@ fn classify_action(state: &State, mode: SetupMode) -> SetupAction {
 /// Detect whether `[output]` already has `format = "..."` set.
 /// Simple line-based scan avoids depending on a TOML parser for this
 /// single check.
+///
+/// Key matching is **exact**: only a `format` key counts, not
+/// `formatting` / `formatter` / `format_version` / etc. The early
+/// prefix-match (`starts_with("format")`) incorrectly swallowed all of
+/// those and silently suppressed the real `format` line write
+/// (Copilot finding).
 fn has_output_format(content: &str) -> bool {
     let mut in_output = false;
     for raw in content.lines() {
@@ -93,11 +99,21 @@ fn has_output_format(content: &str) -> bool {
             in_output = line.eq_ignore_ascii_case("[output]");
             continue;
         }
-        if in_output && line.starts_with("format") && line.contains('=') {
+        if in_output && is_format_key_line(line) {
             return true;
         }
     }
     false
+}
+
+/// A TOML key/value line whose key is exactly `format` (ignoring
+/// whitespace on either side of the `=`). Trailing value is not
+/// validated — we only care about detecting the key's presence.
+fn is_format_key_line(line: &str) -> bool {
+    let Some((key, _value)) = line.split_once('=') else {
+        return false;
+    };
+    key.trim() == "format"
 }
 
 fn write_fresh_config(path: &Path) -> Result<()> {

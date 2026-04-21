@@ -49,37 +49,52 @@ fn guard_output_truncates_large_result() {
 #[test]
 fn ensure_session_runs_staleness_check_on_mcp_path() {
     // Regression test: the MCP canonical session-open (RlmServer::ensure_session)
-    // must invoke the self-healing staleness check, mirroring the CLI session
-    // open. This guards against accidentally losing the wiring from P07-05.
+    // must invoke the self-healing staleness check, mirroring the CLI
+    // session open. Probed through an **index-backed** query (FTS
+    // search) so the assertion actually depends on the DB being
+    // reconciled — a filesystem scan like `list_files` would find
+    // externally-added files even if staleness never ran and silently
+    // mask the bug (caught by Copilot on PR).
+    use crate::application::query::search::FieldsMode;
     use std::fs;
     use tempfile::TempDir;
 
     let tmp = TempDir::new().unwrap();
     fs::write(tmp.path().join("main.rs"), "fn original() {}").unwrap();
 
-    // Index once so the DB exists.
+    // Index once so the DB exists (and contains only `original`).
     let config = Config::new(tmp.path());
     crate::application::index::run_index(&config, None).unwrap();
 
     // Add a new symbol externally (not via rlm) — index now stale.
-    fs::write(tmp.path().join("new.rs"), "fn externally_added() {}").unwrap();
+    fs::write(
+        tmp.path().join("new.rs"),
+        "fn externally_added_unique_marker() {}",
+    )
+    .unwrap();
 
-    // MCP path: ensure_session should reconcile before returning. We
-    // probe via the session's typed read: a newly-visible file should
-    // resolve immediately after ensure_session completes.
+    // MCP path: ensure_session must reconcile before returning.
     let server = RlmServer::new(tmp.path().to_path_buf(), Formatter::default());
     let session = server.ensure_session().expect("ensure_session succeeds");
-    let files = session
-        .files(crate::application::query::files::FilesFilter {
-            path_prefix: None,
-            skipped_only: false,
-            indexed_only: true,
-        })
-        .expect("session.files succeeds");
+
+    // DB-backed probe: FTS over the chunks table. If staleness never
+    // ran, the `externally_added_unique_marker` symbol is not indexed
+    // and the search comes back empty. `session.search` returns a
+    // pre-serialised `OperationResponse`; we parse the JSON body to
+    // inspect the results.
+    let response = session
+        .search("externally_added_unique_marker", 10, FieldsMode::Full)
+        .expect("session.search succeeds");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&response.body).expect("search body is valid JSON");
+    let results = parsed["results"].as_array().expect("`results` is an array");
+    let names: Vec<&str> = results.iter().filter_map(|r| r["name"].as_str()).collect();
 
     assert!(
-        files.results.iter().any(|f| f.path == "new.rs"),
-        "MCP ensure_session must pick up externally-added files"
+        names.contains(&"externally_added_unique_marker"),
+        "MCP ensure_session must reconcile the index before returning \
+         (FTS search found no hits for externally-added symbol — \
+         staleness refresh not invoked). Names: {names:?}"
     );
 }
 

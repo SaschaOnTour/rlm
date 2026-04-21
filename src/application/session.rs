@@ -98,12 +98,26 @@ impl RlmSession {
 
     /// Open a session only if an index already exists, returning
     /// `None` when the project has not been indexed yet. Used by the
-    /// MCP `insert` tool which wants to succeed with a clear hint
-    /// rather than creating an index implicitly.
+    /// MCP server for every tool call — MCP must not auto-index, but
+    /// it **must** honour the same self-healing staleness contract as
+    /// [`Self::open`] so every tool sees a current index.
+    ///
+    /// Regression: `try_open_existing` previously returned the raw
+    /// handle without running the staleness refresh. Callers that
+    /// relied on the docstring's "refreshes staleness" promise (CLI
+    /// parity, external-edit tests) silently saw stale data. The
+    /// refresh is now mandatory on this path and verified by
+    /// `server_helpers_tests::ensure_session_runs_staleness_check_on_mcp_path`.
     pub fn try_open_existing(project_root: &Path) -> Result<Option<Self>> {
         let config = Config::new(project_root);
         match Database::open_required(&config.db_path) {
-            Ok(db) => Ok(Some(Self { db, config })),
+            Ok(db) => {
+                // Self-healing: pick up external edits (CC-native,
+                // vim, git pull, …) before the caller uses the index.
+                // Set RLM_SKIP_REFRESH=1 to skip.
+                index::staleness::ensure_index_fresh(&db, &config)?;
+                Ok(Some(Self { db, config }))
+            }
             Err(RlmError::IndexNotFound) => Ok(None),
             Err(e) => Err(e),
         }

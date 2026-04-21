@@ -83,17 +83,22 @@ pub fn extract_symbols(
     })?;
 
     let plan = plan_extraction(db, source_path, idents, parent, &source_bytes)?;
-    let (dest_content, dest_created) = assemble_dest(&dest_full, &plan)?;
+    let Assembled {
+        content: dest_content,
+        dest_created,
+        to_lines,
+    } = assemble_dest(&dest_full, &plan)?;
     write_dest(&dest_full, dest_path, &dest_content)?;
     delete_from_source(db, source_path, idents, parent, project_root)?;
 
     let bytes_moved = plan.iter().map(|p| p.bytes.len()).sum();
     let moved = plan
         .into_iter()
-        .map(|p| MovedSymbol {
+        .zip(to_lines)
+        .map(|(p, to)| MovedSymbol {
             symbol: p.ident,
             from_lines: p.from_lines,
-            to_lines: None,
+            to_lines: Some(to),
         })
         .collect();
 
@@ -152,23 +157,95 @@ fn plan_extraction(
     Ok(plan)
 }
 
-/// Build the final dest content, honouring "create vs. append".
-fn assemble_dest(dest_full: &Path, plan: &[ExtractionPlan]) -> Result<(String, bool)> {
+/// Result of [`assemble_dest`]: the final dest content + a flag for
+/// create-vs-append + the per-block line span each moved symbol
+/// occupies in the post-write file. The line-span bookkeeping has to
+/// happen here because this function owns the layout (separator
+/// choice, join-between-blocks) — anyone else would have to
+/// reimplement it.
+struct Assembled {
+    content: String,
+    dest_created: bool,
+    /// One entry per `ExtractionPlan`, in plan order. `(start_line, end_line)`
+    /// are 1-based, inclusive, and address the post-write dest file.
+    to_lines: Vec<(u32, u32)>,
+}
+
+/// Build the final dest content, honouring "create vs. append", and
+/// compute the line span each plan block ends up occupying.
+///
+/// Layout invariants this function owns:
+/// - Each plan block is `bytes` which ends with `\n` (per `plan_extraction`).
+/// - Blocks in the extracted region are joined with `"\n"` → one
+///   blank line between consecutive blocks.
+/// - On append: separator is `"\n"` if existing ends with `\n`, else `"\n\n"`.
+///   In both cases the extracted region starts after exactly one
+///   blank line following existing content.
+fn assemble_dest(dest_full: &Path, plan: &[ExtractionPlan]) -> Result<Assembled> {
     let extracted: String = plan
         .iter()
         .map(|p| p.bytes.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    if dest_full.exists() {
+
+    let (prefix_line_count, dest_created, content) = if dest_full.exists() {
         let existing = std::fs::read_to_string(dest_full)?;
         let separator = if existing.ends_with('\n') {
             "\n"
         } else {
             "\n\n"
         };
-        Ok((format!("{existing}{separator}{extracted}"), false))
+        // prefix = existing + separator; both arms end with "\n\n", so
+        // the next character starts on a fresh line after a blank.
+        let prefix = format!("{existing}{separator}");
+        let prefix_lines = line_count(&prefix);
+        (prefix_lines, false, format!("{prefix}{extracted}"))
     } else {
-        Ok((extracted, true))
+        (0, true, extracted)
+    };
+
+    Ok(Assembled {
+        content,
+        dest_created,
+        to_lines: compute_to_lines(plan, prefix_line_count),
+    })
+}
+
+/// 1-based line spans of each plan block within the post-write dest.
+///
+/// Starting line for the first block is `prefix_line_count + 1` — one
+/// past the last line of the prefix (which itself ends with `\n`, so
+/// the prefix contributes exactly `prefix_line_count` lines, and the
+/// block starts on the next one).
+fn compute_to_lines(plan: &[ExtractionPlan], prefix_line_count: u32) -> Vec<(u32, u32)> {
+    let mut spans = Vec::with_capacity(plan.len());
+    let mut offset = prefix_line_count + 1;
+    let last = plan.len().saturating_sub(1);
+    for (i, p) in plan.iter().enumerate() {
+        let lc = line_count(&p.bytes).max(1); // a block always has ≥1 line
+        spans.push((offset, offset + lc - 1));
+        offset += lc;
+        // Blank line between consecutive blocks (from `join("\n")` +
+        // each block already ending with `\n`).
+        if i < last {
+            offset += 1;
+        }
+    }
+    spans
+}
+
+/// Number of lines in `s`. A trailing `\n` is counted as closing the
+/// last line rather than opening a new one, so `"a\n"` is 1 line
+/// (not 2). Empty string is 0 lines.
+fn line_count(s: &str) -> u32 {
+    if s.is_empty() {
+        return 0;
+    }
+    let nls = s.bytes().filter(|&b| b == b'\n').count() as u32;
+    if s.ends_with('\n') {
+        nls
+    } else {
+        nls + 1
     }
 }
 

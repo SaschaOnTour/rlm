@@ -110,3 +110,77 @@ fn setup_is_idempotent_when_toon_already_set() {
         "second apply must not alter the file"
     );
 }
+
+/// Regression: `has_output_format` used `line.starts_with("format")`, which
+/// falsely matched keys like `formatting` / `formatter` / `format_version`
+/// and skipped appending the real `format = "..."` line. Caught by Copilot
+/// on PR. The detector must key on the exact `format` identifier, not a
+/// prefix match.
+#[test]
+fn setup_adds_format_when_existing_output_has_only_similar_prefix_keys() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".rlm")).unwrap();
+    let pre_existing = "[output]\n\
+                        formatting = \"aligned\"\n\
+                        formatter = \"default\"\n\
+                        format_version = 2\n";
+    fs::write(dir.path().join(".rlm/config.toml"), pre_existing).unwrap();
+
+    let action = setup_config_format(dir.path(), SetupMode::Apply).unwrap();
+    assert_eq!(
+        action,
+        SetupAction::Updated,
+        "lookalike keys must not count as an existing `format` preference"
+    );
+
+    let body = read_config(&dir);
+    assert!(
+        body.contains("format = \"toon\""),
+        "real `format` line should have been appended: {body:?}"
+    );
+    // Pre-existing keys survive.
+    for kept in ["formatting", "formatter", "format_version"] {
+        assert!(
+            body.contains(kept),
+            "pre-existing `{kept}` must be preserved: {body:?}"
+        );
+    }
+}
+
+/// Complementary: an actual `format = "x"` line with surrounding
+/// whitespace is still detected (i.e. we don't over-tighten the fix
+/// to require `format=` with no space).
+#[test]
+fn setup_detects_format_with_spaces_and_tabs() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".rlm")).unwrap();
+    let pre_existing = "[output]\n\tformat\t=\t\"json\"\n";
+    fs::write(dir.path().join(".rlm/config.toml"), pre_existing).unwrap();
+
+    let action = setup_config_format(dir.path(), SetupMode::Apply).unwrap();
+    assert_eq!(
+        action,
+        SetupAction::Skipped,
+        "`format = ...` with tabs/spaces must still be detected as present"
+    );
+}
+
+/// Complementary: a `format = ...` line **outside** of `[output]`
+/// (e.g. inside `[indexing]`) must not be treated as the output format.
+#[test]
+fn setup_ignores_format_key_outside_output_section() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".rlm")).unwrap();
+    let pre_existing = "[indexing]\nformat = \"legacy\"\n";
+    fs::write(dir.path().join(".rlm/config.toml"), pre_existing).unwrap();
+
+    let action = setup_config_format(dir.path(), SetupMode::Apply).unwrap();
+    assert_eq!(
+        action,
+        SetupAction::Updated,
+        "`format` under `[indexing]` is unrelated — output section must still be appended"
+    );
+    let body = read_config(&dir);
+    assert!(body.contains("[output]"));
+    assert!(body.contains("format = \"toon\""));
+}
