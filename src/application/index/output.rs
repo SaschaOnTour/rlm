@@ -55,5 +55,5 @@ impl From<IndexResult> for IndexOutput {
 }
 
 #[cfg(test)]
-#[path = "index_tests.rs"]
+#[path = "output_tests.rs"]
 mod tests;

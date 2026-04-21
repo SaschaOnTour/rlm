@@ -73,6 +73,34 @@ pub fn alternative_replace_entry(
     })
 }
 
+/// Full round-trip cost for Claude Code's Grep→Read→Edit to delete a symbol.
+/// Mirrors [`alternative_replace_entry`] but with `new_code = ""`.
+pub fn alternative_delete_entry(
+    db: &Database,
+    file_path: &str,
+    old_code_len: usize,
+    rlm_result_len: usize,
+) -> Result<SavingsEntry> {
+    let post_edit_bytes = db
+        .get_file_by_path(file_path)?
+        .map(|f| f.size_bytes)
+        .unwrap_or(0);
+    let pre_edit_bytes = post_edit_bytes + old_code_len as u64;
+    let file_tokens_with_lines = with_line_overhead(estimate_tokens_from_bytes(pre_edit_bytes));
+    let old_tokens = estimate_tokens(old_code_len);
+
+    Ok(SavingsEntry {
+        command: "delete".to_string(),
+        rlm_input: 0,
+        rlm_output: estimate_json_tokens(rlm_result_len),
+        rlm_calls: 1,
+        alt_input: old_tokens,
+        alt_output: SNIPPET_TOKENS + file_tokens_with_lines + SNIPPET_TOKENS,
+        alt_calls: CC_CALLS_REPLACE,
+        files_touched: 1,
+    })
+}
+
 /// Full round-trip cost for Claude Code's Read→Edit to insert code.
 pub fn alternative_insert_entry(
     db: &Database,

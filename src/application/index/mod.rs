@@ -1,6 +1,9 @@
 mod db_insert;
 mod file_processing;
+pub mod output;
 pub mod staleness;
+
+pub use output::IndexOutput;
 
 #[cfg(test)]
 #[path = "fixtures_tests.rs"]
@@ -318,13 +321,31 @@ pub fn reindex_with_result(
     rel_path: &str,
     source: PreviewSource<'_>,
 ) -> String {
+    // Snapshot pre-write chunk idents so Line/Last writes can
+    // identify newly-added top-level symbols after reindex.
+    let pre_idents = snapshot_idents(db, rel_path);
+
     match reindex_single_file(db, config, rel_path) {
         Ok((chunks, refs)) => {
             let preview = find_preview(db, rel_path, &source);
-            let mut result =
-                serde_json::json!({"ok": true, "reindexed": true, "chunks": chunks, "refs": refs});
+            let mut result = serde_json::json!({
+                "ok": true,
+                "reindexed": true,
+                "chunks": chunks,
+                "refs": refs
+            });
             if let Some(p) = preview {
                 result["preview"] = serde_json::Value::String(p);
+            }
+            if let Some(build) = run_post_write_check(db, config, rel_path) {
+                result["build"] = serde_json::to_value(build).unwrap_or(serde_json::Value::Null);
+            }
+            if let Some(target_sym) = resolve_test_impact_target(db, rel_path, &source, &pre_idents)
+            {
+                if let Some(impact) = run_test_impact(db, config, rel_path, &target_sym) {
+                    result["test_impact"] =
+                        serde_json::to_value(impact).unwrap_or(serde_json::Value::Null);
+                }
             }
             result.to_string()
         }
@@ -333,6 +354,78 @@ pub fn reindex_with_result(
                 .to_string()
         }
     }
+}
+
+/// Collect the idents of every chunk currently indexed for the file.
+/// Returns an empty set on lookup failure — the caller uses it for
+/// "what's new?" diffing, where an empty baseline just means every
+/// post-reindex ident looks new (which is fine for fresh files).
+fn snapshot_idents(db: &Database, rel_path: &str) -> std::collections::HashSet<String> {
+    let file = match db.get_file_by_path(rel_path).ok().flatten() {
+        Some(f) => f,
+        None => return std::collections::HashSet::new(),
+    };
+    db.get_chunks_for_file(file.id)
+        .map(|chunks| chunks.into_iter().map(|c| c.ident).collect())
+        .unwrap_or_default()
+}
+
+/// Decide which symbol `analyze_test_impact` should target.
+///
+/// For a replace/delete that names its symbol (PreviewSource::Symbol),
+/// use that. For an insert (Line/Last), diff post-reindex chunks
+/// against `pre_idents` and pick the first newly-appeared top-level
+/// ident. Returns `None` when no target can be identified.
+fn resolve_test_impact_target(
+    db: &Database,
+    rel_path: &str,
+    source: &PreviewSource<'_>,
+    pre_idents: &std::collections::HashSet<String>,
+) -> Option<String> {
+    if let PreviewSource::Symbol(sym) = source {
+        return Some((*sym).to_string());
+    }
+    let file = db.get_file_by_path(rel_path).ok().flatten()?;
+    let chunks = db.get_chunks_for_file(file.id).ok()?;
+    chunks
+        .into_iter()
+        .find(|c| !pre_idents.contains(&c.ident))
+        .map(|c| c.ident)
+}
+
+/// Run `analyze_test_impact` for the changed symbol. Returns `None`
+/// when the file lookup fails or the analyzer returns an error —
+/// test-impact is a nice-to-have on every write, never a reason to
+/// fail the write itself.
+fn run_test_impact(
+    db: &Database,
+    config: &Config,
+    rel_path: &str,
+    symbol: &str,
+) -> Option<crate::application::symbol::test_impact_analyze::TestImpactResult> {
+    crate::application::symbol::test_impact_analyze::analyze_test_impact(
+        db,
+        &config.project_root,
+        symbol,
+        rel_path,
+    )
+    .ok()
+}
+
+/// Look up the edited file's language and, if the config enables it,
+/// run the native checker (e.g. `cargo check`). `None` when no check
+/// applies.
+fn run_post_write_check(
+    db: &Database,
+    config: &Config,
+    rel_path: &str,
+) -> Option<crate::application::edit::native_check::BuildReport> {
+    let lang = db.get_file_by_path(rel_path).ok().flatten()?.lang;
+    crate::application::edit::native_check::run_check(
+        &config.project_root,
+        &lang,
+        &config.settings.edit,
+    )
 }
 
 /// Find a preview string based on the preview source.

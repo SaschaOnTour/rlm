@@ -402,3 +402,94 @@ fn other_fn() -> i32 { 0 }
         }
     }
 }
+
+// ─── enum variants (task #116) ─────────────────────────────────────────
+
+#[test]
+fn parse_enum_variants_unit() {
+    let source = r#"
+pub enum Color {
+    Red,
+    Green,
+    Blue,
+}
+"#;
+    let chunks = parser().parse_chunks(source, 1).unwrap();
+    let red = chunks
+        .iter()
+        .find(|c| c.ident == "Red")
+        .expect("Red variant should be indexed as a chunk");
+    assert_eq!(red.kind, ChunkKind::EnumVariant);
+    assert_eq!(red.parent.as_deref(), Some("Color"));
+
+    for name in ["Red", "Green", "Blue"] {
+        assert!(
+            chunks
+                .iter()
+                .any(|c| c.ident == name && c.kind == ChunkKind::EnumVariant),
+            "missing variant chunk for {name}"
+        );
+    }
+}
+
+#[test]
+fn parse_enum_variants_tuple_and_struct() {
+    let source = r#"
+pub enum Value {
+    Int(i64),
+    Pair(i64, i64),
+    Named { name: String, age: u32 },
+}
+"#;
+    let chunks = parser().parse_chunks(source, 1).unwrap();
+
+    let int = chunks.iter().find(|c| c.ident == "Int").unwrap();
+    assert_eq!(int.kind, ChunkKind::EnumVariant);
+    assert_eq!(int.parent.as_deref(), Some("Value"));
+    assert!(int.content.contains("Int(i64)"), "got: {}", int.content);
+
+    let pair = chunks.iter().find(|c| c.ident == "Pair").unwrap();
+    assert!(
+        pair.content.contains("Pair(i64, i64)"),
+        "got: {}",
+        pair.content
+    );
+
+    let named = chunks.iter().find(|c| c.ident == "Named").unwrap();
+    assert!(
+        named.content.contains("name: String"),
+        "got: {}",
+        named.content
+    );
+}
+
+#[test]
+fn parse_enum_variants_preserve_doc_and_attrs() {
+    let source = r#"
+pub enum Level {
+    /// Low level.
+    Low,
+    #[deprecated]
+    High,
+}
+"#;
+    let chunks = parser().parse_chunks(source, 1).unwrap();
+    let low = chunks.iter().find(|c| c.ident == "Low").unwrap();
+    assert!(
+        low.doc_comment
+            .as_deref()
+            .unwrap_or("")
+            .contains("Low level"),
+        "doc comment not attached, got: {:?}",
+        low.doc_comment
+    );
+    let high = chunks.iter().find(|c| c.ident == "High").unwrap();
+    assert!(
+        high.attributes
+            .as_deref()
+            .unwrap_or("")
+            .contains("deprecated"),
+        "attribute not attached, got: {:?}",
+        high.attributes
+    );
+}

@@ -5,7 +5,8 @@
 //! across the whole codebase. Wired back in via
 //! `#[cfg(test)] #[path = "server_helpers_tests.rs"] mod tests;`.
 
-use super::{guard_output, Config, Formatter, RlmServer, MAX_MCP_OUTPUT_BYTES};
+use super::{guard_output, Formatter, RlmServer, MAX_MCP_OUTPUT_BYTES};
+use crate::config::Config;
 #[test]
 fn error_text_sets_is_error_true() {
     let result = RlmServer::error_text(Formatter::default(), "something failed".into());
@@ -46,10 +47,10 @@ fn guard_output_truncates_large_result() {
 }
 
 #[test]
-fn ensure_db_runs_staleness_check_on_mcp_path() {
-    // Regression test: the MCP canonical DB-open (RlmServer::ensure_db) must
-    // invoke the self-healing staleness check, mirroring the CLI `get_db`.
-    // This guards against accidentally losing the wiring from P07-05.
+fn ensure_session_runs_staleness_check_on_mcp_path() {
+    // Regression test: the MCP canonical session-open (RlmServer::ensure_session)
+    // must invoke the self-healing staleness check, mirroring the CLI session
+    // open. This guards against accidentally losing the wiring from P07-05.
     use std::fs;
     use tempfile::TempDir;
 
@@ -63,14 +64,22 @@ fn ensure_db_runs_staleness_check_on_mcp_path() {
     // Add a new symbol externally (not via rlm) — index now stale.
     fs::write(tmp.path().join("new.rs"), "fn externally_added() {}").unwrap();
 
-    // MCP path: ensure_db should reconcile before returning the DB.
+    // MCP path: ensure_session should reconcile before returning. We
+    // probe via the session's typed read: a newly-visible file should
+    // resolve immediately after ensure_session completes.
     let server = RlmServer::new(tmp.path().to_path_buf(), Formatter::default());
-    let db = server.ensure_db().expect("ensure_db succeeds");
+    let session = server.ensure_session().expect("ensure_session succeeds");
+    let files = session
+        .files(crate::application::query::files::FilesFilter {
+            path_prefix: None,
+            skipped_only: false,
+            indexed_only: true,
+        })
+        .expect("session.files succeeds");
 
-    let new_symbol_file = db.get_file_by_path("new.rs").unwrap();
     assert!(
-        new_symbol_file.is_some(),
-        "MCP ensure_db must pick up externally-added files"
+        files.results.iter().any(|f| f.path == "new.rs"),
+        "MCP ensure_session must pick up externally-added files"
     );
 }
 

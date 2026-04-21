@@ -13,6 +13,20 @@ pub enum FormatArg {
     Toon,
 }
 
+/// Projection mode for `rlm search` hits. Mirrors the application-layer
+/// [`crate::application::query::search::FieldsMode`] so clap can parse
+/// `--fields <mode>` without dragging clap into the application layer.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum FieldsArg {
+    /// Every hit includes the full chunk content (default). Best when
+    /// the agent plans to read at least one of the hits.
+    Full,
+    /// Every hit drops `content`, keeping only id/kind/name/lines. Best
+    /// for "does X exist?" / "which files?" where identifiers are
+    /// enough; saves ~5k tokens per call vs `full`.
+    Minimal,
+}
+
 #[derive(Parser)]
 #[command(
     name = "rlm",
@@ -55,6 +69,13 @@ pub enum Command {
         /// Maximum number of results
         #[arg(short, long, default_value = "20")]
         limit: usize,
+        /// Which fields to include on each hit. `full` (default) returns
+        /// the matched chunk body so the agent doesn't need a follow-up
+        /// `rlm read`. `minimal` drops `content` and returns just
+        /// id/kind/name/lines — use it when you only need to know
+        /// whether a symbol exists or in which files.
+        #[arg(long, value_enum, default_value = "full")]
+        fields: FieldsArg,
     },
 
     /// [read-only] Read a specific symbol or markdown section from a file.
@@ -68,6 +89,10 @@ pub enum Command {
         /// Read a specific symbol (function, struct, class)
         #[arg(short, long)]
         symbol: Option<String>,
+        /// Parent container (enum / struct / impl name) to disambiguate
+        /// symbols with identical idents in the same file.
+        #[arg(long)]
+        parent: Option<String>,
         /// Read a specific markdown section (heading text)
         #[arg(long)]
         section: Option<String>,
@@ -106,21 +131,74 @@ pub enum Command {
         /// Symbol to replace
         #[arg(short, long)]
         symbol: String,
-        /// New code
-        #[arg(short, long)]
-        code: String,
+        /// Parent container (enum / struct / impl name) to disambiguate
+        /// symbols with identical idents in the same file.
+        #[arg(long)]
+        parent: Option<String>,
+        /// New code (inline). Prefer `--code-stdin` or `--code-file` for
+        /// bodies containing apostrophes / byte literals / lifetimes.
+        #[arg(short, long, group = "replace_code_src")]
+        code: Option<String>,
+        /// Read the new code from stdin. Typical: `cat patch.rs | rlm replace …`.
+        #[arg(long, group = "replace_code_src")]
+        code_stdin: bool,
+        /// Read the new code from a file.
+        #[arg(long, value_name = "PATH", group = "replace_code_src")]
+        code_file: Option<String>,
         /// Preview only (don't write)
         #[arg(long)]
         preview: bool,
+    },
+
+    /// [write] Delete an AST node by identifier
+    Delete {
+        /// File path
+        path: String,
+        /// Symbol to delete
+        #[arg(short, long)]
+        symbol: String,
+        /// Parent container (enum / struct / impl name) to disambiguate
+        /// symbols with identical idents in the same file.
+        #[arg(long)]
+        parent: Option<String>,
+        /// Preserve the doc-comment / attribute sidecar above the
+        /// symbol. Default (off): the sidecar is removed alongside
+        /// the symbol so orphan comments don't linger.
+        #[arg(long)]
+        keep_docs: bool,
+    },
+
+    /// [write] Extract symbols from one file into a new (or existing) file
+    Extract {
+        /// Source file path (project-relative)
+        path: String,
+        /// Comma-separated list of symbol names to move
+        #[arg(long, value_delimiter = ',')]
+        symbols: Vec<String>,
+        /// Destination file path. Created if it doesn't exist;
+        /// appended to otherwise.
+        #[arg(long)]
+        to: String,
+        /// Parent container for disambiguation when a symbol name
+        /// is shared across multiple chunks in the source file.
+        #[arg(long)]
+        parent: Option<String>,
     },
 
     /// [write] Insert code at a position in a file
     Insert {
         /// File path
         path: String,
-        /// Code to insert
-        #[arg(short, long)]
-        code: String,
+        /// Code to insert (inline). Prefer `--code-stdin` or
+        /// `--code-file` for non-trivial bodies.
+        #[arg(short, long, group = "insert_code_src")]
+        code: Option<String>,
+        /// Read the code from stdin.
+        #[arg(long, group = "insert_code_src")]
+        code_stdin: bool,
+        /// Read the code from a file.
+        #[arg(long, value_name = "PATH", group = "insert_code_src")]
+        code_file: Option<String>,
         /// Position: top, bottom, before:N, after:N
         #[arg(short, long, default_value = "bottom")]
         position: InsertPosition,

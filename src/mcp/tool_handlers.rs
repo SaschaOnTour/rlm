@@ -8,11 +8,13 @@
 //! - `tool_handlers_index` — `handle_index` / `handle_index_with_progress`
 //! - `tool_handlers_query` — `handle_search` / `handle_overview` / `handle_refs` / `handle_files`
 //! - `tool_handlers_read`  — `handle_read` (symbol + section dispatch)
-//! - `tool_handlers_edit`  — `handle_replace` / `handle_insert` + `InsertInput`
+//! - `tool_handlers_edit`  — `handle_replace` / `handle_delete` / `handle_insert` + `InsertInput`
 //!
 //! Utility handlers (savings, verify, …) still live in `tool_handlers_util`.
 
-pub use super::tool_handlers_edit::{handle_insert, handle_replace, InsertInput};
+pub use super::tool_handlers_edit::{
+    handle_delete, handle_extract, handle_insert, handle_replace, InsertInput,
+};
 pub use super::tool_handlers_index::{handle_index, handle_index_with_progress};
 pub use super::tool_handlers_query::{handle_files, handle_overview, handle_refs, handle_search};
 pub use super::tool_handlers_read::handle_read;

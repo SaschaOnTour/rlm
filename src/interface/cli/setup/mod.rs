@@ -22,10 +22,12 @@
 //! `settings` / `claude_md` call that module directly.
 
 mod claude_md;
+mod config_format;
 mod orchestrator;
 mod settings;
 
 pub use claude_md::setup_claude_local_md;
+pub use config_format::setup_config_format;
 pub use orchestrator::{
     run_setup, setup_initial_index, SetupAction, SetupError, SetupMode, SetupReport,
 };

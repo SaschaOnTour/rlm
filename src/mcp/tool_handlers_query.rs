@@ -3,13 +3,9 @@
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 
-use crate::application::query::tree;
-use crate::application::symbol::RefsQuery;
-use crate::db::Database;
-use crate::interface::shared::{
-    record_operation, record_symbol_query, AlternativeCost, OperationMeta,
-};
-use crate::operations;
+use crate::application::query::files::FilesFilter;
+use crate::application::query::search::FieldsMode;
+use crate::application::session::RlmSession;
 use crate::output::Formatter;
 
 use super::server::RlmServer;
@@ -17,23 +13,18 @@ use super::server::RlmServer;
 /// Handle the `search` tool: full-text search across indexed chunks.
 // qual:api
 pub fn handle_search(
-    db: &Database,
+    session: &RlmSession,
     query: &str,
     limit: usize,
+    fields: Option<&str>,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match operations::search_chunks(db, query, limit) {
-        Ok(result) => {
-            let meta = OperationMeta {
-                command: "search",
-                files_touched: result.file_count,
-                alternative: AlternativeCost::AtLeastBody {
-                    base: result.tokens.output,
-                },
-            };
-            let response = record_operation(db, &meta, &result);
-            Ok(RlmServer::success_text(formatter, response.body))
-        }
+    let mode = match fields {
+        Some("minimal") => FieldsMode::Minimal,
+        _ => FieldsMode::Full,
+    };
+    match session.search(query, limit, mode) {
+        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
@@ -41,65 +32,33 @@ pub fn handle_search(
 /// Handle the `overview` tool: project structure at three detail levels.
 // qual:api
 pub fn handle_overview(
-    db: &Database,
+    session: &RlmSession,
     detail: &str,
     path: Option<&str>,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    let meta = OperationMeta {
-        command: "overview",
-        files_touched: 0,
-        alternative: AlternativeCost::ScopedFiles {
-            prefix: path.map(String::from),
-        },
-    };
-
-    match detail {
-        "minimal" => {
-            use crate::application::query::peek;
-            match peek::peek(db, path) {
-                Ok(result) => {
-                    let response = record_operation(db, &meta, &result);
-                    Ok(RlmServer::success_text(formatter, response.body))
-                }
-                Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-            }
-        }
-        "standard" => match operations::build_map(db, path) {
-            Ok(entries) => {
-                let response = record_operation(db, &meta, &entries);
-                Ok(RlmServer::success_text(formatter, response.body))
-            }
-            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-        },
-        "tree" => match tree::build_tree(db, path) {
-            Ok(nodes) => {
-                let response = record_operation(db, &meta, &nodes);
-                Ok(RlmServer::success_text(formatter, response.body))
-            }
-            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-        },
-        other => Ok(RlmServer::error_text(
-            formatter,
-            format!("unknown detail level: '{other}'. Use 'minimal', 'standard', or 'tree'."),
-        )),
+    match session.overview(detail, path) {
+        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
 /// Handle the `refs` tool: find all usages of a symbol with impact analysis.
 // qual:api
 pub fn handle_refs(
-    db: &Database,
+    session: &RlmSession,
     symbol: &str,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match record_symbol_query::<RefsQuery>(db, symbol) {
+    match session.refs(symbol) {
         Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
-/// Handle the `files` tool: list all project files.
+/// Handle the `files` tool: list all project files. `files` works
+/// even when no index exists (it scans the filesystem directly), so
+/// this handler doesn't require an open session.
 // qual:api
 pub fn handle_files(
     project_root: &std::path::Path,
@@ -108,13 +67,12 @@ pub fn handle_files(
     indexed_only: bool,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    let filter = operations::FilesFilter {
+    let filter = FilesFilter {
         path_prefix,
         skipped_only,
         indexed_only,
     };
-
-    match operations::list_files(project_root, filter) {
+    match crate::application::query::files::list_files(project_root, filter) {
         Ok(result) => Ok(RlmServer::success_text(
             formatter,
             RlmServer::to_json(&result),

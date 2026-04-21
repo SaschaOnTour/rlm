@@ -1,29 +1,32 @@
 //! Savings-recording middleware for operation pipelines.
 //!
-//! `record_operation` is the single point where an adapter hands a
-//! serializable result plus its [`OperationMeta`] and receives back an
-//! [`OperationResponse`] containing the JSON body and its token count.
-//! The function serializes the result once, records the savings entry
-//! against the Claude Code alternative cost model, and returns the raw
-//! JSON body so each adapter can apply its own downstream handling
-//! (CLI reformats via `Formatter`; MCP guards against truncation before
-//! reformatting).
+//! `record_operation` is the single point where the application layer
+//! hands a serialisable result plus its [`OperationMeta`] and receives
+//! back an [`OperationResponse`] containing the JSON body and its
+//! token count. The function serialises the result once, records the
+//! savings entry against the Claude Code alternative cost model, and
+//! returns the raw JSON body so `RlmSession` can hand it to the
+//! adapter, which reformats via its own `Formatter`.
 //!
-//! Existing `operations::savings::record_*` helpers are reused under the
-//! hood for each [`AlternativeCost`] variant so behavior stays identical
-//! to the legacy CLI/MCP paths.
+//! The [`crate::application::savings`] helpers do the actual
+//! arithmetic; this module is the glue between operation pipelines and
+//! the savings store.
 
 use serde::Serialize;
 
+use crate::application::savings;
 use crate::application::symbol::SymbolQuery;
 use crate::application::FileQuery;
 use crate::db::Database;
 use crate::domain::token_budget::estimate_json_tokens;
 use crate::error::Result;
-use crate::operations::savings;
-use crate::output;
 
 use super::{AlternativeCost, OperationMeta, OperationResponse};
+
+fn serialize_min<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value)
+        .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string())
+}
 
 /// Serialize `result`, record savings for `meta`, and return the raw
 /// JSON body together with its estimated token count.
@@ -63,7 +66,7 @@ pub fn record_operation<T: Serialize>(
             (json, tokens_out)
         }
         AlternativeCost::Fixed(alt_tokens) => {
-            let json = output::to_json(result);
+            let json = serialize_min(result);
             let out_tokens = estimate_json_tokens(json.len());
             // Route through savings::record (V2-aware legacy wrapper)
             // rather than Database::record_savings — the latter leaves
@@ -79,7 +82,7 @@ pub fn record_operation<T: Serialize>(
             (json, out_tokens)
         }
         AlternativeCost::AtLeastBody { base } => {
-            let json = output::to_json(result);
+            let json = serialize_min(result);
             let out_tokens = estimate_json_tokens(json.len());
             let alt_tokens = (*base).max(out_tokens);
             savings::record(db, meta.command, out_tokens, alt_tokens, meta.files_touched);
@@ -128,8 +131,8 @@ pub fn record_file_query<Q: FileQuery>(
 }
 
 #[cfg(test)]
-#[path = "savings_middleware_scoped_tests.rs"]
+#[path = "savings_recorder_scoped_tests.rs"]
 mod scoped_tests;
 #[cfg(test)]
-#[path = "savings_middleware_tests.rs"]
+#[path = "savings_recorder_tests.rs"]
 mod tests;

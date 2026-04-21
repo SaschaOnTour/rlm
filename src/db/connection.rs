@@ -3,6 +3,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 use crate::db::migrations;
+use crate::db::parser_version;
 use crate::error::Result;
 
 /// Database wrapper for the rlm index.
@@ -26,17 +27,12 @@ impl Database {
              PRAGMA temp_store=MEMORY;",
         )?;
         migrations::apply(&conn)?;
+        // Clears `files.hash` on parser-version mismatch so the CLI's
+        // staleness check naturally re-parses every file on the next
+        // read-only command (or immediately if the caller is `rlm index`).
+        // MCP surfaces no warning either — agents re-index explicitly.
+        parser_version::reconcile_parser_version(&conn)?;
         Ok(Self { conn })
-    }
-
-    /// Open an existing database, returning `None` if the file does not exist.
-    // qual:allow(iosp) reason: "check-then-open is inherent to this method's purpose"
-    pub fn open_if_exists(path: &Path) -> Option<Self> {
-        if path.exists() {
-            Self::open(path).ok()
-        } else {
-            None
-        }
     }
 
     /// Open an existing database, returning `RlmError::IndexNotFound` if missing.
@@ -69,6 +65,7 @@ impl Database {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         migrations::apply(&conn)?;
+        parser_version::reconcile_parser_version(&conn)?;
         Ok(Self { conn })
     }
 

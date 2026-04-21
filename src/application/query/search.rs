@@ -29,22 +29,53 @@ pub struct SearchResult {
 }
 
 /// A single search hit.
+///
+/// `content` is `Some(..)` under [`FieldsMode::Full`] (default — the
+/// agent gets the code in one call, no follow-up `rlm read` needed) and
+/// `None` under [`FieldsMode::Minimal`] (the agent just wanted names /
+/// file paths). The `skip_serializing_if` attribute keeps the JSON
+/// payload small when `content` is absent.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchHit {
-    /// The chunk ID.
     pub id: i64,
-    /// The kind of the chunk.
     pub kind: String,
-    /// The symbol name.
     pub name: String,
-    /// The line range [start, end].
     pub lines: (u32, u32),
-    /// The content of the chunk.
-    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
 }
 
-/// Perform a full-text search across indexed chunks.
-pub fn search_chunks(db: &Database, query: &str, limit: usize) -> Result<SearchResult> {
+/// Which fields to populate on every [`SearchHit`] — see
+/// `docs/bugs/search-fields-projection.md` for the break-even
+/// analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldsMode {
+    /// Default: include the full chunk content so the caller doesn't
+    /// need a second `rlm read`. Optimal when the agent plans to read
+    /// at least one of the hits.
+    Full,
+    /// Drop `content`, keep metadata (id, kind, name, lines). Optimal
+    /// for "does X exist?" / "which files?" where only identifiers
+    /// matter; per-call output drops from ~5k tokens to a few hundred.
+    Minimal,
+}
+
+/// Perform a full-text search across indexed chunks. Convenience wrapper
+/// around [`search_chunks_with_fields`] using the [`FieldsMode::Full`]
+/// default so behavioural tests stay compact.
+#[cfg(test)]
+pub(crate) fn search_chunks(db: &Database, query: &str, limit: usize) -> Result<SearchResult> {
+    search_chunks_with_fields(db, query, limit, FieldsMode::Full)
+}
+
+/// Perform a full-text search with an explicit projection mode.
+// qual:api
+pub fn search_chunks_with_fields(
+    db: &Database,
+    query: &str,
+    limit: usize,
+    fields: FieldsMode,
+) -> Result<SearchResult> {
     use std::collections::HashSet;
 
     let results = run_fts(db, query, limit)?;
@@ -62,11 +93,17 @@ pub fn search_chunks(db: &Database, query: &str, limit: usize) -> Result<SearchR
             kind: c.kind.as_str().to_string(),
             name: c.ident.clone(),
             lines: (c.start_line, c.end_line),
-            content: c.content.clone(),
+            content: match fields {
+                FieldsMode::Full => Some(c.content.clone()),
+                FieldsMode::Minimal => None,
+            },
         })
         .collect();
 
-    let total_chars: usize = hits.iter().map(|h| h.content.len()).sum();
+    let total_chars: usize = hits
+        .iter()
+        .map(|h| h.content.as_deref().map_or(0, str::len))
+        .sum();
 
     Ok(SearchResult {
         results: hits,
@@ -93,28 +130,63 @@ fn run_fts(db: &Database, query: &str, limit: usize) -> Result<Vec<Chunk>> {
 
 /// Sanitize a user query for FTS5.
 ///
-/// Keeps characters that `char::is_alphanumeric` accepts (which is
-/// Unicode-wide — letters and digits from any script, so identifiers
-/// like `größe` or `日本語` survive), plus whitespace, `_`, and `-`.
-/// Drops everything else (quotes, parens, operators, FTS5
-/// meta-chars). Splits the cleaned string on whitespace, wraps each
-/// term in double quotes so FTS5 treats it as a phrase, and joins the
-/// phrases with `OR`. Returns an empty string when the input has no
-/// usable characters — the caller short-circuits and returns no hits
-/// in that case.
+/// Produces an FTS5 query string with sensible defaults:
+///
+/// * **AND by default**: space-separated bare tokens pass through
+///   unchanged. FTS5 interprets that as AND — every query tool's
+///   default, and the only behaviour that narrows a search as you
+///   add terms.
+/// * **Explicit OR**: the word `OR` survives, so users opt in to
+///   broader matches (`auth OR login`).
+/// * **Phrase queries**: balanced `"..."` survives so FTS5 does a
+///   contiguous-token match.
+/// * **Unicode-wide identifiers** (e.g. `größe`, `日本語`, `authenticate_user`).
+/// * **Injection-safe**: FTS5 meta-characters outside the allowed set
+///   become whitespace (= word break = AND separator). An unbalanced
+///   trailing `"` is stripped so FTS5 never errors on it.
+///
+/// Returns an empty string when the input has no usable tokens;
+/// the caller short-circuits to "no hits".
 fn sanitize_fts_query(query: &str) -> String {
-    let cleaned: String = query
+    // Whitelist characters the FTS5 parser needs. `"` enables phrase
+    // queries; `*` enables prefix matches (`foo*`). Everything else
+    // collapses to space (a word break → AND separator).
+    let mapped: String = query
         .chars()
-        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '_' || *c == '-')
+        .map(|c| match c {
+            c if c.is_alphanumeric() => c,
+            ' ' | '\t' | '\n' | '\r' => ' ',
+            '_' | '-' | '"' | '*' => c,
+            _ => ' ',
+        })
         .collect();
 
-    let terms: Vec<String> = cleaned
-        .split_whitespace()
-        .filter(|t| !t.is_empty())
-        .map(|t| format!("\"{t}\""))
-        .collect();
+    // Balance quotes: if the total is odd, strip the last `"`. Doing
+    // this on the MAPPED string (not the original) means non-ASCII
+    // quotes that became spaces don't throw off the count.
+    let balanced = balance_quotes(&mapped);
 
-    terms.join(" OR ")
+    // Collapse runs of whitespace and trim — empty input → empty output.
+    balanced.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Remove the last `"` if the string contains an odd number of them.
+/// Keeps the rest of the input intact. Extracted so the quote-parity
+/// logic has one place to live (and to test) instead of being inlined.
+fn balance_quotes(s: &str) -> String {
+    let count = s.chars().filter(|&c| c == '"').count();
+    if count % 2 == 0 {
+        return s.to_string();
+    }
+    match s.rfind('"') {
+        Some(idx) => {
+            let mut out = String::with_capacity(s.len() - 1);
+            out.push_str(&s[..idx]);
+            out.push_str(&s[idx + 1..]);
+            out
+        }
+        None => s.to_string(),
+    }
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@ use crate::error::Result;
 const MIGRATION_001_BASE: &str = include_str!("001_base.sql");
 const MIGRATION_002_SAVINGS_V2: &str = include_str!("002_savings_v2.sql");
 const MIGRATION_003_MTIME: &str = include_str!("003_mtime.sql");
+const MIGRATION_004_META: &str = include_str!("004_meta.sql");
 
 /// A single migration: its monotonic version, short human-readable
 /// name (used in the `schema_migrations.name` column), and SQL body.
@@ -60,6 +61,12 @@ const MIGRATIONS: &[Migration] = &[
         name: "mtime",
         sql: MIGRATION_003_MTIME,
         tolerate_duplicate_column: true,
+    },
+    Migration {
+        version: 4,
+        name: "meta",
+        sql: MIGRATION_004_META,
+        tolerate_duplicate_column: false,
     },
 ];
 

@@ -157,10 +157,6 @@ paths = [
 [architecture.layers.application]
 paths = [
     "src/application/**",
-    # operations/ still holds savings / refs / index-output envelopes that
-    # belong to the application layer; a follow-up slice will fold them
-    # into src/application/.
-    "src/operations/**",
 ]
 
 [architecture.layers.interface]
@@ -259,6 +255,65 @@ name = "no_async_fn_in_domain"
 forbid_item_kind = ["async_fn"]
 forbidden_in = ["src/domain/**", "src/models/**"]
 reason = "Domain stays synchronous — async is an adapter concern."
+
+# CLI and MCP adapters must delegate through the application layer.
+# The adapter's job is to parse CLI flags / JSON params and forward to
+# the application layer, period. Four classes of leak are forbidden:
+#
+# 1. Parser / ingest internals — adapters never touch grammars or
+#    per-language parsers (`crate::ingest::`, incl. quality_log).
+# 2. Raw DB queries — adapter must not bypass the repo/session layer
+#    (`crate::db::queries::`, `crate::db::Database`). Open the DB via
+#    `application::session::RlmSession`, not a bare handle.
+# 3. Indexing orchestration — ensure_index / staleness / reindex
+#    (`crate::application::index::`) belong inside the session;
+#    adapters say "do this op" and the session decides when to
+#    refresh the index.
+# 4. Domain entities that have a DTO — Chunk, FileRecord, Reference
+#    leak implementation detail into serialised output. Adapters use
+#    `crate::application::dto::*` instead.
+#
+# Canonical example for (1): stats/savings/quality in 0.5.0 was
+# triplicated across `cli::handlers_util`, `mcp::tool_handlers_util`,
+# and the application layer before consolidation.
+#
+# The `interface::shared::*` middleware is **not** an adapter — it's
+# the seam adapters funnel through — so it keeps direct DB access.
+[[architecture.pattern]]
+name = "adapters_no_direct_infrastructure"
+forbid_path_prefix = [
+    # Parser / ingest internals
+    "crate::ingest::",
+    # Raw DB queries and the bare handle
+    "crate::db::",
+    # Indexing orchestration (ensure_index, staleness, reindex_with_result, run_index)
+    "crate::application::index::",
+    # Domain entities that have a DTO
+    "crate::domain::chunk::",
+    "crate::domain::file::",
+    "crate::domain::reference::",
+    # Savings recorder stays inside application layer
+    "crate::application::savings::",
+]
+forbidden_in = [
+    "src/cli/handlers.rs",
+    "src/cli/handlers_util.rs",
+    "src/cli/helpers.rs",
+    "src/mcp/server.rs",
+    "src/mcp/server_helpers.rs",
+    "src/mcp/tool_handlers.rs",
+    "src/mcp/tool_handlers_util.rs",
+    "src/mcp/tool_handlers_edit.rs",
+    "src/mcp/tool_handlers_query.rs",
+    "src/mcp/tool_handlers_read.rs",
+    "src/mcp/tool_handlers_index.rs",
+]
+except = [
+    # Test-only helpers may reach into the DB directly to build
+    # fixtures (out-of-band file inserts, orphan rows, etc.).
+    "src/**/*_tests.rs",
+]
+reason = "Adapters must delegate to application layer — no direct DB, ingest, index-orchestration, raw-entity, or savings-recorder imports. Keeps CLI ↔ MCP parallelism honest: both sides do argument parsing + one dispatcher call, nothing else."
 
 # Tokio / tracing are runtime/logging libraries; neither belongs in the
 # domain or application core. Adapter layers may use them freely.

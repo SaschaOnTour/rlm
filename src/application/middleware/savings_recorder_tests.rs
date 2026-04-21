@@ -1,12 +1,12 @@
-//! Single-file / fixed-cost middleware tests for `savings_middleware.rs`.
+//! Single-file / fixed-cost middleware tests for `savings_recorder.rs`.
 //!
 //! Moved from the inline `#[cfg(test)] mod tests { ... }` block
 //! into this companion file to match the Phase-4 convention
 //! across the whole codebase. Wired back in via
-//! `#[cfg(test)] #[path = "savings_middleware_tests.rs"] mod tests;`.
+//! `#[cfg(test)] #[path = "savings_recorder_tests.rs"] mod tests;`.
 //!
 //! Scoped / symbol-files tests live in the sibling
-//! `savings_middleware_scoped_tests.rs`.
+//! `savings_recorder_scoped_tests.rs`.
 
 use super::super::fixtures::{payload, test_db, Payload};
 use super::{record_operation, AlternativeCost, OperationMeta};

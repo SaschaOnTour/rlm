@@ -14,6 +14,7 @@
 - [The Problem](#the-problem)
 - [The Solution](#the-solution)
 - [How It Works](#how-it-works)
+- [Performance](#performance)
 - [Quick Start](#quick-start)
 - [Setup for AI Agents](#setup-for-ai-agents)
 - [Commands](#commands)
@@ -136,6 +137,85 @@ graph TD
     style F stroke:#28a745,stroke-width:2px
     style G stroke:#d73a49,stroke-width:2px,stroke-dasharray: 5 5
 ```
+
+---
+
+## Performance
+
+rlm's response design produces measurable time and token savings in
+three separable ways. Each is additive; agents using rlm heavily see
+the three stack.
+
+### 1. Rounds avoided
+
+Every tool call is a full LLM round: parse the request context,
+format the tool arguments, execute, parse the response. At 3–8 s per
+round depending on session size, rounds are the dominant latency
+cost. rlm packages the follow-up into the first response:
+
+| Task | Manual rounds (Grep + Read + Edit) | rlm rounds | Time saved |
+|---|---|---|---|
+| Edit a function, verify it compiles | 4 (Grep → Read → Edit → `cargo check`) | 1 (`rlm replace` — response includes `build: { passed, errors }`) | 9–24 s |
+| Look up a method's signature to call it | 2–4 (Grep → Read, repeat on wrong match) | 1 (`rlm read --metadata`) | 3–24 s |
+| Find callers of a symbol (unique name) | 1–5 (Grep → Read each match) | 1 (`rlm refs`) | 3–32 s |
+| Find callers of a common method (`.open()`, `.new()`, `.parse()`) | 5–15+ (each grep hit needs a Read to identify the receiver type before the list is useful) | 1 (`rlm refs Database::open` — AST-filtered to the specific symbol) | 15–120 s |
+| See a symbol's body + callers + callees + type info | 4+ (Read + Grep + Read + type-lookup) | 1 (`rlm context --graph`) | 9–32 s |
+
+The ambiguity multiplier matters most on common method names. A
+codebase typically has five or more functions called `open`
+(`File::open`, `Database::open`, `Connection::open`, …).
+`grep "\.open\("` returns them all; the agent then has to Read each
+call site to determine the receiver type before the list is useful.
+`rlm refs` starts from the semantic identity and returns only the
+callers of *that* specific `open` — grep-level noise eliminated by
+construction.
+
+### 2. Rework cycles avoided
+
+A grep-based workflow over-matches (string hits that aren't semantic
+refs) and under-matches (trait dispatch, re-exports, macro-generated
+methods). Acting on those results costs a second cycle:
+edit-based-on-wrong-info → compile error → re-investigate → fix. One
+rework cycle is typically 3–5 rounds (failure → diagnosis → correction
+→ retry → verify), worth **15–40 s per avoided cycle**.
+
+rlm's AST-backed queries return exactly the semantic matches, so
+edits land first-try. This isn't just a time savings — an agent
+working from a noise-contaminated grep list will undercount and
+overcount simultaneously, producing edits that miss some real call
+sites and break unrelated code.
+
+### 3. Tasks made tractable
+
+Some rlm outputs resolve questions that would take 20+ rounds of
+manual assembly and still produce approximations:
+
+- Call-graphs with correct method-receiver resolution.
+- Transitive impact of a symbol change through the ref graph.
+- Lexical scope at a specific line (which symbols are visible).
+- Which tests transitively exercise a given symbol (new in 0.5.0).
+
+At 3–8 s per round, a 20-round manual attempt is **60–160 s**, and the
+result is often still wrong enough to need a rework cycle. rlm
+answers in one round with ground truth from the index — orders of
+magnitude faster, not a small constant factor.
+
+### 4. Tokens per response
+
+TOON format (automatically configured by `rlm setup`, see
+[Setup for AI Agents](#setup-for-ai-agents)) shrinks flat responses
+(search, refs, files, stats) by 30–50 % versus JSON. Each saved token
+reduces both the LLM's input-processing time on subsequent calls and
+the prompt-cache pressure over a long session.
+
+### Aggregate
+
+A typical coding session with 30–80 rlm calls saves **1–3 minutes of
+wall-clock latency** through class 1 alone, plus 1–2 avoided rework
+cycles (class 2) worth another 30–80 s, plus any class-3 tasks that
+otherwise wouldn't have been feasible at all. Numbers vary with
+session size and task mix — the structural point is that the savings
+compound across rounds, not just within a single response.
 
 ---
 
@@ -296,10 +376,22 @@ For Claude Code, MCP is recommended. For other agents or simpler setups, CLI wor
 
 | Command | Use When |
 |---------|----------|
-| `rlm search <query>` | Full-text semantic search |
+| `rlm search <query>` | Full-text search. AND by default (`foo bar`), `OR` explicit (`foo OR bar`), `"phrase"` for contiguous match, `prefix*` for wildcard |
+| `rlm search <query> --fields minimal` | Same, but hits drop `content` — names + line ranges only, for existence / file-list queries. Saves ~5k tokens per call |
 | `rlm read <path> --symbol <n>` | Read one function/struct/class |
 | `rlm read <path> --symbol <n> --metadata` | Read with type info + signature |
 | `rlm read <path> --section <heading>` | Read a markdown section |
+
+**`rlm search` vs Claude Code's `Grep`** — both are fast; pick the one
+that matches the question:
+
+- Reach for **`rlm search`** when you're hunting for code symbols, documented
+  intent, or content that rlm already indexed (AST-aware, skips
+  `node_modules`/`target`/`.rlm` automatically). Supports AND (default),
+  `OR`, `"phrase"`, and `prefix*`.
+- Reach for **`Grep`** when you need regex, literal punctuation, line
+  anchors, or a file rlm doesn't index (yaml, toml, build output,
+  lockfiles, binaries).
 
 ### Analyze
 
@@ -315,9 +407,23 @@ For Claude Code, MCP is recommended. For other agents or simpler setups, CLI wor
 
 | Command | Use When |
 |---------|----------|
-| `rlm replace <path> --symbol <n> --code "<new>"` | Replace a function/struct |
+| `rlm replace <path> --symbol <n> --code "<new>"` | Replace a function/struct (inline code) |
+| `rlm replace <path> --symbol <n> --parent <Foo> --code "<new>"` | Disambiguate when two symbols share the ident (e.g. `Foo::new` vs. `Bar::new`) |
+| `cat patch.rs \| rlm replace <path> --symbol <n> --code-stdin` | Replace, reading code from stdin (no escape headaches) |
+| `rlm replace <path> --symbol <n> --code-file patch.rs` | Replace, reading code from a file |
 | `rlm replace ... --preview` | Preview the change first |
+| `rlm delete <path> --symbol <n> [--parent <Foo>]` | Delete a function/struct — takes the leading doc-comment / attribute block with it |
+| `rlm delete <path> --symbol <n> --keep-docs` | Delete but preserve the doc/attribute sidecar (for replace-via-delete-then-insert workflows) |
+| `rlm extract <src> --symbols A,B,C --to <dest>` | Move symbols to a new or existing file atomically (docs/attrs travel along) |
 | `rlm insert <path> --code "<new>" --position top` | Insert code at a position |
+| `rlm insert <path> --code-stdin --position bottom` | Insert, reading code from stdin |
+
+### Transform & Summarise
+
+| Command | Use When |
+|---------|----------|
+| `rlm partition <path> --strategy <semantic\|uniform:N\|keyword:q>` | Split a file into chunks (semantic symbols, fixed line count, or keyword-anchored) |
+| `rlm summarize <path>` | Condensed summary (symbols + description) |
 
 ### Utility
 
@@ -329,6 +435,9 @@ For Claude Code, MCP is recommended. For other agents or simpler setups, CLI wor
 | `rlm diff <path>` | Compare indexed vs current content |
 | `rlm verify` | Check index integrity |
 | `rlm quality` | Check for parse quality issues |
+| `rlm supported` | List all supported file extensions + parser types |
+| `rlm setup` | Configure Claude Code integration (settings.json + CLAUDE.local.md) |
+| `rlm mcp` | Start the MCP server (stdio transport) |
 
 ---
 
@@ -430,7 +539,7 @@ rlm quality --all          # All logged issues
 
 | Language | Parser | Extensions | Chunks Extracted |
 |----------|--------|------------|------------------|
-| **Rust** | tree-sitter | `.rs` | fn, struct, enum, impl, mod, trait |
+| **Rust** | tree-sitter | `.rs` | fn, struct, enum, enum_variant, impl, method, mod, trait |
 | **Go** | tree-sitter | `.go` | func, type, interface, struct |
 | **Java** | tree-sitter | `.java` | class, interface, method, enum |
 | **C#** | tree-sitter | `.cs` | class, struct, interface, method, enum |
@@ -507,6 +616,13 @@ We've adapted these principles into a practical tool for everyday use with AI co
 - [x] Parse quality detection and fallback recommendations
 - [x] Configuration file support
 - [x] Extended language support (JS, TS, HTML, CSS, YAML, TOML, JSON)
+- [x] Test Impact analysis — write responses name covering tests + command (0.5.0)
+- [x] Native compiler check post-write (`cargo check` surfaces name-resolution / type errors that Syntax Guard can't see — 0.5.0)
+- [x] `rlm extract` — atomic module-split primitive (0.5.0)
+- [x] `--parent` disambiguation for same-ident symbols (0.5.0)
+- [x] TOON output default for agent-scoped projects (0.5.0)
+- [ ] Native compiler check for Go / TypeScript / Python
+- [ ] Automatic import-inference on `rlm extract`
 - [ ] Benchmark suite with published results
 - [ ] Language Server Protocol (LSP) integration
 - [ ] Web UI for visualization

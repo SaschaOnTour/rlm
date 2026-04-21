@@ -1,12 +1,10 @@
 //! Impl-block method extraction helpers for the Rust parser.
 //!
-//! Extracted from `rust.rs` for SRP compliance. Contains the tree-walking
-//! and chunk-building logic that extracts individual methods from `impl` blocks.
+//! Extracted from `rust.rs` for SRP compliance. The list-walking skeleton
+//! is shared with enum-variant extraction via [`super::rust_nested`].
 
 use crate::domain::chunk::{Chunk, ChunkKind};
-use crate::ingest::code::base::{
-    collect_prev_siblings, collect_prev_siblings_filtered_skip, SiblingCollectConfig,
-};
+use crate::ingest::code::rust_nested::{extract_nested, rust_doc_and_attrs, NestedKind, NestedRaw};
 
 use super::rust::{extract_fn_signature, extract_rust_visibility};
 
@@ -32,126 +30,44 @@ pub(crate) fn find_node_at_byte_range(
     }
 }
 
-/// Extract all methods from an impl block (integration: calls only, no logic).
-///
-/// Walks the impl node's children to find `declaration_list` nodes,
-/// then delegates each function item to `build_method_chunk`.
 pub(crate) fn extract_impl_methods(
     impl_node: tree_sitter::Node,
     source: &[u8],
     file_id: i64,
     impl_name: &str,
 ) -> Vec<Chunk> {
-    let mut methods = Vec::new();
-
-    for i in 0..impl_node.child_count() {
-        let child = match impl_node.child(i as u32) {
-            Some(c) => c,
-            None => continue,
-        };
-        collect_methods_from_decl_list(child, source, file_id, impl_name, &mut methods);
-    }
-
-    methods
+    let kind = NestedKind {
+        list_kind: "declaration_list",
+        item_kind: "function_item",
+        name_kinds: &["identifier"],
+        build: build_method,
+    };
+    extract_nested(impl_node, source, file_id, impl_name, &kind)
 }
 
-/// Raw data extracted from a function_item node (before calling helpers).
-///
-/// Line numbers are 1-based (converted from tree-sitter's 0-based rows).
-struct RawMethodData {
-    fn_name: String,
-    content: String,
-    start_line: u32,
-    end_line: u32,
-    start_byte: u32,
-    end_byte: u32,
-}
-
-/// Extract raw method data from a declaration_list node (operation: logic only).
-fn extract_raw_methods<'a>(
-    decl_list: tree_sitter::Node<'a>,
-    source: &'a [u8],
-) -> Vec<(RawMethodData, tree_sitter::Node<'a>)> {
-    if decl_list.kind() != "declaration_list" {
-        return Vec::new();
-    }
-
-    let mut results = Vec::new();
-
-    for j in 0..decl_list.child_count() {
-        let item = match decl_list.child(j as u32) {
-            Some(c) => c,
-            None => continue,
-        };
-
-        if item.kind() != "function_item" {
-            continue;
-        }
-
-        let fn_name = match (0..item.child_count())
-            .filter_map(|k| item.child(k as u32))
-            .find(|n| n.kind() == "identifier")
-        {
-            Some(n) => n.utf8_text(source).unwrap_or("").to_string(),
-            None => String::new(),
-        };
-
-        if fn_name.is_empty() {
-            continue;
-        }
-
-        let content = item.utf8_text(source).unwrap_or("").to_string();
-        let start = item.start_position();
-        let end = item.end_position();
-
-        results.push((
-            RawMethodData {
-                fn_name,
-                content,
-                start_line: start.row as u32 + 1,
-                end_line: end.row as u32 + 1,
-                start_byte: item.start_byte() as u32,
-                end_byte: item.end_byte() as u32,
-            },
-            item,
-        ));
-    }
-
-    results
-}
-
-/// Build method chunks from raw method data (integration: calls only).
-fn collect_methods_from_decl_list(
-    decl_list: tree_sitter::Node,
+fn build_method(
+    raw: &NestedRaw,
+    node: tree_sitter::Node,
     source: &[u8],
-    file_id: i64,
     impl_name: &str,
-    methods: &mut Vec<Chunk>,
-) {
-    let raw_methods = extract_raw_methods(decl_list, source);
-
-    for (data, node) in raw_methods {
-        let doc_config = SiblingCollectConfig::rust_doc_comments();
-        let attr_config = SiblingCollectConfig::rust_attributes();
-        let doc_comment = collect_prev_siblings(node, source, &doc_config);
-        let attributes = collect_prev_siblings_filtered_skip(node, source, &attr_config);
-
-        methods.push(Chunk {
-            id: 0,
-            file_id,
-            start_line: data.start_line,
-            end_line: data.end_line,
-            start_byte: data.start_byte,
-            end_byte: data.end_byte,
-            kind: ChunkKind::Method,
-            ident: data.fn_name,
-            parent: Some(impl_name.to_string()),
-            signature: extract_fn_signature(&data.content),
-            visibility: extract_rust_visibility(&data.content),
-            ui_ctx: None,
-            doc_comment,
-            attributes,
-            content: data.content,
-        });
+    file_id: i64,
+) -> Chunk {
+    let (doc_comment, attributes) = rust_doc_and_attrs(node, source);
+    Chunk {
+        id: 0,
+        file_id,
+        start_line: raw.start_line,
+        end_line: raw.end_line,
+        start_byte: raw.start_byte,
+        end_byte: raw.end_byte,
+        kind: ChunkKind::Method,
+        ident: raw.name.clone(),
+        parent: Some(impl_name.to_string()),
+        signature: extract_fn_signature(&raw.content),
+        visibility: extract_rust_visibility(&raw.content),
+        ui_ctx: None,
+        doc_comment,
+        attributes,
+        content: raw.content.clone(),
     }
 }

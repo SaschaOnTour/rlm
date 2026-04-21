@@ -1,7 +1,7 @@
 //! Pure math and data types for token-savings accounting.
 //!
 //! DB recording, cost estimation against an index, and reporting live in
-//! `crate::operations::savings`. This module contains only the numbers,
+//! `crate::application::savings`. This module contains only the numbers,
 //! the cost model, and the record types — everything else depends on it.
 
 use serde::Serialize;

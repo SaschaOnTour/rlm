@@ -137,8 +137,8 @@ fn test_tool_list_count() {
 
     assert_eq!(
         tools.len(),
-        18,
-        "Expected exactly 18 tools, got {}. Tools: {:?}",
+        20,
+        "Expected exactly 20 tools, got {}. Tools: {:?}",
         tools.len(),
         tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>()
     );
@@ -203,7 +203,12 @@ fn test_tool_list_utility_tools() {
         "Should have supported tool"
     );
     assert!(tool_names.contains(&"diff"), "Should have diff tool");
-    assert!(tool_names.contains(&"savings"), "Should have savings tool");
+    assert!(tool_names.contains(&"quality"), "Should have quality tool");
+    // 0.5.0: standalone `savings` was folded into `stats(savings=true, since=...)`.
+    assert!(
+        !tool_names.contains(&"savings"),
+        "'savings' tool was consolidated into 'stats' in 0.5.0"
+    );
 }
 
 #[test]
@@ -411,7 +416,7 @@ fn test_tool_list_unchanged_with_index() {
     let (_tmp, server) = setup_indexed_project();
     let tools = server.get_tool_router().list_all();
 
-    assert_eq!(tools.len(), 18, "Tool count should be 18 with index");
+    assert_eq!(tools.len(), 20, "Tool count should be 20 with index");
 }
 
 // =============================================================================
@@ -482,44 +487,69 @@ fn test_insert_tool_has_position_param() {
 }
 
 // =============================================================================
-// 8. Savings Tool Tests
+// 8. Stats + Quality Tools (consolidated in 0.5.0)
 // =============================================================================
+//
+// 0.5.0 consolidation: the standalone `savings` tool was folded into
+// `stats` (`savings` + `since` flags). A dedicated `quality` tool was
+// added to mirror the CLI `rlm quality` surface.
 
 #[test]
-fn test_savings_tool_exists() {
+fn test_stats_tool_has_savings_and_since_params() {
+    let path = PathBuf::from("/tmp/test");
+    let server = RlmServer::new(path, Formatter::default());
+    let tools = server.get_tool_router().list_all();
+
+    let stats_tool = tools.iter().find(|t| t.name == "stats").unwrap();
+    let schema_str = serde_json::to_string(&stats_tool.input_schema).unwrap();
+    assert!(
+        schema_str.contains("savings"),
+        "Stats tool should expose the consolidated 'savings' flag: schema={schema_str}"
+    );
+    assert!(
+        schema_str.contains("since"),
+        "Stats tool should expose 'since' for savings filtering: schema={schema_str}"
+    );
+}
+
+#[test]
+fn test_savings_tool_removed() {
     let path = PathBuf::from("/tmp/test");
     let server = RlmServer::new(path, Formatter::default());
     let tools = server.get_tool_router().list_all();
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-    assert!(tool_names.contains(&"savings"), "Should have savings tool");
-}
-
-#[test]
-fn test_savings_tool_has_since_param() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
-    let tools = server.get_tool_router().list_all();
-
-    let savings_tool = tools.iter().find(|t| t.name == "savings").unwrap();
-    let schema_str = serde_json::to_string(&savings_tool.input_schema).unwrap();
     assert!(
-        schema_str.contains("since"),
-        "Savings tool should have 'since' parameter"
+        !tool_names.contains(&"savings"),
+        "Standalone 'savings' tool was folded into 'stats' in 0.5.0"
     );
 }
 
 #[test]
-fn test_savings_tool_description() {
+fn test_quality_tool_exists() {
     let path = PathBuf::from("/tmp/test");
     let server = RlmServer::new(path, Formatter::default());
     let tools = server.get_tool_router().list_all();
 
-    let savings_tool = tools.iter().find(|t| t.name == "savings").unwrap();
-    let desc = savings_tool.description.as_ref().unwrap();
+    let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
     assert!(
-        desc.contains("savings") || desc.contains("token"),
-        "Savings description should mention savings or tokens: '{}'",
-        desc
+        tool_names.contains(&"quality"),
+        "Should expose the 0.5.0 'quality' tool mirroring `rlm quality`"
     );
+}
+
+#[test]
+fn test_quality_tool_has_expected_flags() {
+    let path = PathBuf::from("/tmp/test");
+    let server = RlmServer::new(path, Formatter::default());
+    let tools = server.get_tool_router().list_all();
+
+    let tool = tools.iter().find(|t| t.name == "quality").unwrap();
+    let schema_str = serde_json::to_string(&tool.input_schema).unwrap();
+    for flag in ["unknown_only", "all", "clear", "summary"] {
+        assert!(
+            schema_str.contains(flag),
+            "Quality tool schema should expose `{flag}`: schema={schema_str}"
+        );
+    }
 }

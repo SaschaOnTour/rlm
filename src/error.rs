@@ -57,6 +57,9 @@ pub enum RlmError {
     #[error("symbol not found: {ident}")]
     SymbolNotFound { ident: String },
 
+    #[error(transparent)]
+    AmbiguousSymbol(AmbiguousSymbolError),
+
     #[error("section not found: {heading}")]
     SectionNotFound { heading: String },
 
@@ -177,3 +180,46 @@ fn verify_containment(
     }
     Ok(())
 }
+
+/// One entry in [`AmbiguousSymbolError`]'s candidate list. Captures
+/// just enough to disambiguate at the CLI / agent layer (parent
+/// container name, chunk kind, line number).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolCandidate {
+    pub parent: Option<String>,
+    pub kind: String,
+    pub line: u32,
+}
+
+/// Ambiguous-symbol resolution error. Wrapped by
+/// [`RlmError::AmbiguousSymbol`]; lives as its own type so `Display`
+/// can render the candidate list without a free helper (which
+/// rustqual's static analysis flagged as dead code).
+#[derive(Debug, Clone)]
+pub struct AmbiguousSymbolError {
+    pub ident: String,
+    pub candidates: Vec<SymbolCandidate>,
+}
+
+impl std::fmt::Display for AmbiguousSymbolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ambiguous symbol '{ident}': {n} candidates — ",
+            ident = self.ident,
+            n = self.candidates.len()
+        )?;
+        for (i, c) in self.candidates.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            if let Some(p) = &c.parent {
+                write!(f, "{p}::")?;
+            }
+            write!(f, "{kind} (line {line})", kind = c.kind, line = c.line)?;
+        }
+        write!(f, ". Specify --parent <name>.")
+    }
+}
+
+impl std::error::Error for AmbiguousSymbolError {}

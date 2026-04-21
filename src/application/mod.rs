@@ -32,7 +32,10 @@ pub mod dto;
 pub mod edit;
 pub mod file_query;
 pub mod index;
+pub mod middleware;
 pub mod query;
+pub mod savings;
+pub mod session;
 pub mod symbol;
 
 pub use file_query::FileQuery;

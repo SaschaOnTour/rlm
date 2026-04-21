@@ -43,7 +43,14 @@ fn preview_replace_works() {
     };
     db.insert_chunk(&c).unwrap();
 
-    let diff = preview_replace(&db, "test.rs", "main", "fn main() { println!(\"hi\"); }").unwrap();
+    let diff = preview_replace(
+        &db,
+        "test.rs",
+        "main",
+        None,
+        "fn main() { println!(\"hi\"); }",
+    )
+    .unwrap();
     assert_eq!(diff.symbol, "main");
     assert!(diff.old_code.contains("fn main()"));
 }
