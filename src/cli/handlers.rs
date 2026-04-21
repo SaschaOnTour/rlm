@@ -96,12 +96,8 @@ fn cmd_read_symbol(path: &str, sym: &str, metadata: bool, formatter: Formatter) 
         let dtos: Vec<ChunkDto> = chunks.iter().cloned().map(Into::into).collect();
         serde_json::json!(dtos)
     } else {
-        let dtos: Vec<ChunkDto> = file_chunks
-            .iter()
-            .copied()
-            .cloned()
-            .map(Into::into)
-            .collect();
+        // file_chunks: Vec<&Chunk> — clone each borrowed Chunk, then convert into the DTO.
+        let dtos: Vec<ChunkDto> = file_chunks.into_iter().cloned().map(Into::into).collect();
         serde_json::json!(dtos)
     };
 

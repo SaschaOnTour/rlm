@@ -6,7 +6,8 @@
 //! how `Config` resolves relative paths, normalizes separators, and
 //! applies exclude-glob filtering.
 
-use super::{Config, Path, PathBuf};
+use super::Config;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 #[test]
