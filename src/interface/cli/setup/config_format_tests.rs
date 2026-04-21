@@ -184,3 +184,86 @@ fn setup_ignores_format_key_outside_output_section() {
     assert!(body.contains("[output]"));
     assert!(body.contains("format = \"toon\""));
 }
+
+/// Regression (Copilot): if `[output]` exists but has no `format`
+/// key (only look-alike keys like `formatting`), the old impl
+/// appended a SECOND `[output]` table, producing invalid TOML that
+/// `Config::load_settings` cannot parse. The file must stay a valid
+/// TOML document with a single `[output]` section.
+#[test]
+fn setup_injects_format_into_existing_output_section_without_duplicating_it() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".rlm")).unwrap();
+    let pre_existing = "[output]\n\
+                        formatting = \"aligned\"\n\
+                        format_version = 2\n\
+                        \n\
+                        [indexing]\n\
+                        max_file_size_mb = 5\n";
+    fs::write(dir.path().join(".rlm/config.toml"), pre_existing).unwrap();
+
+    let action = setup_config_format(dir.path(), SetupMode::Apply).unwrap();
+    assert_eq!(action, SetupAction::Updated);
+
+    let body = read_config(&dir);
+    assert_eq!(
+        body.matches("[output]").count(),
+        1,
+        "must not emit a second [output] table — would be invalid TOML: {body}"
+    );
+    assert!(
+        body.contains("format = \"toon\""),
+        "format key must have been injected: {body}"
+    );
+    // User's pre-existing keys survive.
+    assert!(body.contains("formatting = \"aligned\""));
+    assert!(body.contains("format_version = 2"));
+    // And the neighbouring section is intact.
+    assert!(body.contains("[indexing]"));
+    assert!(body.contains("max_file_size_mb = 5"));
+
+    // Acid test: the result parses as TOML.
+    let parsed: toml::Value = toml::from_str(&body).expect("result must be valid TOML");
+    let output = parsed
+        .get("output")
+        .and_then(|v| v.as_table())
+        .expect("[output] must be a table");
+    assert_eq!(
+        output.get("format").and_then(|v| v.as_str()),
+        Some("toon"),
+        "parsed [output].format should be 'toon': {output:?}"
+    );
+    assert_eq!(
+        output.get("formatting").and_then(|v| v.as_str()),
+        Some("aligned"),
+        "parsed [output].formatting should be 'aligned': {output:?}"
+    );
+}
+
+/// The file is written via an atomic-rename path just like the other
+/// setup writers (settings.rs, claude_md.rs). We don't probe the
+/// crash-during-write behaviour directly — that'd need fault
+/// injection — but we pin the observable consequence: after a
+/// successful setup run, no `*.tmp` / partial-file artefacts are
+/// left behind in `.rlm/`. Copilot flagged the inconsistency with
+/// `write_atomic` in neighbouring writers.
+#[test]
+fn setup_leaves_no_tempfile_artefacts_in_rlm_dir() {
+    let dir = TempDir::new().unwrap();
+    setup_config_format(dir.path(), SetupMode::Apply).unwrap();
+
+    let rlm_dir = dir.path().join(".rlm");
+    let entries: Vec<_> = fs::read_dir(&rlm_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+
+    assert!(entries.iter().any(|n| n == "config.toml"));
+    for name in &entries {
+        assert!(
+            !name.ends_with(".tmp") && !name.starts_with(".config.toml."),
+            "atomic-write temp artefact left behind: {name} (all entries: {entries:?})"
+        );
+    }
+}

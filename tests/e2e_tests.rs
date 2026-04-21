@@ -20,11 +20,18 @@ fn manifest_dir() -> &'static str {
     env!("CARGO_MANIFEST_DIR")
 }
 
+/// Resolve a repo-relative path against the manifest directory.
+/// Tests load fixtures + docs from the source tree; this helper
+/// keeps every call site to one place (rustqual BP-010).
+fn manifest_path(rel: &str) -> String {
+    format!("{}/{rel}", manifest_dir())
+}
+
 /// Copy the given fixture into a fresh temp directory and run `rlm index` on it.
 /// Shared setup path for the Rust- and Markdown-fixture harnesses.
 fn setup_project_with_fixture(fixture_rel: &str, dest_name: &str) -> TempDir {
     let dir = tempfile::tempdir().expect("create tempdir");
-    let fixture = format!("{}/{}", manifest_dir(), fixture_rel);
+    let fixture = manifest_path(fixture_rel);
     fs::copy(&fixture, dir.path().join(dest_name)).expect("copy fixture");
 
     Command::cargo_bin("rlm")
@@ -707,7 +714,7 @@ fn run_help() -> String {
 /// not count as "currently documented" because the test's job is to make
 /// sure the ACTIVE surface of the CLI matches the docs' ACTIVE tables.
 fn extract_doc_cmds(path: &str) -> std::collections::BTreeSet<String> {
-    let full = format!("{}/{}", manifest_dir(), path);
+    let full = manifest_path(path);
     let content = fs::read_to_string(&full).expect("read doc");
     content
         .lines()
@@ -751,7 +758,31 @@ fn docs_exempt() -> std::collections::BTreeSet<String> {
 
 /// Shared core of the two doc-sync regression tests. Extracted from the
 /// original drift-check duplication; each test just supplies the path.
+///
+/// Handles the case where a doc file isn't present:
+/// - On CI (`CI` env var set — GitHub Actions etc. set it by default):
+///   skip with a clear stderr note. Documents which are deliberately
+///   not versioned (`CLAUDE.md` is dev-local at this project) simply
+///   can't be drift-checked in a clean CI checkout.
+/// - Anywhere else: panic with a message pointing at the fix. A
+///   missing doc in a local dev tree is a setup mistake, not a
+///   CI-skip case — silent-pass would hide real drift.
 fn assert_doc_agrees_with_cli(doc_path: &str) {
+    let full = manifest_path(doc_path);
+    if !std::path::Path::new(&full).exists() {
+        if std::env::var_os("CI").is_some() {
+            eprintln!(
+                "skip: {doc_path} not present in CI checkout — drift check only runs \
+                 where the doc file exists (see assert_doc_agrees_with_cli comment)."
+            );
+            return;
+        }
+        panic!(
+            "doc file not found: {full}. Either create it (dev docs), \
+             or remove/rename the corresponding `cli_*_command_lists_agree` test."
+        );
+    }
+
     let help = run_help();
     let cli = extract_cli_cmds(&help);
     let doc = extract_doc_cmds(doc_path);
@@ -772,6 +803,33 @@ fn assert_doc_agrees_with_cli(doc_path: &str) {
 #[test]
 fn cli_claude_md_command_lists_agree() {
     assert_doc_agrees_with_cli("CLAUDE.md");
+}
+
+/// Regression: `assert_doc_agrees_with_cli` must not panic when the
+/// doc file is absent and the run is on CI (`CI` env var set).
+/// `CLAUDE.md` is intentionally not versioned — the test of that
+/// file has to survive a clean CI checkout. Pinned here so the
+/// "skip on CI" branch doesn't get accidentally regressed into a
+/// panic on some future rewrite.
+#[test]
+fn assert_doc_agrees_skips_on_ci_when_file_missing() {
+    // Scope-guard pattern: save the original CI value and restore on
+    // drop, so this test doesn't leak env state to sibling tests
+    // (integration tests in the same binary share a process).
+    struct CiGuard(Option<std::ffi::OsString>);
+    impl Drop for CiGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => std::env::set_var("CI", v),
+                None => std::env::remove_var("CI"),
+            }
+        }
+    }
+    let _guard = CiGuard(std::env::var_os("CI"));
+    std::env::set_var("CI", "true");
+
+    // Path that cannot exist at the manifest dir. No panic → pass.
+    assert_doc_agrees_with_cli("_nonexistent_doc_for_skip_regression.md");
 }
 
 #[test]

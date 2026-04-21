@@ -145,25 +145,16 @@ struct EnvVarGuard {
 impl EnvVarGuard {
     fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
         let original = std::env::var_os(key);
-        // Safety: std::env::set_var is `unsafe` in newer Rust
-        // editions due to cross-thread races; test is single-threaded
-        // per nextest-process-per-test, and we restore on drop.
-        #[allow(unused_unsafe)]
-        unsafe {
-            std::env::set_var(key, value);
-        }
+        std::env::set_var(key, value);
         Self { key, original }
     }
 }
 
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
-        #[allow(unused_unsafe)]
-        unsafe {
-            match &self.original {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
-            }
+        match &self.original {
+            Some(v) => std::env::set_var(self.key, v),
+            None => std::env::remove_var(self.key),
         }
     }
 }
