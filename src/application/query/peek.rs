@@ -44,7 +44,7 @@ fn matches_path_filter(file_path: &str, path_filter: Option<&str>) -> bool {
 }
 
 /// Build a `PeekFile` from chunks (operation: logic only, uses only std methods).
-fn build_peek_file(path: &str, lang: &str, chunks: &[crate::models::chunk::Chunk]) -> PeekFile {
+fn build_peek_file(path: &str, lang: &str, chunks: &[crate::domain::chunk::Chunk]) -> PeekFile {
     let max_line = chunks.iter().map(|c| c.end_line).max().unwrap_or(0);
 
     let symbols: Vec<PeekSymbol> = chunks
@@ -88,77 +88,5 @@ pub fn peek(db: &Database, path_filter: Option<&str>) -> Result<PeekResult> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::models::chunk::{Chunk, ChunkKind};
-    use crate::models::file::FileRecord;
-
-    /// File size in bytes for test file records.
-    const TEST_FILE_SIZE: u64 = 100;
-    /// End line of the test chunk.
-    const CHUNK_END_LINE: u32 = 5;
-    /// End byte offset of the test chunk.
-    const CHUNK_END_BYTE: u32 = 50;
-
-    #[test]
-    fn peek_returns_structure_no_content() {
-        let db = Database::open_in_memory().unwrap();
-        let f = FileRecord::new(
-            "src/main.rs".into(),
-            "h".into(),
-            "rust".into(),
-            TEST_FILE_SIZE,
-        );
-        let fid = db.upsert_file(&f).unwrap();
-        let c = Chunk {
-            id: 0,
-            file_id: fid,
-            start_line: 1,
-            end_line: CHUNK_END_LINE,
-            start_byte: 0,
-            end_byte: CHUNK_END_BYTE,
-            kind: ChunkKind::Function,
-            ident: "main".into(),
-            parent: None,
-            signature: None,
-            visibility: None,
-            ui_ctx: None,
-            doc_comment: None,
-            attributes: None,
-            content: "fn main() { ... }".into(),
-        };
-        db.insert_chunk(&c).unwrap();
-
-        let result = peek(&db, None).unwrap();
-        assert_eq!(result.files.len(), 1);
-        assert_eq!(result.files[0].symbols.len(), 1);
-        assert_eq!(result.files[0].symbols[0].name, "main");
-
-        // Verify no content is in the output
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(!json.contains("fn main()"));
-    }
-
-    #[test]
-    fn peek_with_path_filter() {
-        let db = Database::open_in_memory().unwrap();
-        db.upsert_file(&FileRecord::new(
-            "src/a.rs".into(),
-            "h1".into(),
-            "rust".into(),
-            TEST_FILE_SIZE,
-        ))
-        .unwrap();
-        db.upsert_file(&FileRecord::new(
-            "lib/b.rs".into(),
-            "h2".into(),
-            "rust".into(),
-            TEST_FILE_SIZE,
-        ))
-        .unwrap();
-
-        let result = peek(&db, Some("src/")).unwrap();
-        assert_eq!(result.files.len(), 1);
-        assert_eq!(result.files[0].path, "src/a.rs");
-    }
-}
+#[path = "peek_tests.rs"]
+mod tests;

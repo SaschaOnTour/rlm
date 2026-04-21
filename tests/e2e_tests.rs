@@ -20,11 +20,12 @@ fn manifest_dir() -> &'static str {
     env!("CARGO_MANIFEST_DIR")
 }
 
-/// Copy the Rust fixture into a temp directory and index it.
-fn setup_rust_project() -> TempDir {
+/// Copy the given fixture into a fresh temp directory and run `rlm index` on it.
+/// Shared setup path for the Rust- and Markdown-fixture harnesses.
+fn setup_project_with_fixture(fixture_rel: &str, dest_name: &str) -> TempDir {
     let dir = tempfile::tempdir().expect("create tempdir");
-    let fixture = format!("{}/fixtures/code_samples/rust/sample.rs", manifest_dir());
-    fs::copy(&fixture, dir.path().join("sample.rs")).expect("copy fixture");
+    let fixture = format!("{}/{}", manifest_dir(), fixture_rel);
+    fs::copy(&fixture, dir.path().join(dest_name)).expect("copy fixture");
 
     Command::cargo_bin("rlm")
         .unwrap()
@@ -37,21 +38,14 @@ fn setup_rust_project() -> TempDir {
     dir
 }
 
+/// Copy the Rust fixture into a temp directory and index it.
+fn setup_rust_project() -> TempDir {
+    setup_project_with_fixture("fixtures/code_samples/rust/sample.rs", "sample.rs")
+}
+
 /// Copy the markdown fixture into a temp directory and index it.
 fn setup_markdown_project() -> TempDir {
-    let dir = tempfile::tempdir().expect("create tempdir");
-    let fixture = format!("{}/fixtures/markdown/sample.md", manifest_dir());
-    fs::copy(&fixture, dir.path().join("sample.md")).expect("copy fixture");
-
-    Command::cargo_bin("rlm")
-        .unwrap()
-        .current_dir(dir.path())
-        .arg("index")
-        .arg(".")
-        .assert()
-        .success();
-
-    dir
+    setup_project_with_fixture("fixtures/markdown/sample.md", "sample.md")
 }
 
 /// Build a command pointing at the tempdir.

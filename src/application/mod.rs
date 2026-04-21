@@ -28,6 +28,7 @@
 //! (refs, savings, index output envelope).
 
 pub mod content;
+pub mod dto;
 pub mod edit;
 pub mod file_query;
 pub mod index;

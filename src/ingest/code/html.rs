@@ -8,10 +8,10 @@
 
 use tree_sitter::{Language, Query};
 
+use crate::domain::chunk::{ChunkKind, RefKind};
 use crate::ingest::code::base::{
     build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig,
 };
-use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = include_str!("queries/html/chunk.scm");
 

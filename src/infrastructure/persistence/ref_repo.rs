@@ -1,8 +1,8 @@
 //! Storage operations for `Reference`.
 
 use crate::db::Database;
+use crate::domain::chunk::Reference;
 use crate::error::Result;
-use crate::models::chunk::Reference;
 
 /// Read and write access to indexed references (calls, imports, type uses).
 pub trait RefRepo {

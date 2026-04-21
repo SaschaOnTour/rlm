@@ -19,8 +19,8 @@ pub mod test_utils;
 
 use serde::Serialize;
 
+use crate::domain::chunk::{Chunk, Reference};
 use crate::error::Result;
-use crate::models::chunk::{Chunk, Reference};
 
 /// Indicates the quality/completeness of a parse result.
 ///
@@ -66,7 +66,7 @@ impl ParseQuality {
 /// Extended parse result that includes quality information.
 ///
 /// Use this when you need to know whether the parse was clean or had issues.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct ParseResult {
     /// Extracted code chunks.
     pub chunks: Vec<Chunk>,
@@ -163,31 +163,5 @@ pub fn find_error_lines(root: tree_sitter::Node) -> Vec<u32> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_quality_complete_is_complete() {
-        assert!(ParseQuality::Complete.is_complete());
-        assert!(!ParseQuality::Complete.fallback_recommended());
-    }
-
-    #[test]
-    fn parse_quality_partial_recommends_fallback() {
-        let partial = ParseQuality::Partial {
-            error_count: 2,
-            error_lines: vec![5, 10],
-        };
-        assert!(!partial.is_complete());
-        assert!(partial.fallback_recommended());
-    }
-
-    #[test]
-    fn parse_quality_failed_recommends_fallback() {
-        let failed = ParseQuality::Failed {
-            reason: "unknown syntax".into(),
-        };
-        assert!(!failed.is_complete());
-        assert!(failed.fallback_recommended());
-    }
-}
+#[path = "mod_tests.rs"]
+mod tests;

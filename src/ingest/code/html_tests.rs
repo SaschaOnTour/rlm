@@ -4,9 +4,9 @@
 //! pattern; wired back in via
 //! `#[cfg(test)] #[path = "html_tests.rs"] mod tests;`.
 
-use super::*;
+use super::HtmlParser;
+use crate::domain::chunk::RefKind;
 use crate::ingest::code::CodeParser;
-use crate::models::chunk::RefKind;
 
 fn parser() -> HtmlParser {
     HtmlParser::create()

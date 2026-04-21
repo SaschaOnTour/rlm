@@ -1,11 +1,11 @@
 use tree_sitter::{Language, Query};
 
+use crate::domain::chunk::{ChunkKind, RefKind};
 use crate::infrastructure::parsing::tree_walker::{collect_prev_siblings, SiblingCollectConfig};
 use crate::ingest::code::base::{
     build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig,
 };
 use crate::ingest::code::helpers::extract_type_signature_to_brace;
-use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = include_str!("queries/go/chunk.scm");
 
@@ -143,6 +143,9 @@ impl GoParser {
     }
 }
 
+#[cfg(test)]
+#[path = "go_advanced_tests.rs"]
+mod advanced_tests;
 #[cfg(test)]
 #[path = "go_tests.rs"]
 mod tests;

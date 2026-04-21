@@ -54,54 +54,5 @@ pub enum AlternativeCost {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn meta_holds_all_fields() {
-        let m = OperationMeta {
-            command: "search",
-            files_touched: 3,
-            alternative: AlternativeCost::Fixed(1_000),
-        };
-        assert_eq!(m.command, "search");
-        assert_eq!(m.files_touched, 3);
-        assert!(matches!(m.alternative, AlternativeCost::Fixed(1_000)));
-    }
-
-    #[test]
-    fn alternative_cost_variants_carry_expected_payload() {
-        let single = AlternativeCost::SingleFile {
-            path: "src/main.rs".into(),
-        };
-        let symbol = AlternativeCost::SymbolFiles {
-            symbol: "foo".into(),
-        };
-        let scoped = AlternativeCost::ScopedFiles {
-            prefix: Some("src/".into()),
-        };
-        let whole_project = AlternativeCost::ScopedFiles { prefix: None };
-        let at_least = AlternativeCost::AtLeastBody { base: 42 };
-
-        match single {
-            AlternativeCost::SingleFile { path } => assert_eq!(path, "src/main.rs"),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-        match symbol {
-            AlternativeCost::SymbolFiles { symbol } => assert_eq!(symbol, "foo"),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-        match scoped {
-            AlternativeCost::ScopedFiles { prefix } => assert_eq!(prefix.as_deref(), Some("src/")),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-        match whole_project {
-            AlternativeCost::ScopedFiles { prefix } => assert!(prefix.is_none()),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-        match at_least {
-            AlternativeCost::AtLeastBody { base } => assert_eq!(base, 42),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-    }
-}
+#[path = "request_tests.rs"]
+mod tests;

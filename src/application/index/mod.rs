@@ -1,17 +1,19 @@
-// qual:allow(srp_module) reason: "indexer orchestration: ingestion pipeline + reindex-single-file + preview-on-write form one cohesive domain that would fragment if split"
-
 mod db_insert;
 mod file_processing;
 pub mod staleness;
+
+#[cfg(test)]
+#[path = "fixtures_tests.rs"]
+mod fixtures;
 
 use std::collections::HashSet;
 
 use crate::config::Config;
 use crate::db::Database;
+use crate::domain::file::FileRecord;
 use crate::error::Result;
 use crate::ingest::dispatcher::Dispatcher;
 use crate::ingest::scanner::{ext_to_lang, Scanner, SkipReason};
-use crate::models::file::FileRecord;
 
 use db_insert::{insert_chunks, insert_refs};
 use file_processing::{apply_ui_context, parse_file_chunks, read_file_source};
@@ -252,7 +254,6 @@ pub fn run_index(config: &Config, progress: Option<&ProgressCallback>) -> Result
 }
 
 /// Re-index a single file after a write operation (replace/insert).
-// qual:allow(iosp) reason: "single-file indexing pipeline — sequential steps cannot be meaningfully separated"
 pub fn reindex_single_file(
     db: &Database,
     config: &Config,
@@ -374,7 +375,6 @@ fn find_preview(db: &Database, rel_path: &str, source: &PreviewSource<'_>) -> Op
 }
 
 /// Ensure the index exists, creating it if necessary (auto-index).
-// qual:allow(iosp) reason: "check-then-act: ensure index exists before opening"
 pub fn ensure_index(config: &Config) -> Result<Database> {
     if !config.index_exists() {
         run_index(config, None)?;
@@ -383,287 +383,8 @@ pub fn ensure_index(config: &Config) -> Result<Database> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    /// Non-UTF-8 byte sequence used to test binary file rejection.
-    const NON_UTF8_BYTES: [u8; 4] = [0xFF, 0xFE, 0x00, 0x01];
-
-    #[test]
-    fn index_rust_project() {
-        let tmp = TempDir::new().unwrap();
-        let src_dir = tmp.path().join("src");
-        fs::create_dir_all(&src_dir).unwrap();
-        fs::write(
-            src_dir.join("main.rs"),
-            "fn main() {\n    println!(\"hello\");\n}\n\nfn helper() -> i32 {\n    42\n}\n",
-        )
-        .unwrap();
-
-        let config = Config::new(tmp.path());
-        let result = run_index(&config, None).unwrap();
-
-        assert!(result.files_indexed > 0);
-        assert!(result.chunks_created > 0);
-        assert!(config.index_exists());
-    }
-
-    #[test]
-    fn incremental_index_skips_unchanged() {
-        let tmp = TempDir::new().unwrap();
-        let src_dir = tmp.path().join("src");
-        fs::create_dir_all(&src_dir).unwrap();
-        fs::write(src_dir.join("main.rs"), "fn main() {}").unwrap();
-
-        let config = Config::new(tmp.path());
-
-        // First index
-        let r1 = run_index(&config, None).unwrap();
-        assert!(r1.files_indexed > 0);
-
-        // Second index (no changes)
-        let r2 = run_index(&config, None).unwrap();
-        assert_eq!(r2.files_indexed, 0);
-        assert!(r2.files_skipped > 0);
-    }
-
-    #[test]
-    fn incremental_index_reindexes_changed() {
-        let tmp = TempDir::new().unwrap();
-        let src_dir = tmp.path().join("src");
-        fs::create_dir_all(&src_dir).unwrap();
-        let file_path = src_dir.join("main.rs");
-        fs::write(&file_path, "fn main() {}").unwrap();
-
-        let config = Config::new(tmp.path());
-        run_index(&config, None).unwrap();
-
-        // Modify file
-        fs::write(&file_path, "fn main() { println!(\"changed\"); }").unwrap();
-
-        let r2 = run_index(&config, None).unwrap();
-        assert!(r2.files_indexed > 0);
-    }
-
-    #[test]
-    fn incremental_index_removes_deleted_files() {
-        let tmp = TempDir::new().unwrap();
-        let src_dir = tmp.path().join("src");
-        fs::create_dir_all(&src_dir).unwrap();
-
-        // Create two files
-        fs::write(src_dir.join("main.rs"), "fn main() {}").unwrap();
-        fs::write(src_dir.join("helper.rs"), "fn helper() {}").unwrap();
-
-        let config = Config::new(tmp.path());
-        let r1 = run_index(&config, None).unwrap();
-        assert_eq!(r1.files_indexed, 2);
-
-        // Delete one file
-        fs::remove_file(src_dir.join("helper.rs")).unwrap();
-
-        let r2 = run_index(&config, None).unwrap();
-        assert_eq!(r2.deleted_from_index, 1);
-        assert_eq!(r2.skipped_unchanged, 1); // main.rs unchanged
-
-        // Verify only main.rs remains in the database
-        let db = crate::db::Database::open(&config.db_path).unwrap();
-        let files = db.get_all_files().unwrap();
-        assert_eq!(files.len(), 1);
-        assert!(files[0].path.contains("main.rs"));
-    }
-
-    #[test]
-    fn index_result_categorizes_skips() {
-        let tmp = TempDir::new().unwrap();
-        let src_dir = tmp.path().join("src");
-        fs::create_dir_all(&src_dir).unwrap();
-
-        // Create a valid Rust file
-        fs::write(src_dir.join("main.rs"), "fn main() {}").unwrap();
-
-        // Create a binary file (non-UTF8)
-        fs::write(src_dir.join("binary.rs"), NON_UTF8_BYTES).unwrap();
-
-        let config = Config::new(tmp.path());
-        let result = run_index(&config, None).unwrap();
-
-        assert_eq!(result.files_indexed, 1);
-        assert_eq!(result.skipped_non_utf8, 1);
-        assert_eq!(result.files_skipped, 1);
-    }
-
-    // ─── Preview tests ──────────────────────────────────────────────
-
-    /// Line inside the `helper` function in SAMPLE_SOURCE.
-    const HELPER_LINE: u32 = 6;
-    /// Line far beyond any file — used to test "not found" case.
-    const NONEXISTENT_LINE: u32 = 999;
-    /// Number of lines in the long function test (must exceed PREVIEW_LINES).
-    const LONG_FN_LINES: usize = 20;
-
-    fn setup_indexed_project(source: &str) -> (TempDir, Config, Database) {
-        let tmp = TempDir::new().unwrap();
-        let src_dir = tmp.path().join("src");
-        fs::create_dir_all(&src_dir).unwrap();
-        fs::write(src_dir.join("main.rs"), source).unwrap();
-        let config = Config::new(tmp.path());
-        run_index(&config, None).unwrap();
-        let db = Database::open(&config.db_path).unwrap();
-        (tmp, config, db)
-    }
-
-    const SAMPLE_SOURCE: &str = "\
-fn main() {
-    println!(\"hello\");
-}
-
-fn helper(x: i32) -> i32 {
-    x * 2
-}
-
-fn another() -> bool {
-    true
-}
-";
-
-    #[test]
-    fn preview_symbol_returns_matching_chunk() {
-        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
-        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Symbol("helper"));
-        assert!(preview.is_some());
-        let p = preview.unwrap();
-        assert!(p.contains("helper"));
-        assert!(p.contains("x * 2"));
-    }
-
-    #[test]
-    fn preview_symbol_not_found_returns_none() {
-        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
-        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Symbol("nonexistent"));
-        assert!(preview.is_none());
-    }
-
-    #[test]
-    fn preview_symbol_wrong_file_returns_none() {
-        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
-        let preview = find_preview(&db, "src/other.rs", &PreviewSource::Symbol("helper"));
-        assert!(preview.is_none());
-    }
-
-    #[test]
-    fn preview_line_returns_containing_chunk() {
-        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
-        // helper is at lines 5-7, so line 6 should find it
-        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Line(HELPER_LINE));
-        assert!(preview.is_some());
-        let p = preview.unwrap();
-        assert!(p.contains("helper"));
-    }
-
-    #[test]
-    fn preview_line_outside_chunks_returns_none() {
-        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
-        // Line 999 doesn't exist in any chunk
-        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Line(NONEXISTENT_LINE));
-        assert!(preview.is_none());
-    }
-
-    #[test]
-    fn preview_none_returns_none() {
-        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
-        let preview = find_preview(&db, "src/main.rs", &PreviewSource::None);
-        assert!(preview.is_none());
-    }
-
-    #[test]
-    fn preview_last_returns_last_chunk() {
-        let (_tmp, _config, db) = setup_indexed_project(SAMPLE_SOURCE);
-        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Last);
-        assert!(preview.is_some());
-        // SAMPLE_SOURCE has main, helper, another — "another" is the last chunk
-        let p = preview.unwrap();
-        assert!(p.contains("another"));
-    }
-
-    #[test]
-    fn preview_truncates_long_chunks() {
-        let long_fn = (0..LONG_FN_LINES)
-            .map(|i| format!("    let x{i} = {i};"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let source = format!("fn long_func() {{\n{long_fn}\n}}\n");
-        let (_tmp, _config, db) = setup_indexed_project(&source);
-        let preview = find_preview(&db, "src/main.rs", &PreviewSource::Symbol("long_func"));
-        assert!(preview.is_some());
-        let p = preview.unwrap();
-        let line_count = p.lines().count();
-        assert_eq!(line_count, PREVIEW_LINES);
-    }
-
-    #[test]
-    fn reindex_with_result_includes_preview_for_symbol() {
-        let (_tmp, config, db) = setup_indexed_project(SAMPLE_SOURCE);
-        let json =
-            reindex_with_result(&db, &config, "src/main.rs", PreviewSource::Symbol("helper"));
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(val["ok"], true);
-        assert!(val["preview"].is_string());
-        assert!(val["preview"].as_str().unwrap().contains("helper"));
-    }
-
-    #[test]
-    fn reindex_with_result_no_preview_for_none() {
-        let (_tmp, config, db) = setup_indexed_project(SAMPLE_SOURCE);
-        let json = reindex_with_result(&db, &config, "src/main.rs", PreviewSource::None);
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(val["ok"], true);
-        assert!(val["preview"].is_null());
-    }
-
-    #[test]
-    fn reindex_with_result_includes_preview_for_line() {
-        let (_tmp, config, db) = setup_indexed_project(SAMPLE_SOURCE);
-        // Line 6 is inside helper
-        let json = reindex_with_result(
-            &db,
-            &config,
-            "src/main.rs",
-            PreviewSource::Line(HELPER_LINE),
-        );
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(val["ok"], true);
-        assert!(val["preview"].is_string());
-        assert!(val["preview"].as_str().unwrap().contains("helper"));
-    }
-
-    // ─── Progress callback tests ────────────────────────────────
-
-    #[test]
-    fn run_index_calls_progress_callback() {
-        let tmp = TempDir::new().unwrap();
-        let src = tmp.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("a.rs"), "fn a() {}").unwrap();
-        fs::write(src.join("b.rs"), "fn b() {}").unwrap();
-
-        let config = Config::new(tmp.path());
-        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let calls_clone = calls.clone();
-        let progress = move |current: usize, total: usize| {
-            calls_clone.lock().unwrap().push((current, total));
-        };
-
-        run_index(&config, Some(&progress)).unwrap();
-
-        let recorded = calls.lock().unwrap();
-        assert!(
-            recorded.len() >= 2,
-            "should be called at least once per file"
-        );
-        let &(last_current, last_total) = recorded.last().unwrap();
-        assert_eq!(last_current, last_total, "last call should be total/total");
-    }
-}
+#[path = "mod_reindex_tests.rs"]
+mod reindex_tests;
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

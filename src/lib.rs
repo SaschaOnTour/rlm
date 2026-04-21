@@ -52,7 +52,6 @@ pub mod infrastructure;
 pub mod ingest;
 pub mod interface;
 pub mod mcp;
-pub mod models;
 pub mod operations;
 /// Centralized output formatting (JSON/Pretty/TOON). Used by CLI and MCP.
 pub mod output;

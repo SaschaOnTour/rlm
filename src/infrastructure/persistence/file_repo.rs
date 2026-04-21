@@ -2,8 +2,8 @@
 
 use crate::db::queries::IndexedFileMeta;
 use crate::db::Database;
+use crate::domain::file::FileRecord;
 use crate::error::Result;
-use crate::models::file::FileRecord;
 
 /// Read and write access to indexed files.
 pub trait FileRepo {

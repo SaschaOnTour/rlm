@@ -10,13 +10,13 @@
 
 use serde_yaml_ng::Value;
 
+use crate::domain::chunk::Chunk;
 use crate::error::Result;
 use crate::ingest::text::yaml_helpers::{
     determine_yaml_kind, find_key_lines, is_important_key, yaml_key_to_string, yaml_type_name,
     yaml_value_to_string,
 };
 use crate::ingest::text::{create_fallback_chunk, TextParser};
-use crate::models::chunk::Chunk;
 
 /// Maximum nesting depth for recursive YAML chunk extraction.
 const MAX_NESTING_DEPTH: usize = 3;
@@ -41,7 +41,6 @@ impl TextParser for YamlParser {
         "yaml"
     }
 
-    // qual:allow(iosp) reason: "if-dispatch: parse valid YAML or return fallback chunk"
     fn parse_chunks(&self, source: &str, file_id: i64) -> Result<Vec<Chunk>> {
         let mut chunks = Vec::new();
 
@@ -133,7 +132,6 @@ fn collect_yaml_entries(
 
 /// Extract chunks from a parsed YAML value tree (integration: calls only).
 // qual:recursive
-// qual:allow(iosp) reason: "recursive tree traversal inherently mixes iteration with delegation"
 fn extract_yaml_chunks(
     value: &Value,
     path: &str,
@@ -237,119 +235,8 @@ fn process_yaml_mapping_entry(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ingest::text::yaml_helpers::yaml_type_name;
-
-    fn parser() -> YamlParser {
-        YamlParser::new()
-    }
-
-    #[test]
-    fn parse_simple_yaml() {
-        let source = r#"
-name: my-project
-version: 1.0.0
-description: A test project
-"#;
-        let chunks = parser().parse_chunks(source, 1).unwrap();
-        assert!(!chunks.is_empty());
-        assert!(chunks.iter().any(|c| c.ident == "name"));
-        assert!(chunks.iter().any(|c| c.ident == "version"));
-    }
-
-    #[test]
-    fn parse_nested_yaml() {
-        let source = r#"
-services:
-  web:
-    image: nginx
-    ports:
-      - "80:80"
-  db:
-    image: postgres
-"#;
-        let chunks = parser().parse_chunks(source, 1).unwrap();
-        assert!(!chunks.is_empty());
-        assert!(chunks.iter().any(|c| c.ident == "services"));
-    }
-
-    #[test]
-    fn parse_github_actions() {
-        let source = r#"
-name: CI
-on: push
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - run: npm test
-"#;
-        let chunks = parser().parse_chunks(source, 1).unwrap();
-        assert!(chunks.iter().any(|c| c.ident == "jobs"));
-        let jobs_chunk = chunks.iter().find(|c| c.ident == "jobs");
-        assert!(jobs_chunk.is_some());
-    }
-
-    #[test]
-    fn parse_kubernetes_manifest() {
-        let source = r#"
-apiVersion: v1
-kind: Service
-metadata:
-  name: my-service
-spec:
-  selector:
-    app: my-app
-  ports:
-    - port: 80
-"#;
-        let chunks = parser().parse_chunks(source, 1).unwrap();
-        assert!(chunks.iter().any(|c| c.ident == "apiVersion"));
-        assert!(chunks.iter().any(|c| c.ident == "kind"));
-        assert!(chunks.iter().any(|c| c.ident == "metadata"));
-    }
-
-    #[test]
-    fn parse_invalid_yaml_fallback() {
-        let source = "this: is: not: valid: yaml: [";
-        let chunks = parser().parse_chunks(source, 1).unwrap();
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].ident, "_root");
-    }
-
-    #[test]
-    fn empty_yaml() {
-        let chunks = parser().parse_chunks("", 1).unwrap();
-        assert_eq!(chunks.len(), 1);
-    }
-
-    #[test]
-    fn test_yaml_type_name() {
-        use serde_yaml_ng::Value;
-        assert_eq!(yaml_type_name(&Value::Null), "null");
-        assert_eq!(yaml_type_name(&Value::Bool(true)), "bool");
-        assert_eq!(yaml_type_name(&Value::Bool(false)), "bool");
-        assert_eq!(
-            yaml_type_name(&Value::Number(serde_yaml_ng::Number::from(42))),
-            "number"
-        );
-        assert_eq!(yaml_type_name(&Value::String("hello".into())), "string");
-        assert_eq!(yaml_type_name(&Value::Sequence(vec![])), "array");
-        assert_eq!(
-            yaml_type_name(&Value::Mapping(serde_yaml_ng::Mapping::new())),
-            "object"
-        );
-        // Tagged values
-        assert_eq!(
-            yaml_type_name(&Value::Tagged(Box::new(
-                serde_yaml_ng::value::TaggedValue {
-                    tag: serde_yaml_ng::value::Tag::new("!custom"),
-                    value: Value::Null,
-                }
-            ))),
-            "tagged"
-        );
-    }
-}
+#[path = "yaml_nested_tests.rs"]
+mod nested_tests;
+#[cfg(test)]
+#[path = "yaml_tests.rs"]
+mod tests;

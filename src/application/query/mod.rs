@@ -13,3 +13,7 @@ pub mod stats;
 pub mod supported;
 pub mod tree;
 pub mod verify;
+
+#[cfg(test)]
+#[path = "fixtures_tests.rs"]
+mod fixtures;

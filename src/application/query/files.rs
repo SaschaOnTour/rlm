@@ -87,75 +87,8 @@ pub fn list_files(project_root: &Path, filter: FilesFilter) -> Result<FilesResul
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn list_files_basic() {
-        let tmp = TempDir::new().unwrap();
-
-        // Create some files
-        std::fs::write(tmp.path().join("main.rs"), "fn main() {}").unwrap();
-        std::fs::write(tmp.path().join("lib.rs"), "// lib").unwrap();
-        std::fs::write(tmp.path().join("README.md"), "# README").unwrap();
-
-        let result = list_files(tmp.path(), FilesFilter::default()).unwrap();
-        assert_eq!(result.summary.total, 3);
-        assert!(result.summary.indexed > 0);
-    }
-
-    #[test]
-    fn list_files_with_path_filter() {
-        let tmp = TempDir::new().unwrap();
-
-        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
-        std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
-        std::fs::write(tmp.path().join("src/main.rs"), "").unwrap();
-        std::fs::write(tmp.path().join("tests/test.rs"), "").unwrap();
-
-        let filter = FilesFilter {
-            path_prefix: Some("src".into()),
-            ..Default::default()
-        };
-        let result = list_files(tmp.path(), filter).unwrap();
-        assert_eq!(result.summary.total, 1);
-        assert!(result.results[0].path.starts_with("src"));
-    }
-
-    #[test]
-    fn list_files_skipped_only() {
-        let tmp = TempDir::new().unwrap();
-
-        std::fs::write(tmp.path().join("main.rs"), "").unwrap(); // supported
-        std::fs::write(tmp.path().join("data.xyz"), "").unwrap(); // unsupported
-
-        let filter = FilesFilter {
-            skipped_only: true,
-            ..Default::default()
-        };
-        let result = list_files(tmp.path(), filter).unwrap();
-        // Only unsupported files
-        for f in &result.results {
-            assert!(!f.supported);
-        }
-    }
-
-    #[test]
-    fn list_files_indexed_only() {
-        let tmp = TempDir::new().unwrap();
-
-        std::fs::write(tmp.path().join("main.rs"), "").unwrap(); // supported
-        std::fs::write(tmp.path().join("data.xyz"), "").unwrap(); // unsupported
-
-        let filter = FilesFilter {
-            indexed_only: true,
-            ..Default::default()
-        };
-        let result = list_files(tmp.path(), filter).unwrap();
-        // Only supported files
-        for f in &result.results {
-            assert!(f.supported);
-        }
-    }
-}
+#[path = "files_filter_tests.rs"]
+mod filter_tests;
+#[cfg(test)]
+#[path = "files_tests.rs"]
+mod tests;

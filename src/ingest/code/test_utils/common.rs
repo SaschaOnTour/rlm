@@ -134,7 +134,7 @@ macro_rules! test_parses_chunk {
 #[macro_export]
 macro_rules! test_extracts_imports {
     ($parser_type:ty, $source:expr, $min_count:expr) => {{
-        use $crate::models::chunk::RefKind;
+        use $crate::domain::chunk::RefKind;
 
         let parser = <$parser_type>::new();
         let chunks = parser

@@ -1,5 +1,6 @@
 use tree_sitter::{Language, Query};
 
+use crate::domain::chunk::{ChunkKind, RefKind};
 use crate::infrastructure::parsing::tree_walker::{
     collect_prev_siblings, collect_prev_siblings_filtered_skip, find_parent_by_kind,
     SiblingCollectConfig,
@@ -8,7 +9,6 @@ use crate::ingest::code::base::{
     build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig,
 };
 use crate::ingest::code::helpers::{extract_keyword_visibility, extract_type_signature_to_brace};
-use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = include_str!("queries/csharp/chunk.scm");
 
@@ -169,6 +169,9 @@ impl CSharpParser {
     }
 }
 
+#[cfg(test)]
+#[path = "csharp_advanced_tests.rs"]
+mod advanced_tests;
 #[cfg(test)]
 #[path = "csharp_tests.rs"]
 mod tests;

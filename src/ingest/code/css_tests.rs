@@ -4,9 +4,9 @@
 //! pattern; wired back in via
 //! `#[cfg(test)] #[path = "css_tests.rs"] mod tests;`.
 
-use super::*;
+use super::CssParser;
+use crate::domain::chunk::ChunkKind;
 use crate::ingest::code::CodeParser;
-use crate::models::chunk::ChunkKind;
 
 fn parser() -> CssParser {
     CssParser::create()

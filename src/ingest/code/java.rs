@@ -1,11 +1,11 @@
 use tree_sitter::{Language, Query};
 
+use crate::domain::chunk::{ChunkKind, RefKind};
 use crate::infrastructure::parsing::tree_walker::find_parent_by_kind;
 use crate::ingest::code::base::{
     build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig,
 };
 use crate::ingest::code::helpers::{extract_keyword_visibility, extract_type_signature_to_brace};
-use crate::models::chunk::{ChunkKind, RefKind};
 
 const CHUNK_QUERY_SRC: &str = include_str!("queries/java/chunk.scm");
 
@@ -184,6 +184,9 @@ fn collect_java_annotations(node: tree_sitter::Node, source: &[u8]) -> Option<St
     }
 }
 
+#[cfg(test)]
+#[path = "java_advanced_tests.rs"]
+mod advanced_tests;
 #[cfg(test)]
 #[path = "java_tests.rs"]
 mod tests;

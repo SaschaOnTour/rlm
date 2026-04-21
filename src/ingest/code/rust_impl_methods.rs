@@ -3,10 +3,10 @@
 //! Extracted from `rust.rs` for SRP compliance. Contains the tree-walking
 //! and chunk-building logic that extracts individual methods from `impl` blocks.
 
+use crate::domain::chunk::{Chunk, ChunkKind};
 use crate::ingest::code::base::{
     collect_prev_siblings, collect_prev_siblings_filtered_skip, SiblingCollectConfig,
 };
-use crate::models::chunk::{Chunk, ChunkKind};
 
 use super::rust::{extract_fn_signature, extract_rust_visibility};
 

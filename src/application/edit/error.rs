@@ -1,11 +1,8 @@
-//! Edit-specific error variants.
+//! Re-export of [`EditError`].
+//!
+//! The type itself lives in `crate::error` so `RlmError` can wrap it via
+//! `#[from]` without introducing a reverse dependency on `application::edit`.
+//! This thin alias keeps `use super::error::EditError` working across the
+//! edit subsystem.
 
-use thiserror::Error;
-
-/// Failures that can occur while applying a code edit.
-#[derive(Error, Debug)]
-pub enum EditError {
-    /// The target line is beyond the end of the file.
-    #[error("line {line} is beyond file length ({max})")]
-    LineOutOfBounds { line: usize, max: usize },
-}
+pub use crate::error::EditError;

@@ -29,6 +29,10 @@ pub use context::{ContextQuery, ContextWithGraphQuery};
 pub use refs::RefsQuery;
 pub use scope::ScopeQuery;
 
+#[cfg(test)]
+#[path = "fixtures_tests.rs"]
+mod fixtures;
+
 /// A read-only analysis of a symbol.
 ///
 /// Implementors are usually zero-sized marker types (e.g. `RefsQuery`)

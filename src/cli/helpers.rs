@@ -4,16 +4,19 @@
 //! error-mapping, config/db access, and reusable sub-operations.
 
 use crate::application::index as indexer;
+use crate::application::symbol::SymbolQuery;
+use crate::application::FileQuery;
 use crate::config::Config;
 use crate::db::Database;
 use crate::domain::token_budget::estimate_json_tokens;
+use crate::interface::shared::{record_file_query, record_symbol_query, OperationResponse};
 use crate::operations::savings;
 use crate::output::{self, Formatter};
 
 pub type CmdResult = Result<(), Box<dyn std::fmt::Display>>;
 
 pub fn print_str(formatter: Formatter, s: &str) {
-    formatter.print_str(s);
+    output::print_str(formatter, s);
 }
 
 pub fn map_err(e: impl std::fmt::Display + 'static) -> Box<dyn std::fmt::Display> {
@@ -103,4 +106,30 @@ pub fn parse_strategy(
 /// Determine whether unknown-only filtering should be applied (operation: logic only).
 pub fn should_filter_unknown(unknown_only: bool, all: bool) -> bool {
     unknown_only || !all
+}
+
+/// Execute a pipeline closure that produces an [`OperationResponse`] and
+/// print its body. Handles the common config/db-open + error-map + print
+/// boilerplate so symbol- and file-scoped wrappers stay one-liners.
+fn run_pipeline<F>(formatter: Formatter, run: F) -> CmdResult
+where
+    F: FnOnce(&Database) -> crate::error::Result<OperationResponse>,
+{
+    let config = get_config()?;
+    let db = get_db(&config)?;
+    let response = run(&db).map_err(map_err)?;
+    print_str(formatter, &response.body);
+    Ok(())
+}
+
+/// Run a symbol-scoped pipeline end-to-end (open config+db, execute the
+/// [`SymbolQuery`], record savings, print). Used by `cmd_refs`/`cmd_context`/etc.
+pub fn run_symbol_pipeline<Q: SymbolQuery>(symbol: &str, formatter: Formatter) -> CmdResult {
+    run_pipeline(formatter, |db| record_symbol_query::<Q>(db, symbol))
+}
+
+/// Run a file-scoped pipeline end-to-end (open config+db, execute the
+/// [`FileQuery`], record savings, print). Used by `cmd_summarize`/`cmd_deps`/`cmd_scope`/etc.
+pub fn run_file_pipeline<Q: FileQuery>(query: &Q, path: &str, formatter: Formatter) -> CmdResult {
+    run_pipeline(formatter, |db| record_file_query(db, query, path))
 }

@@ -25,9 +25,9 @@ pub fn build_language_config(
     (language, chunk_query, ref_query)
 }
 
+use crate::domain::chunk::{Chunk, ChunkKind, RefKind, Reference};
 use crate::error::{Result, RlmError};
 use crate::ingest::code::{find_error_lines, CodeParser, ParseQuality, ParseResult};
-use crate::models::chunk::{Chunk, ChunkKind, RefKind, Reference};
 
 /// Configuration trait for language-specific parsing behavior.
 ///

@@ -102,20 +102,20 @@ impl Formatter {
     /// Re-format a pre-serialized JSON string in the configured format.
     ///
     /// Borrows for JSON (zero-cost); owns for TOON/Pretty. Used by MCP
-    /// `success_text` and CLI `print_str`.
+    /// `success_text` and the free `print_str` helper.
     pub fn reformat_str<'a>(self, json: &'a str) -> Cow<'a, str> {
         reformat(json, self.format)
     }
+}
 
-    /// Print a `Serialize` result to stdout.
-    pub fn print<T: Serialize>(self, result: &T) {
-        println!("{}", self.serialize(result));
-    }
+/// Print a `Serialize` result to stdout using the given formatter.
+pub fn print<T: Serialize>(formatter: Formatter, result: &T) {
+    println!("{}", formatter.serialize(result));
+}
 
-    /// Print a pre-serialized JSON string, reformatted as needed.
-    pub fn print_str(self, json: &str) {
-        println!("{}", self.reformat_str(json));
-    }
+/// Print a pre-serialized JSON string to stdout, reformatted as needed.
+pub fn print_str(formatter: Formatter, json: &str) {
+    println!("{}", formatter.reformat_str(json));
 }
 
 /// Serialize a result as minified JSON. Format-independent; used for internal
@@ -154,112 +154,8 @@ pub struct QualityWarning {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const TEST_VALUE: i32 = 42;
-
-    #[derive(Serialize)]
-    struct TestData {
-        name: String,
-        value: i32,
-    }
-
-    #[test]
-    fn default_formatter_is_json() {
-        let f = Formatter::default();
-        assert_eq!(f.format(), OutputFormat::Json);
-    }
-
-    #[test]
-    fn formatter_serialize_json_is_minified() {
-        let f = Formatter::new(OutputFormat::Json);
-        let data = TestData {
-            name: "test".into(),
-            value: TEST_VALUE,
-        };
-        let json = f.serialize(&data);
-        assert!(!json.contains('\n'));
-        assert!(json.contains("\"name\":\"test\""));
-    }
-
-    #[test]
-    fn formatter_serialize_pretty_indents() {
-        let f = Formatter::new(OutputFormat::Pretty);
-        let data = TestData {
-            name: "test".into(),
-            value: TEST_VALUE,
-        };
-        let out = f.serialize(&data);
-        assert!(out.contains('\n'));
-    }
-
-    #[test]
-    fn serialize_error_produces_json() {
-        let f = Formatter::new(OutputFormat::Json);
-        let err = "something went wrong";
-        let json = f.serialize_error(&err);
-        assert!(json.contains("error"));
-        assert!(json.contains("something went wrong"));
-    }
-
-    #[test]
-    fn serialize_error_escapes_quotes_and_newlines() {
-        let f = Formatter::new(OutputFormat::Json);
-        let msg = "error with \"quotes\" and\nnewlines";
-        let output = f.serialize_error(&msg);
-        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(parsed["error"].as_str().unwrap(), msg);
-    }
-
-    #[test]
-    fn format_from_str_loose_is_case_insensitive_and_permissive() {
-        assert_eq!(
-            Formatter::from_str_loose("TOON").format(),
-            OutputFormat::Toon
-        );
-        assert_eq!(
-            Formatter::from_str_loose("Pretty").format(),
-            OutputFormat::Pretty
-        );
-        assert_eq!(
-            Formatter::from_str_loose("json").format(),
-            OutputFormat::Json
-        );
-        // Legacy alias + unknown input both fall through to JSON.
-        assert_eq!(
-            Formatter::from_str_loose("minified").format(),
-            OutputFormat::Json
-        );
-        assert_eq!(
-            Formatter::from_str_loose("banana").format(),
-            OutputFormat::Json
-        );
-    }
-
-    #[test]
-    fn reformat_json_borrows() {
-        let json = r#"{"a":1}"#;
-        let cow = reformat(json, OutputFormat::Json);
-        assert!(matches!(cow, std::borrow::Cow::Borrowed(_)));
-        assert_eq!(&*cow, json);
-    }
-
-    #[test]
-    fn reformat_toon_produces_toon() {
-        let json = r#"[{"name":"a","value":1},{"name":"b","value":2}]"#;
-        let cow = reformat(json, OutputFormat::Toon);
-        assert!(matches!(cow, std::borrow::Cow::Owned(_)));
-        assert!(cow.contains("[2]{name,value}:"), "got: {cow}");
-    }
-
-    #[test]
-    fn reformat_pretty_indents() {
-        let json = r#"{"a":1}"#;
-        let cow = reformat(json, OutputFormat::Pretty);
-        assert!(
-            cow.contains('\n'),
-            "pretty should have newlines, got: {cow}"
-        );
-    }
-}
+#[path = "output_format_tests.rs"]
+mod format_tests;
+#[cfg(test)]
+#[path = "output_tests.rs"]
+mod tests;

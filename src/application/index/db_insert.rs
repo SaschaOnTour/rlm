@@ -6,8 +6,8 @@ use crate::error::Result;
 /// Insert chunks into the DB and return them sorted by `start_line` for fast ref lookup.
 pub(super) fn insert_chunks(
     db: &Database,
-    chunks: Vec<crate::models::chunk::Chunk>,
-) -> Result<Vec<crate::models::chunk::Chunk>> {
+    chunks: Vec<crate::domain::chunk::Chunk>,
+) -> Result<Vec<crate::domain::chunk::Chunk>> {
     let mut inserted = Vec::with_capacity(chunks.len());
     for mut chunk in chunks {
         let cid = db.insert_chunk(&chunk)?;
@@ -19,7 +19,7 @@ pub(super) fn insert_chunks(
 }
 
 /// Resolve the chunk ID for a reference using binary search over sorted chunks.
-fn resolve_ref_chunk_id(inserted_chunks: &[crate::models::chunk::Chunk], line: u32) -> i64 {
+fn resolve_ref_chunk_id(inserted_chunks: &[crate::domain::chunk::Chunk], line: u32) -> i64 {
     let idx = inserted_chunks.partition_point(|c| c.start_line <= line);
     if idx > 0 {
         inserted_chunks[..idx]
@@ -35,8 +35,8 @@ fn resolve_ref_chunk_id(inserted_chunks: &[crate::models::chunk::Chunk], line: u
 /// Insert references into the DB, resolving chunk IDs via binary search.
 pub(super) fn insert_refs(
     db: &Database,
-    refs: Vec<crate::models::chunk::Reference>,
-    inserted_chunks: &[crate::models::chunk::Chunk],
+    refs: Vec<crate::domain::chunk::Reference>,
+    inserted_chunks: &[crate::domain::chunk::Chunk],
 ) -> Result<usize> {
     let mut count = 0;
     for mut reference in refs {

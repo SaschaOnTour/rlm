@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::domain::chunk::{Chunk, Reference};
 use crate::error::{Result, RlmError};
 use crate::ingest::code::{
     csharp::CSharpParser, css::CssParser, go::GoParser, html::HtmlParser, java::JavaParser,
@@ -10,7 +11,6 @@ use crate::ingest::text::{
     json_semantic::JsonSemanticParser, markdown::MarkdownParser, pdf::PdfParser,
     plaintext::PlaintextParser, toml_parser::TomlParser, yaml::YamlParser, TextParser,
 };
-use crate::models::chunk::{Chunk, Reference};
 
 /// Routes files to the appropriate parser based on language.
 pub struct Dispatcher {
@@ -125,48 +125,5 @@ impl Default for Dispatcher {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dispatcher_supports_languages() {
-        let d = Dispatcher::new();
-        assert!(d.supports("rust"));
-        assert!(d.supports("go"));
-        assert!(d.supports("java"));
-        assert!(d.supports("csharp"));
-        assert!(d.supports("python"));
-        assert!(d.supports("php"));
-        assert!(d.supports("markdown"));
-        assert!(d.supports("pdf"));
-        assert!(!d.supports("haskell"));
-    }
-
-    #[test]
-    fn dispatcher_parses_rust() {
-        let d = Dispatcher::new();
-        let chunks = d.parse("rust", "fn main() {}", 1).unwrap();
-        assert!(!chunks.is_empty());
-    }
-
-    #[test]
-    fn dispatcher_parses_markdown() {
-        let d = Dispatcher::new();
-        let chunks = d.parse("markdown", "# Hello\n\nContent\n", 1).unwrap();
-        assert!(!chunks.is_empty());
-    }
-
-    #[test]
-    fn dispatcher_rejects_unknown() {
-        let d = Dispatcher::new();
-        assert!(d.parse("brainfuck", "+++", 1).is_err());
-    }
-
-    #[test]
-    fn dispatcher_validates_code() {
-        let d = Dispatcher::new();
-        assert!(d.validate_syntax("rust", "fn main() {}"));
-        assert!(!d.validate_syntax("rust", "fn main() {"));
-        assert!(d.validate_syntax("markdown", "anything"));
-    }
-}
+#[path = "dispatcher_tests.rs"]
+mod tests;

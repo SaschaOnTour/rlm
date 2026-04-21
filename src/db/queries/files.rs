@@ -1,7 +1,7 @@
 use rusqlite::params;
 
+use crate::domain::file::FileRecord;
 use crate::error::Result;
-use crate::models::file::FileRecord;
 
 use super::super::Database;
 

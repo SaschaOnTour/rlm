@@ -8,6 +8,7 @@
 
 use tree_sitter::{Language, Query, Tree};
 
+use crate::domain::chunk::{Chunk, ChunkKind, RefKind};
 use crate::infrastructure::parsing::tree_walker::{
     collect_prev_siblings, collect_prev_siblings_filtered_skip, find_parent_by_kind,
     SiblingCollectConfig,
@@ -16,7 +17,6 @@ use crate::ingest::code::base::{
     build_language_config, BaseParser, ChunkCaptureResult, LanguageConfig,
 };
 use crate::ingest::code::helpers::extract_type_signature;
-use crate::models::chunk::{Chunk, ChunkKind, RefKind};
 
 use super::rust_impl_methods::{extract_impl_methods, find_node_at_byte_range};
 
@@ -212,6 +212,9 @@ pub(crate) fn extract_fn_signature(content: &str) -> Option<String> {
     }
 }
 
+#[cfg(test)]
+#[path = "rust_advanced_tests.rs"]
+mod advanced_tests;
 #[cfg(test)]
 #[path = "rust_tests.rs"]
 mod tests;
