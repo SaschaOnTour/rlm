@@ -5,7 +5,7 @@ pub struct FileRecord {
     pub id: i64,
     /// Project-relative file path (forward slashes).
     pub path: String,
-    /// SHA-256 hash of file contents.
+    /// Hex-encoded SHA-256 digest of file contents.
     pub hash: String,
     /// Detected language identifier.
     pub lang: String,
