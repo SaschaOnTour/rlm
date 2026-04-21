@@ -198,8 +198,7 @@ impl RlmSession {
                 Ok(record_operation(&self.db, &meta, &result))
             }
             "standard" => {
-                let entries =
-                    crate::application::query::map::build_map(&self.db, path_filter)?;
+                let entries = crate::application::query::map::build_map(&self.db, path_filter)?;
                 Ok(record_operation(&self.db, &meta, &entries))
             }
             "tree" => {

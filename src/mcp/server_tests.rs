@@ -62,17 +62,16 @@ fn test_stats_operation_returns_expected_format() {
 #[test]
 fn test_search_operation_returns_results() {
     let (_tmp, _config, db) = setup_indexed_project();
-    let result =
-        crate::application::query::search::search_chunks(&db, "helper", TEST_SEARCH_LIMIT)
-            .expect("search");
+    let result = crate::application::query::search::search_chunks(&db, "helper", TEST_SEARCH_LIMIT)
+        .expect("search");
     assert!(!result.results.is_empty());
 }
 
 #[test]
 fn test_refs_operation_returns_results() {
     let (_tmp, _config, db) = setup_indexed_project();
-    let result = crate::application::symbol::impact::analyze_impact(&db, "helper")
-        .expect("refs/impact");
+    let result =
+        crate::application::symbol::impact::analyze_impact(&db, "helper").expect("refs/impact");
     assert!(result.count > 0);
 }
 
@@ -110,8 +109,7 @@ fn test_overview_tree_operation() {
 #[test]
 fn test_callgraph_in_context_graph() {
     let (_tmp, _config, db) = setup_indexed_project();
-    let _ctx =
-        crate::application::symbol::context::build_context(&db, "helper").expect("context");
-    let _graph = crate::application::symbol::callgraph::build_callgraph(&db, "helper")
-        .expect("callgraph");
+    let _ctx = crate::application::symbol::context::build_context(&db, "helper").expect("context");
+    let _graph =
+        crate::application::symbol::callgraph::build_callgraph(&db, "helper").expect("callgraph");
 }
