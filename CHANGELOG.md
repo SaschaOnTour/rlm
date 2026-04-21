@@ -20,8 +20,8 @@ output. Score under rustqual 1.0.1 is 100.0% across all seven dimensions;
   `application/dto/chunk_dto.rs`: serde-facing wire-format mirrors of the
   domain types. Adapters convert at the serialization boundary so the domain
   layer stays format-free (`no_serde_derive_in_domain_entities`).
-- **`Chunk::stub(file_id)` / `Reference::stub(chunk_id)` constructors**: zero/
-  default initializers for struct-update syntax in tests
+- **`Chunk::stub(file_id)` / `Reference::stub(chunk_id)` constructors**:
+  zero/default initializers for struct-update syntax in tests
   (`Chunk { kind, ident, content, ..Chunk::stub(file_id) }`). Replaces the
   14-field boilerplate patterns (BP-009) the duplicate detector was flagging.
 
