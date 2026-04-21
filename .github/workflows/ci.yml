@@ -37,7 +37,13 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Install rustqual
-        run: cargo install rustqual --locked --version ^1.0
+        # Intentionally unpinned — each run picks up the latest rustqual
+        # release so new rules are enforced as they ship. RUSTFLAGS is
+        # cleared here so the workflow-level `-Dwarnings` does not turn a
+        # third-party build-warning into an install failure.
+        env:
+          RUSTFLAGS: ""
+        run: cargo install rustqual --locked
 
       - name: Check formatting
         run: cargo fmt --check
