@@ -43,7 +43,9 @@ fn savings_report_empty() {
     assert_eq!(report.output, 0);
     assert_eq!(report.alternative, 0);
     assert_eq!(report.saved, 0);
-    assert!((report.pct - 0.0).abs() < f64::EPSILON);
+    // Empty report → savings_pct short-circuits to the literal `0.0`,
+    // so bit-equality is the correct comparison.
+    assert_eq!(report.pct, 0.0);
     assert!(report.by_cmd.is_empty());
 }
 
@@ -114,7 +116,8 @@ fn savings_pct_zero_savings() {
 
     let report = get_savings_report(&db, None).unwrap();
     assert_eq!(report.saved, 0);
-    assert!((report.pct - 0.0).abs() < f64::EPSILON);
+    // saved == 0 → pct short-circuits to the literal `0.0`, bit-equal.
+    assert_eq!(report.pct, 0.0);
 }
 
 #[test]

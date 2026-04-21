@@ -6,6 +6,16 @@
 //! `#[cfg(test)] #[path = "savings_tests.rs"] mod tests;`.
 
 use super::{savings_pct, with_line_overhead, SavingsEntry};
+
+/// Tolerance for percentage comparisons. `f64::EPSILON` (≈2.22e-16) is
+/// defined for the gap around 1.0; for values near 25 or 90 the real
+/// representable step is already ~1e-14, and any extra arithmetic
+/// (`saved/alt*100`) can push the result further. `1e-9` is small
+/// enough to catch any actual regression in `savings_pct`'s formula
+/// while being stable under the IEEE-754 rounding that the division
+/// + multiplication produce.
+const PCT_TOLERANCE: f64 = 1e-9;
+
 #[test]
 fn with_line_overhead_adds_ten_percent() {
     assert_eq!(with_line_overhead(0), 0);
@@ -24,15 +34,19 @@ fn with_line_overhead_truncates_on_non_multiples_of_ten() {
 
 #[test]
 fn savings_pct_typical_ratios() {
-    assert!((savings_pct(90, 100) - 90.0).abs() < f64::EPSILON);
-    assert!((savings_pct(50, 200) - 25.0).abs() < f64::EPSILON);
-    assert!((savings_pct(0, 100) - 0.0).abs() < f64::EPSILON);
+    assert!((savings_pct(90, 100) - 90.0).abs() < PCT_TOLERANCE);
+    assert!((savings_pct(50, 200) - 25.0).abs() < PCT_TOLERANCE);
+    // 0 path returns an exact 0.0 (early `if alternative == 0` / `saved == 0`),
+    // so bit-equality is meaningful here.
+    assert_eq!(savings_pct(0, 100), 0.0);
 }
 
 #[test]
 fn savings_pct_zero_alternative_is_zero() {
-    assert!((savings_pct(500, 0) - 0.0).abs() < f64::EPSILON);
-    assert!((savings_pct(0, 0) - 0.0).abs() < f64::EPSILON);
+    // Both of these hit the `alternative == 0` early-return, which
+    // yields the literal `0.0` — bit-equal, no tolerance needed.
+    assert_eq!(savings_pct(500, 0), 0.0);
+    assert_eq!(savings_pct(0, 0), 0.0);
 }
 
 fn sample_entry() -> SavingsEntry {
