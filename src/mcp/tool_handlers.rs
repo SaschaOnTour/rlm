@@ -1,16 +1,23 @@
 //! MCP tool-handler facade.
 //!
 //! The previous single-file module grew past the SRP-module threshold. The
-//! handlers are now split by concern across four sibling modules and
+//! handlers are now split by concern across five sibling modules and
 //! re-exported here so callers (`server.rs`, tests) keep using
 //! `tool_handlers::handle_*` unchanged:
 //!
 //! - `tool_handlers_index` — `handle_index` / `handle_index_with_progress`
 //! - `tool_handlers_query` — `handle_search` / `handle_overview` / `handle_refs` / `handle_files`
 //! - `tool_handlers_read`  — `handle_read` (symbol + section dispatch)
-//! - `tool_handlers_edit`  — `handle_replace` / `handle_delete` / `handle_insert` + `InsertInput`
+//! - `tool_handlers_edit`  — `handle_replace` / `handle_delete` / `handle_insert`
+//!   / `handle_extract` + `InsertInput`
+//! - `tool_handlers_util`  — `handle_stats` (incl. savings flag),
+//!   `handle_quality`, `handle_partition`, `handle_summarize`, `handle_diff`,
+//!   `handle_context`, `handle_deps`, `handle_scope`, `handle_verify`,
+//!   `handle_supported`
 //!
-//! Utility handlers (savings, verify, …) still live in `tool_handlers_util`.
+//! Note: the standalone `savings` tool was folded into
+//! `stats(savings=true, since=…)` in 0.5.0 — there is no
+//! `handle_savings` anymore.
 
 pub use super::tool_handlers_edit::{
     handle_delete, handle_extract, handle_insert, handle_replace, InsertInput,

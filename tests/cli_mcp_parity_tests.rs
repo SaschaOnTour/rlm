@@ -14,7 +14,22 @@ use rlm::cli::commands::Cli;
 use rlm::mcp::server::RlmServer;
 use rlm::output::Formatter;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use tempfile::TempDir;
+
+/// Build an `RlmServer` rooted at a fresh tempdir.
+///
+/// These tests only inspect the static tool router + schema (which
+/// is built at `RlmServer::new` time and doesn't touch disk), so any
+/// valid path works. A tempdir is preferred over a hard-coded `/tmp`
+/// for two reasons: cross-platform portability (Windows has no
+/// `/tmp`) and isolation from any real filesystem state at that
+/// path. The returned `TempDir` guard must be kept alive for the
+/// test's duration so the directory isn't removed prematurely.
+fn server_for_parity_test() -> (TempDir, RlmServer) {
+    let dir = TempDir::new().expect("tempdir for parity test");
+    let server = RlmServer::new(dir.path().to_path_buf(), Formatter::default());
+    (dir, server)
+}
 
 /// Tools where CLI and MCP are expected to agree on argument names.
 /// `(command_name, cli_only_args)`. Tools present on one side but
@@ -72,7 +87,7 @@ const TOOL_PARITY: &[(&str, &[&str])] = &[
 
 #[test]
 fn cli_mcp_argument_parity() {
-    let server = RlmServer::new(PathBuf::from("/tmp"), Formatter::default());
+    let (_tmp, server) = server_for_parity_test();
     let cli = Cli::command();
 
     let mut failures: Vec<String> = Vec::new();
@@ -165,7 +180,7 @@ const MCP_ONLY_TOOLS: &[&str] = &[];
 
 #[test]
 fn cli_mcp_command_set_parity() {
-    let server = RlmServer::new(PathBuf::from("/tmp"), Formatter::default());
+    let (_tmp, server) = server_for_parity_test();
     let cli = Cli::command();
 
     let cli_commands: HashSet<String> = cli
