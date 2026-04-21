@@ -66,6 +66,19 @@ output. Score under rustqual 1.0.1 is 100.0% across all seven dimensions;
   .name` references in `db::migrations::bootstrap_existing_schema` to drop
   the magic-number warning.
 
+### CI
+
+- **Quality gate added to both `ci.yml` and `release.yml`** — both pipelines
+  install the latest rustqual (intentionally unpinned, so new rules are
+  enforced as they ship; `RUSTFLAGS` is cleared for the install step so
+  the workflow-level `-Dwarnings` doesn't promote third-party build
+  warnings into install failures) and run `rustqual --fail-on-warnings`
+  after the test step, so any regression below the 100% score fails the
+  build (and the gate runs before any tag-triggered binary build in
+  `release.yml`). Also tightened `cargo clippy --all-targets` to
+  `-D warnings` in both workflows for parity with the local pre-commit
+  checklist.
+
 ### Fixed
 
 - **Test-companion `#[path]`-wired files misclassified as production code**
