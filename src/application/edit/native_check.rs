@@ -105,25 +105,40 @@ fn execute_cargo_check(project_root: &Path, timeout: Duration, started: Instant)
 }
 
 fn spawn_cargo_check(project_root: &Path) -> std::io::Result<Child> {
+    // Three env-hygiene rules for the subprocess cargo. Each was
+    // motivated by a real CI-only failure; keep them together.
+    //
+    // 1. **Pin CARGO_TARGET_DIR to `<project>/target`.** rlm runs as
+    //    a child of some caller (agent, IDE, `cargo nextest run`)
+    //    that may have its own `CARGO_TARGET_DIR` set for reasons
+    //    unrelated to ours. Cargo's fingerprint cache keys on
+    //    `(package name, version, source)`, not path — two
+    //    identically-named probe projects land on the same cache
+    //    entry and the second one "succeeds" instantly without
+    //    rustc. Explicitly pointing at the project-local `target/`
+    //    overrides any inherited value (plain `env_remove` isn't
+    //    enough on CI — some runners re-inject it through other
+    //    Cargo env vars).
+    //
+    // 2. **Disable terminal colors.** Our stderr parser keys on
+    //    lines starting with `error` / containing `: error`. ANSI
+    //    color escapes (`\x1b[1;31merror…`) break both checks and
+    //    silently yield empty `errors`.
+    //
+    // 3. **Bypass `RUSTC_WRAPPER`.** Wrappers like `sccache` cache
+    //    `rustc` output by input hash; a misconfigured wrapper can
+    //    short-circuit the real compile. For a correctness check
+    //    rlm cares about accuracy, not wrapper-speed.
     Command::new("cargo")
         .arg("check")
         .arg("--message-format")
         .arg("short")
         .arg("--quiet")
         .current_dir(project_root)
-        // Strip any CARGO_TARGET_DIR inherited from the parent process.
-        // rlm runs as a subprocess — the caller (an agent, an IDE,
-        // `cargo nextest run`, etc.) often sets this for its own target
-        // directory, which is invariably wrong for us: the project we're
-        // checking has its own `./target` that Cargo's fingerprint cache
-        // keys on (package name + version + source). If two subprocess
-        // cargo-check invocations land in the same outer target dir
-        // with matching fingerprints, the second one "succeeds"
-        // instantly without running rustc — leaving us with
-        // `passed: status.success() && errors.is_empty() == true` even
-        // when the source is broken (Copilot finding #5; caught on CI,
-        // reproduces locally via `CARGO_TARGET_DIR=/tmp/shared …`).
-        .env_remove("CARGO_TARGET_DIR")
+        .env("CARGO_TARGET_DIR", project_root.join("target"))
+        .env("CARGO_TERM_COLOR", "never")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

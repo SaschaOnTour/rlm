@@ -168,6 +168,31 @@ impl Drop for EnvVarGuard {
     }
 }
 
+/// Capture raw cargo-check output with the same env-hygiene rules
+/// `spawn_cargo_check` applies, so the regression test can print what
+/// cargo actually says on the failing platform.
+fn raw_cargo_check(project: &std::path::Path) -> String {
+    use std::process::Command;
+    let output = Command::new("cargo")
+        .arg("check")
+        .arg("--message-format")
+        .arg("short")
+        .arg("--quiet")
+        .current_dir(project)
+        .env("CARGO_TARGET_DIR", project.join("target"))
+        .env("CARGO_TERM_COLOR", "never")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
+        .output()
+        .expect("spawn cargo for diagnostics");
+    format!(
+        "exit_status: {:?}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    )
+}
+
 #[test]
 fn cargo_check_ignores_inherited_cargo_target_dir() {
     // Simulate a leaked CARGO_TARGET_DIR — the exact shape the CI
@@ -179,15 +204,21 @@ fn cargo_check_ignores_inherited_cargo_target_dir() {
     // cache-hit "passed: true, errors: []" we saw on CI.
     let broken = setup_cargo_project("pub fn broken() -> i32 { \n");
     let report = run_check(broken.path(), "rust", &default_settings()).expect("check should run");
+
+    // Diagnostic: if the assertion below fails, show what cargo
+    // actually emitted on this platform. Computed lazily via
+    // `raw_cargo_check` — only paid when the assertion message is
+    // formatted (on panic).
+    let diag = || raw_cargo_check(broken.path());
     assert!(
         !report.passed,
-        "broken source must fail the check even with leaked CARGO_TARGET_DIR. \
-         report: {report:#?}"
+        "broken source must fail the check. report: {report:#?}; raw cargo: {}",
+        diag()
     );
     assert!(
         !report.errors.is_empty(),
-        "broken source must have at least one error even with leaked CARGO_TARGET_DIR. \
-         report: {report:#?}"
+        "broken source must have at least one error. report: {report:#?}; raw cargo: {}",
+        diag()
     );
 
     // Second: a separate valid project that would share the shared
@@ -195,15 +226,16 @@ fn cargo_check_ignores_inherited_cargo_target_dir() {
     // still do its own full build (project-local ./target).
     let valid = setup_cargo_project("pub fn ok() -> i32 { 42 }\n");
     let report = run_check(valid.path(), "rust", &default_settings()).expect("check should run");
+    let diag_valid = || raw_cargo_check(valid.path());
     assert!(
         report.passed,
-        "valid source must pass even when env points at a shared outer target dir. \
-         report: {report:#?}"
+        "valid source must pass. report: {report:#?}; raw cargo: {}",
+        diag_valid()
     );
     assert!(
         valid.path().join("target").exists(),
-        "cargo check must build into the project's own ./target, \
-         not the inherited CARGO_TARGET_DIR"
+        "cargo check must build into the project's own ./target. raw cargo: {}",
+        diag_valid()
     );
 }
 
