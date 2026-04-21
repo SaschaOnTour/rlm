@@ -12,33 +12,44 @@ use tempfile::TempDir;
 
 #[test]
 fn config_new_sets_paths() {
-    let cfg = Config::new("/tmp/project");
-    assert_eq!(cfg.project_root, PathBuf::from("/tmp/project"));
-    assert_eq!(cfg.rlm_dir, PathBuf::from("/tmp/project/.rlm"));
-    assert_eq!(cfg.db_path, PathBuf::from("/tmp/project/.rlm/index.db"));
+    // Build expected paths via the same `.join` that `Config::new` uses
+    // internally, so the assertions hold regardless of platform path
+    // separator (Windows `\` vs. Unix `/`).
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let cfg = Config::new(root);
+    assert_eq!(cfg.project_root, PathBuf::from(root));
+    assert_eq!(cfg.rlm_dir, root.join(".rlm"));
+    assert_eq!(cfg.db_path, root.join(".rlm").join("index.db"));
 }
 
 #[test]
 fn relative_path_strips_prefix() {
-    let cfg = Config::new("/tmp/project");
-    let rel = cfg.relative_path(Path::new("/tmp/project/src/main.rs"));
+    let tmp = TempDir::new().unwrap();
+    let cfg = Config::new(tmp.path());
+    let abs = tmp.path().join("src").join("main.rs");
+    let rel = cfg.relative_path(&abs);
+    // `relative_path` normalises backslashes to forward slashes, so the
+    // expected value is stable across platforms.
     assert_eq!(rel, "src/main.rs");
 }
 
 #[test]
 fn should_exclude_patterns() {
-    let cfg = Config::new("/tmp/project");
+    let tmp = TempDir::new().unwrap();
+    let cfg = Config::new(tmp.path());
+    let root = tmp.path();
 
-    // Default patterns should match
-    assert!(cfg.should_exclude(Path::new("/tmp/project/node_modules/foo.js")));
-    assert!(cfg.should_exclude(Path::new("/tmp/project/.git/config")));
-    assert!(cfg.should_exclude(Path::new("/tmp/project/target/debug/app")));
-    assert!(cfg.should_exclude(Path::new("/tmp/project/dist/bundle.js")));
-    assert!(cfg.should_exclude(Path::new("/tmp/project/__pycache__/mod.pyc")));
+    // Default patterns should match (contains-based, separator-agnostic)
+    assert!(cfg.should_exclude(&root.join("node_modules").join("foo.js")));
+    assert!(cfg.should_exclude(&root.join(".git").join("config")));
+    assert!(cfg.should_exclude(&root.join("target").join("debug").join("app")));
+    assert!(cfg.should_exclude(&root.join("dist").join("bundle.js")));
+    assert!(cfg.should_exclude(&root.join("__pycache__").join("mod.pyc")));
 
     // Non-excluded paths should not match
-    assert!(!cfg.should_exclude(Path::new("/tmp/project/src/main.rs")));
-    assert!(!cfg.should_exclude(Path::new("/tmp/project/lib/utils.js")));
+    assert!(!cfg.should_exclude(&root.join("src").join("main.rs")));
+    assert!(!cfg.should_exclude(&root.join("lib").join("utils.js")));
 }
 
 #[test]
@@ -64,9 +75,12 @@ fn custom_quality_log_path() {
 
 #[test]
 fn config_path_normalization() {
-    let cfg = Config::new("/tmp/project");
-
-    // Windows-style path should be normalized
-    let rel = cfg.relative_path(Path::new("/tmp/project/src\\nested\\file.rs"));
+    // Root itself uses a platform-native separator via TempDir; the test
+    // still builds the input with literal backslashes to verify that
+    // `relative_path` normalises them in the output regardless of OS.
+    let tmp = TempDir::new().unwrap();
+    let cfg = Config::new(tmp.path());
+    let input = format!("{}/src\\nested\\file.rs", tmp.path().display());
+    let rel = cfg.relative_path(Path::new(&input));
     assert!(!rel.contains('\\'));
 }

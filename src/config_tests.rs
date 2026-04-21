@@ -83,7 +83,8 @@ fn default_settings() {
 
 #[test]
 fn is_file_too_large() {
-    let cfg = Config::new("/tmp/project");
+    let tmp = TempDir::new().unwrap();
+    let cfg = Config::new(tmp.path());
 
     // Default max is DEFAULT_MAX_FILE_SIZE_MB
     let max_bytes = u64::from(DEFAULT_MAX_FILE_SIZE_MB) * BYTES_PER_MB;
