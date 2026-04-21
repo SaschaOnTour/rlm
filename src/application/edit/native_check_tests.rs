@@ -55,10 +55,11 @@ fn rust_check_passes_on_valid_code() {
 fn rust_check_fails_on_syntax_error() {
     let dir = setup_cargo_project("pub fn broken() -> i32 { \n");
     let report = run_check(dir.path(), "rust", &default_settings()).expect("check should run");
-    assert!(!report.passed);
+    assert!(!report.passed, "report: {report:#?}");
     assert!(
         !report.errors.is_empty(),
-        "expected at least one error on syntax-broken input"
+        "expected at least one error on syntax-broken input. \
+         Full BuildReport: {report:#?}"
     );
 }
 
@@ -71,7 +72,8 @@ fn rust_check_fails_on_name_resolution_error() {
     let report = run_check(dir.path(), "rust", &default_settings()).expect("check should run");
     assert!(
         !report.passed,
-        "name-resolution error should fail the check"
+        "name-resolution error should fail the check. \
+         Full BuildReport: {report:#?}"
     );
     let joined = report
         .errors
@@ -81,7 +83,9 @@ fn rust_check_fails_on_name_resolution_error() {
         .join("\n");
     assert!(
         joined.contains("bn") || joined.contains("cannot find") || joined.contains("not found"),
-        "expected error to mention the missing ident, got: {joined}"
+        "expected error to mention the missing ident. \
+         Full BuildReport: {report:#?}, \
+         joined error messages: {joined:?}"
     );
 }
 
@@ -112,6 +116,95 @@ fn check_returns_none_for_unsupported_lang() {
     let dir = setup_cargo_project("pub fn ok() -> i32 { 42 }\n");
     let report = run_check(dir.path(), "java", &default_settings());
     assert!(report.is_none());
+}
+
+// ─── Cargo cache isolation (CI regression) ────────────────────────────
+//
+// When the parent process has `CARGO_TARGET_DIR` set (e.g. under
+// `cargo nextest run` on CI), that env var leaks into the `cargo
+// check` subprocess we spawn. Every test's probe project has the
+// same package name / version, so cargo's fingerprint cache in the
+// shared target dir returns "already built" and exits immediately
+// without running rustc — leaving `BuildReport { passed: true,
+// errors: [] }` regardless of whether the source is broken.
+//
+// The fix (in `spawn_cargo_check`) removes `CARGO_TARGET_DIR` from
+// the subprocess env so cargo falls back to the project's own
+// `./target`. This test pins that fix by simulating the leaked env
+// var explicitly. Note the serial_test attribute would be the clean
+// way to guard against env-var data races; rlm doesn't depend on it,
+// so we restore the env on scope exit with a Drop guard instead.
+
+/// Scope guard that restores (or removes) an env var on drop so one
+/// test's env mutation doesn't leak to siblings.
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let original = std::env::var_os(key);
+        // Safety: std::env::set_var is `unsafe` in newer Rust
+        // editions due to cross-thread races; test is single-threaded
+        // per nextest-process-per-test, and we restore on drop.
+        #[allow(unused_unsafe)]
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        #[allow(unused_unsafe)]
+        unsafe {
+            match &self.original {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
+#[test]
+fn cargo_check_ignores_inherited_cargo_target_dir() {
+    // Simulate a leaked CARGO_TARGET_DIR — the exact shape the CI
+    // runner gets when nextest sets it for the parent test process.
+    let shared = tempfile::tempdir().expect("shared target tempdir");
+    let _guard = EnvVarGuard::set("CARGO_TARGET_DIR", shared.path());
+
+    // First: a broken-syntax project. Must report errors — not the
+    // cache-hit "passed: true, errors: []" we saw on CI.
+    let broken = setup_cargo_project("pub fn broken() -> i32 { \n");
+    let report = run_check(broken.path(), "rust", &default_settings()).expect("check should run");
+    assert!(
+        !report.passed,
+        "broken source must fail the check even with leaked CARGO_TARGET_DIR. \
+         report: {report:#?}"
+    );
+    assert!(
+        !report.errors.is_empty(),
+        "broken source must have at least one error even with leaked CARGO_TARGET_DIR. \
+         report: {report:#?}"
+    );
+
+    // Second: a separate valid project that would share the shared
+    // target dir's fingerprint cache if we inherited the env. It must
+    // still do its own full build (project-local ./target).
+    let valid = setup_cargo_project("pub fn ok() -> i32 { 42 }\n");
+    let report = run_check(valid.path(), "rust", &default_settings()).expect("check should run");
+    assert!(
+        report.passed,
+        "valid source must pass even when env points at a shared outer target dir. \
+         report: {report:#?}"
+    );
+    assert!(
+        valid.path().join("target").exists(),
+        "cargo check must build into the project's own ./target, \
+         not the inherited CARGO_TARGET_DIR"
+    );
 }
 
 // ─── wait_with_timeout stderr-capture contract (Copilot #5) ───────────

@@ -111,6 +111,19 @@ fn spawn_cargo_check(project_root: &Path) -> std::io::Result<Child> {
         .arg("short")
         .arg("--quiet")
         .current_dir(project_root)
+        // Strip any CARGO_TARGET_DIR inherited from the parent process.
+        // rlm runs as a subprocess — the caller (an agent, an IDE,
+        // `cargo nextest run`, etc.) often sets this for its own target
+        // directory, which is invariably wrong for us: the project we're
+        // checking has its own `./target` that Cargo's fingerprint cache
+        // keys on (package name + version + source). If two subprocess
+        // cargo-check invocations land in the same outer target dir
+        // with matching fingerprints, the second one "succeeds"
+        // instantly without running rustc — leaving us with
+        // `passed: status.success() && errors.is_empty() == true` even
+        // when the source is broken (Copilot finding #5; caught on CI,
+        // reproduces locally via `CARGO_TARGET_DIR=/tmp/shared …`).
+        .env_remove("CARGO_TARGET_DIR")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
