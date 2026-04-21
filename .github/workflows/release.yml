@@ -44,17 +44,23 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install rustqual
+        run: cargo install rustqual --locked --version ^1.0
+
       - name: Check formatting
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets
-
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Run tests
         run: cargo nextest run
+
+      - name: Quality gate (rustqual)
+        run: rustqual --fail-on-warnings
 
   # Binaries bauen
   build:
