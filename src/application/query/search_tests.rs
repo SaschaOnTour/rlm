@@ -304,6 +304,92 @@ fn sanitize_fts_query_preserves_underscore_in_identifier() {
     assert_eq!(out, "authenticate_user");
 }
 
+// ─── pathological inputs must not produce an FTS5 syntax error ───────
+//
+// The sanitizer whitelists `*` and preserves the literal token `OR`
+// so users can opt into prefix matching and explicit disjunction.
+// Pathological shapes — a bare `*`, a dangling `OR`, repeated `OR` —
+// are still valid on the whitelist but would become a syntactically
+// invalid FTS5 query (Copilot finding). These pin that the sanitizer
+// cleans those up before the query reaches FTS5.
+
+#[test]
+fn sanitize_fts_query_standalone_star_drops_to_empty() {
+    let out = sanitize_fts_query("*");
+    assert_eq!(
+        out, "",
+        "bare `*` is not a valid FTS5 token (only a suffix like `foo*` is); must be empty"
+    );
+}
+
+#[test]
+fn sanitize_fts_query_standalone_or_drops_to_empty() {
+    let out = sanitize_fts_query("OR");
+    assert_eq!(
+        out, "",
+        "bare `OR` without operands is an FTS5 syntax error; must be empty"
+    );
+}
+
+#[test]
+fn sanitize_fts_query_strips_leading_or() {
+    let out = sanitize_fts_query("OR foo");
+    assert_eq!(
+        out, "foo",
+        "leading `OR` has no left operand → must be stripped"
+    );
+}
+
+#[test]
+fn sanitize_fts_query_strips_trailing_or() {
+    let out = sanitize_fts_query("foo OR");
+    assert_eq!(
+        out, "foo",
+        "trailing `OR` has no right operand → must be stripped"
+    );
+}
+
+#[test]
+fn sanitize_fts_query_collapses_consecutive_or() {
+    let out = sanitize_fts_query("foo OR OR bar");
+    assert_eq!(out, "foo OR bar", "consecutive `OR` collapses to one");
+}
+
+#[test]
+fn sanitize_fts_query_drops_standalone_star_but_keeps_suffix_star() {
+    let out = sanitize_fts_query("foo * bar*");
+    assert_eq!(
+        out, "foo bar*",
+        "standalone `*` has no stem → drop; `bar*` is a valid prefix → keep"
+    );
+}
+
+#[test]
+fn sanitize_fts_query_only_operators_yields_empty() {
+    for junk in ["* OR *", "OR OR OR", "* * *"] {
+        assert_eq!(
+            sanitize_fts_query(junk),
+            "",
+            "query of only operators ({junk:?}) has no content tokens → empty"
+        );
+    }
+}
+
+/// End-to-end: the pathological inputs above must not bubble up as an
+/// FTS5 error (`RlmError` with a SQLite-syntax message). They must
+/// come back as `Ok` with no hits, mirroring `search_no_results`.
+#[test]
+fn search_does_not_crash_on_pathological_operator_only_queries() {
+    let db = setup_search_corpus();
+    for q in ["*", "OR", "* OR *", "OR OR OR", "foo OR", "OR foo"] {
+        let result = search_chunks(&db, q, TEST_SEARCH_LIMIT);
+        assert!(
+            result.is_ok(),
+            "pathological FTS input {q:?} must short-circuit to Ok — got: {result:?}"
+        );
+    }
+}
+
 #[test]
 fn run_fts_empty_db_returns_empty() {
     let db = test_db();

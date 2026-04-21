@@ -166,8 +166,54 @@ fn sanitize_fts_query(query: &str) -> String {
     // quotes that became spaces don't throw off the count.
     let balanced = balance_quotes(&mapped);
 
-    // Collapse runs of whitespace and trim — empty input → empty output.
-    balanced.split_whitespace().collect::<Vec<_>>().join(" ")
+    // Tokenise + drop whitespace.
+    let tokens: Vec<&str> = balanced.split_whitespace().collect();
+
+    // Whitelisting `*` / `OR` lets users opt into prefix + disjunction
+    // queries, but a bare `*` or a dangling / repeated `OR` is a
+    // syntactically invalid FTS5 query — it would come back as an
+    // opaque SQLite error instead of "no hits". Fix that here so the
+    // sanitizer's contract is "everything past here is a parseable
+    // FTS5 expression".
+    clean_operator_tokens(&tokens).join(" ")
+}
+
+/// Post-process tokens so the resulting query is a valid FTS5 expression.
+///
+/// Rules (applied in order):
+/// 1. Drop any standalone `*` — FTS5 only treats `*` as a meaningful
+///    marker when suffixed to another token (`foo*`). Bare `*` is a
+///    syntax error.
+/// 2. Collapse consecutive `OR` tokens to one, and strip leading /
+///    trailing `OR` — a dangling operator has no operand.
+/// 3. If nothing content-bearing is left (only operators), return an
+///    empty vec — the caller then short-circuits to "no hits" instead
+///    of letting FTS5 raise.
+fn clean_operator_tokens(tokens: &[&str]) -> Vec<String> {
+    let without_bare_star: Vec<&str> = tokens.iter().copied().filter(|t| *t != "*").collect();
+
+    let mut dedup: Vec<String> = Vec::with_capacity(without_bare_star.len());
+    for &t in &without_bare_star {
+        if t == "OR" && dedup.last().is_some_and(|s| s == "OR") {
+            continue;
+        }
+        dedup.push(t.to_string());
+    }
+
+    while dedup.first().is_some_and(|s| s == "OR") {
+        dedup.remove(0);
+    }
+    while dedup.last().is_some_and(|s| s == "OR") {
+        dedup.pop();
+    }
+
+    // Only operators left (shouldn't happen after the stripping above,
+    // but belt-and-braces — an all-OR input `"OR OR OR"` dedupes to
+    // `"OR"`, which both leading- and trailing-strip to empty).
+    if dedup.iter().all(|t| t == "OR") {
+        return Vec::new();
+    }
+    dedup
 }
 
 /// Remove the last `"` if the string contains an odd number of them.
