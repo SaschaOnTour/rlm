@@ -1,35 +1,47 @@
 //! Utility tool handlers for the MCP server.
 //!
-//! Contains handlers for utility/diagnostic tools: stats, partition, summarize,
-//! diff, context, deps, scope, savings, verify, supported.
-//!
-//! Separated from `tool_handlers.rs` (orient + search + analyze + edit handlers)
-//! for SRP compliance.
+//! Contains handlers for utility/diagnostic tools: stats, quality,
+//! partition, summarize, diff, context, deps, scope, verify, supported.
+//! Every handler is a thin wrapper over one [`RlmSession`] method.
 
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 
 use crate::application::content::partition;
-use crate::application::content::{
-    DepsQuery, DiffFileQuery, DiffSymbolQuery, PartitionQuery, SummarizeQuery,
-};
-use crate::application::symbol::{ContextQuery, ContextWithGraphQuery, ScopeQuery};
-use crate::config::Config;
-use crate::db::Database;
-use crate::interface::shared::{record_file_query, record_symbol_query};
-use crate::operations;
-use crate::operations::savings;
+use crate::application::query::stats::QualityFlags;
+use crate::application::session::RlmSession;
 use crate::output::Formatter;
 
 use super::server::RlmServer;
 
-/// Handle the `stats` tool: get indexing statistics.
+/// Handle the `stats` tool: indexing summary or token-savings report.
 // qual:api
-pub fn handle_stats(db: &Database, formatter: Formatter) -> Result<CallToolResult, McpError> {
-    match operations::get_stats(db) {
-        Ok(result) => Ok(RlmServer::success_text(
+pub fn handle_stats(
+    session: &RlmSession,
+    savings_flag: bool,
+    since: Option<&str>,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
+    match session.stats(savings_flag, since) {
+        Ok(out) => Ok(RlmServer::success_text(
             formatter,
-            RlmServer::to_json(&result),
+            RlmServer::to_json(&out.body),
+        )),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
+    }
+}
+
+/// Handle the `quality` tool: inspect parse-quality issues.
+// qual:api
+pub fn handle_quality(
+    session: &RlmSession,
+    flags: QualityFlags,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
+    match session.quality(flags) {
+        Ok(body) => Ok(RlmServer::success_text(
+            formatter,
+            RlmServer::to_json(&body),
         )),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
@@ -38,44 +50,16 @@ pub fn handle_stats(db: &Database, formatter: Formatter) -> Result<CallToolResul
 /// Handle the `partition` tool: split a file into chunks.
 // qual:api
 pub fn handle_partition(
-    db: &Database,
+    session: &RlmSession,
     path: &str,
     strategy_str: &str,
-    project_root: &std::path::Path,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    let strategy = if strategy_str == "semantic" {
-        partition::Strategy::Semantic
-    } else if let Some(rest) = strategy_str.strip_prefix("uniform:") {
-        match rest.parse::<usize>() {
-            Ok(0) => {
-                return Ok(RlmServer::error_text(
-                    formatter,
-                    "uniform chunk size must be >= 1".into(),
-                ))
-            }
-            Ok(n) => partition::Strategy::Uniform(n),
-            Err(e) => {
-                return Ok(RlmServer::error_text(
-                    formatter,
-                    format!("invalid chunk size: {e}"),
-                ))
-            }
-        }
-    } else if let Some(rest) = strategy_str.strip_prefix("keyword:") {
-        partition::Strategy::Keyword(rest.to_string())
-    } else {
-        return Ok(RlmServer::error_text(
-            formatter,
-            "strategy must be: semantic, uniform:N, or keyword:PATTERN".into(),
-        ));
+    let strategy: partition::Strategy = match strategy_str.parse() {
+        Ok(s) => s,
+        Err(e) => return Ok(RlmServer::error_text(formatter, e.to_string())),
     };
-
-    let query = PartitionQuery {
-        strategy,
-        project_root: project_root.to_path_buf(),
-    };
-    match record_file_query(db, &query, path) {
+    match session.partition(path, strategy) {
         Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
@@ -84,11 +68,11 @@ pub fn handle_partition(
 /// Handle the `summarize` tool: generate a condensed file summary.
 // qual:api
 pub fn handle_summarize(
-    db: &Database,
+    session: &RlmSession,
     path: &str,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match record_file_query(db, &SummarizeQuery, path) {
+    match session.summarize(path) {
         Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
@@ -97,25 +81,12 @@ pub fn handle_summarize(
 /// Handle the `diff` tool: compare indexed vs disk version.
 // qual:api
 pub fn handle_diff(
-    db: &Database,
+    session: &RlmSession,
     path: &str,
     symbol: Option<&str>,
-    project_root: &std::path::Path,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    let result = if let Some(sym) = symbol {
-        let query = DiffSymbolQuery {
-            symbol: sym.to_string(),
-            project_root: project_root.to_path_buf(),
-        };
-        record_file_query(db, &query, path)
-    } else {
-        let query = DiffFileQuery {
-            project_root: project_root.to_path_buf(),
-        };
-        record_file_query(db, &query, path)
-    };
-    match result {
+    match session.diff(path, symbol) {
         Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
@@ -124,17 +95,12 @@ pub fn handle_diff(
 /// Handle the `context` tool: complete understanding of a symbol.
 // qual:api
 pub fn handle_context(
-    db: &Database,
+    session: &RlmSession,
     symbol: &str,
     include_graph: bool,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    let result = if include_graph {
-        record_symbol_query::<ContextWithGraphQuery>(db, symbol)
-    } else {
-        record_symbol_query::<ContextQuery>(db, symbol)
-    };
-    match result {
+    match session.context(symbol, include_graph) {
         Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
@@ -143,11 +109,11 @@ pub fn handle_context(
 /// Handle the `deps` tool: file dependency analysis.
 // qual:api
 pub fn handle_deps(
-    db: &Database,
+    session: &RlmSession,
     path: &str,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match record_file_query(db, &DepsQuery, path) {
+    match session.deps(path) {
         Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
@@ -156,29 +122,13 @@ pub fn handle_deps(
 /// Handle the `scope` tool: symbols visible at a specific line.
 // qual:api
 pub fn handle_scope(
-    db: &Database,
+    session: &RlmSession,
     path: &str,
     line: u32,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match record_file_query(db, &ScopeQuery { line }, path) {
+    match session.scope(path, line) {
         Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
-        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-    }
-}
-
-/// Handle the `savings` tool: token savings report.
-// qual:api
-pub fn handle_savings(
-    db: &Database,
-    since: Option<&str>,
-    formatter: Formatter,
-) -> Result<CallToolResult, McpError> {
-    match savings::get_savings_report(db, since) {
-        Ok(report) => Ok(RlmServer::success_text(
-            formatter,
-            RlmServer::to_json(&report),
-        )),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
@@ -186,39 +136,16 @@ pub fn handle_savings(
 /// Handle the `verify` tool: verify index integrity.
 // qual:api
 pub fn handle_verify(
-    config: &Config,
+    session: &RlmSession,
     fix: bool,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    let db = match crate::db::Database::open_required(&config.db_path) {
-        Ok(db) => db,
-        Err(crate::error::RlmError::IndexNotFound) => {
-            return Ok(RlmServer::error_text(
-                formatter,
-                "Index not found. Call the 'index' tool first.".into(),
-            ));
-        }
-        Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
-    };
-
-    let report = match operations::verify_index(&db, &config.project_root) {
-        Ok(r) => r,
-        Err(e) => return Ok(RlmServer::error_text(formatter, e.to_string())),
-    };
-
-    if fix && !report.is_ok() {
-        match operations::fix_integrity(&db, &report) {
-            Ok(fix_result) => Ok(RlmServer::success_text(
-                formatter,
-                RlmServer::to_json(&fix_result),
-            )),
-            Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-        }
-    } else {
-        Ok(RlmServer::success_text(
+    match session.verify(fix) {
+        Ok(result) => Ok(RlmServer::success_text(
             formatter,
-            RlmServer::to_json(&report),
-        ))
+            RlmServer::to_json(&result),
+        )),
+        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
 }
 
@@ -227,6 +154,6 @@ pub fn handle_verify(
 pub fn handle_supported(formatter: Formatter) -> Result<CallToolResult, McpError> {
     Ok(RlmServer::success_text(
         formatter,
-        RlmServer::to_json(&operations::list_supported()),
+        RlmServer::to_json(&RlmSession::supported()),
     ))
 }

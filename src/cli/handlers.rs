@@ -1,34 +1,32 @@
 //! CLI handlers for code-exploration and edit commands.
 //!
-//! System/utility commands live in `cli::handlers_util`.
-//! Shared helpers live in `cli::helpers`.
+//! Every handler in this module is a thin wrapper: parse CLI flags,
+//! call one [`RlmSession`] method, emit through the [`Formatter`].
+//! All business logic — DB access, staleness refresh, savings
+//! bookkeeping, envelope splicing — lives behind `RlmSession` in
+//! the application layer.
 
-use crate::application::content::{
-    DepsQuery, DiffFileQuery, DiffSymbolQuery, PartitionQuery, SummarizeQuery,
-};
-use crate::application::dto::chunk_dto::ChunkDto;
+use crate::application::content::partition;
 use crate::application::edit::inserter::InsertPosition;
-use crate::application::edit::validator::SyntaxGuard;
-use crate::application::edit::{inserter, replacer};
-use crate::application::query::peek;
-use crate::application::query::tree;
-use crate::application::symbol::{ContextQuery, ContextWithGraphQuery, RefsQuery, ScopeQuery};
-use crate::cli::helpers::{
-    emit_read_symbol, format_chunks, get_config, get_db, map_err, parse_strategy, print_str,
-    print_write_result, run_file_pipeline, run_symbol_pipeline, CmdResult,
+use crate::application::edit::write_dispatch::{
+    DeleteInput, ExtractInput, InsertInput, ReplaceInput,
 };
-use crate::interface::shared::{
-    record_file_query, record_operation, record_symbol_query, AlternativeCost, OperationMeta,
-};
-use crate::operations;
-use crate::operations::savings;
+use crate::application::query::read::ReadSymbolInput;
+use crate::application::query::search::FieldsMode;
+use crate::application::query::DetailLevel;
+use crate::application::session::RlmSession;
+use crate::cli::commands::{DetailArg, FieldsArg};
+use crate::cli::helpers::{map_err, print_str, CmdResult};
 use crate::output::{self, Formatter};
 
+// ── Read-side commands ──────────────────────────────────────────────
+
 pub fn cmd_index(path: &str, formatter: Formatter) -> CmdResult {
-    let config = if path == "." {
-        get_config()?
+    // `.` means "use cwd"; any other value is taken as given.
+    let root = if path == "." {
+        std::env::current_dir().map_err(map_err)?
     } else {
-        crate::config::Config::new(path)
+        std::path::PathBuf::from(path)
     };
 
     let progress = |current: usize, total: usize| {
@@ -36,40 +34,36 @@ pub fn cmd_index(path: &str, formatter: Formatter) -> CmdResult {
             eprint!("\rIndexing... {current}/{total} files");
         }
     };
-    let result = crate::application::index::run_index(&config, Some(&progress)).map_err(map_err)?;
+    let result = RlmSession::index_project(&root, Some(&progress)).map_err(map_err)?;
     if result.files_scanned > 0 {
         eprintln!();
     }
-    let output: operations::IndexOutput = result.into();
-    output::print(formatter, &output);
+    output::print(formatter, &result);
     Ok(())
 }
 
-pub fn cmd_search(query: &str, limit: usize, formatter: Formatter) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let result = operations::search_chunks(&db, query, limit).map_err(map_err)?;
-    let meta = OperationMeta {
-        command: "search",
-        files_touched: result.file_count,
-        alternative: AlternativeCost::AtLeastBody {
-            base: result.tokens.output,
-        },
+pub fn cmd_search(query: &str, limit: usize, fields: FieldsArg, formatter: Formatter) -> CmdResult {
+    let mode = match fields {
+        FieldsArg::Full => FieldsMode::Full,
+        FieldsArg::Minimal => FieldsMode::Minimal,
     };
-    let response = record_operation(&db, &meta, &result);
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let response = session.search(query, limit, mode).map_err(map_err)?;
     print_str(formatter, &response.body);
     Ok(())
 }
 
+// qual:allow(srp_params) reason: "path, symbol, parent, section, metadata, formatter are 6 orthogonal CLI args"
 pub fn cmd_read(
     path: &str,
     symbol: Option<&str>,
+    parent: Option<&str>,
     section: Option<&str>,
     metadata: bool,
     formatter: Formatter,
 ) -> CmdResult {
     match (symbol, section) {
-        (Some(sym), _) => cmd_read_symbol(path, sym, metadata, formatter),
+        (Some(sym), _) => cmd_read_symbol(path, sym, parent, metadata, formatter),
         (_, Some(heading)) => cmd_read_section(path, heading, formatter),
         _ => Err(map_err(
             "read requires --symbol or --section. Use Claude Code's Read for full files or line ranges.",
@@ -77,138 +71,146 @@ pub fn cmd_read(
     }
 }
 
-fn cmd_read_symbol(path: &str, sym: &str, metadata: bool, formatter: Formatter) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-
-    let chunks = db.get_chunks_by_ident(sym).map_err(map_err)?;
-    // Single O(1) file lookup instead of get_all_files() per chunk
-    let file_id = db.get_file_by_path(path).ok().flatten().map(|f| f.id);
-    let file_chunks: Vec<_> = chunks
-        .iter()
-        .filter(|c| file_id.is_some_and(|fid| c.file_id == fid))
-        .collect();
-
-    let target_json = if file_chunks.is_empty() {
-        if chunks.is_empty() {
-            return Err(map_err(format!("symbol not found: {sym}")));
-        }
-        let dtos: Vec<ChunkDto> = chunks.iter().map(ChunkDto::from).collect();
-        serde_json::json!(dtos)
-    } else {
-        // file_chunks: Vec<&Chunk> — deref once so ChunkDto::<'a>::from(&Chunk)
-        // borrows directly from the underlying chunks without cloning.
-        let dtos: Vec<ChunkDto> = file_chunks.iter().map(|c| ChunkDto::from(*c)).collect();
-        serde_json::json!(dtos)
-    };
-
-    let json = format_chunks(&db, sym, &target_json, metadata);
-    emit_read_symbol(&db, path, &json, formatter);
+fn cmd_read_symbol(
+    path: &str,
+    sym: &str,
+    parent: Option<&str>,
+    metadata: bool,
+    formatter: Formatter,
+) -> CmdResult {
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let response = session
+        .read_symbol(&ReadSymbolInput {
+            path,
+            symbol: sym,
+            parent,
+            metadata,
+        })
+        .map_err(map_err)?;
+    print_str(formatter, &response.body);
     Ok(())
 }
 
 fn cmd_read_section(path: &str, heading: &str, formatter: Formatter) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-
-    let file = db.get_file_by_path(path).map_err(map_err)?;
-    let file = file.ok_or_else(|| map_err(format!("file not found: {path}")))?;
-    let chunks = db.get_chunks_for_file(file.id).map_err(map_err)?;
-    match chunks
-        .iter()
-        .find(|c| c.kind.is_section() && c.ident == heading)
-    {
-        Some(c) => {
-            let meta = OperationMeta {
-                command: "read_section",
-                files_touched: 1,
-                alternative: AlternativeCost::SingleFile {
-                    path: path.to_string(),
-                },
-            };
-            let dto = ChunkDto::from(c);
-            let response = record_operation(&db, &meta, &dto);
-            print_str(formatter, &response.body);
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let result = session.read_section(path, heading).map_err(map_err)?;
+    match result.into_body_or_error() {
+        Ok(body) => {
+            print_str(formatter, &body);
+            Ok(())
         }
-        None => return Err(map_err(format!("section not found: {heading}"))),
+        Err(msg) => Err(map_err(msg)),
     }
-    Ok(())
 }
 
-pub fn cmd_overview(detail: &str, path: Option<&str>, formatter: Formatter) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-
-    let meta = OperationMeta {
-        command: "overview",
-        files_touched: 0,
-        alternative: AlternativeCost::ScopedFiles {
-            prefix: path.map(String::from),
-        },
+pub fn cmd_overview(detail: DetailArg, path: Option<&str>, formatter: Formatter) -> CmdResult {
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let level = match detail {
+        DetailArg::Minimal => DetailLevel::Minimal,
+        DetailArg::Standard => DetailLevel::Standard,
+        DetailArg::Tree => DetailLevel::Tree,
     };
-
-    match detail {
-        "minimal" => {
-            let result = peek::peek(&db, path).map_err(map_err)?;
-            let response = record_operation(&db, &meta, &result);
-            print_str(formatter, &response.body);
-        }
-        "standard" => {
-            let entries = operations::build_map(&db, path).map_err(map_err)?;
-            let response = record_operation(&db, &meta, &entries);
-            print_str(formatter, &response.body);
-        }
-        "tree" => {
-            let nodes = tree::build_tree(&db, path).map_err(map_err)?;
-            let response = record_operation(&db, &meta, &nodes);
-            print_str(formatter, &response.body);
-        }
-        other => {
-            return Err(map_err(format!(
-                "unknown detail level: '{other}'. Use 'minimal', 'standard', or 'tree'."
-            )));
-        }
-    }
+    let response = session.overview(level, path).map_err(map_err)?;
+    print_str(formatter, &response.body);
     Ok(())
 }
 
 pub fn cmd_refs(symbol: &str, formatter: Formatter) -> CmdResult {
-    run_symbol_pipeline::<RefsQuery>(symbol, formatter)
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let response = session.refs(symbol).map_err(map_err)?;
+    print_str(formatter, &response.body);
+    Ok(())
 }
 
+pub fn cmd_partition(path: &str, strategy: &str, formatter: Formatter) -> CmdResult {
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let parsed: partition::Strategy = strategy.parse().map_err(map_err)?;
+    let response = session.partition(path, parsed).map_err(map_err)?;
+    print_str(formatter, &response.body);
+    Ok(())
+}
+
+pub fn cmd_summarize(path: &str, formatter: Formatter) -> CmdResult {
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let response = session.summarize(path).map_err(map_err)?;
+    print_str(formatter, &response.body);
+    Ok(())
+}
+
+pub fn cmd_diff(path: &str, symbol: Option<&str>, formatter: Formatter) -> CmdResult {
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let response = session.diff(path, symbol).map_err(map_err)?;
+    print_str(formatter, &response.body);
+    Ok(())
+}
+
+pub fn cmd_context(symbol: &str, graph: bool, formatter: Formatter) -> CmdResult {
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let response = session.context(symbol, graph).map_err(map_err)?;
+    print_str(formatter, &response.body);
+    Ok(())
+}
+
+pub fn cmd_deps(path: &str, formatter: Formatter) -> CmdResult {
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let response = session.deps(path).map_err(map_err)?;
+    print_str(formatter, &response.body);
+    Ok(())
+}
+
+pub fn cmd_scope(path: &str, line: u32, formatter: Formatter) -> CmdResult {
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let response = session.scope(path, line).map_err(map_err)?;
+    print_str(formatter, &response.body);
+    Ok(())
+}
+
+// ── Write-side commands ─────────────────────────────────────────────
+
+// qual:allow(srp_params) reason: "path, symbol, parent, code, preview, formatter are 6 orthogonal CLI args"
 pub fn cmd_replace(
     path: &str,
     symbol: &str,
+    parent: Option<&str>,
     code: &str,
     preview: bool,
     formatter: Formatter,
 ) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let input = ReplaceInput {
+        path,
+        symbol,
+        parent,
+        code,
+    };
 
     if preview {
-        let diff = replacer::preview_replace(&db, path, symbol, code).map_err(map_err)?;
+        let diff = session.replace_preview(&input).map_err(map_err)?;
         output::print(formatter, &diff);
     } else {
-        let outcome = replacer::replace_symbol(&db, path, symbol, code, &config.project_root)
-            .map_err(map_err)?;
-        let result_json = print_write_result(
-            &db,
-            &config,
-            path,
-            crate::application::index::PreviewSource::Symbol(symbol),
-            formatter,
-        );
-        if let Ok(entry) = savings::alternative_replace_entry(
-            &db,
-            path,
-            outcome.old_code_len,
-            code.len(),
-            result_json.len(),
-        ) {
-            savings::record_v2(&db, &entry);
-        }
+        let result_json = session.replace_apply(&input).map_err(map_err)?;
+        print_str(formatter, &result_json);
     }
+    Ok(())
+}
+
+pub fn cmd_delete(
+    path: &str,
+    symbol: &str,
+    parent: Option<&str>,
+    keep_docs: bool,
+    formatter: Formatter,
+) -> CmdResult {
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let result_json = session
+        .delete(&DeleteInput {
+            path,
+            symbol,
+            parent,
+            keep_docs,
+        })
+        .map_err(map_err)?;
+    print_str(formatter, &result_json);
     Ok(())
 }
 
@@ -218,69 +220,34 @@ pub fn cmd_insert(
     position: &InsertPosition,
     formatter: Formatter,
 ) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let guard = SyntaxGuard::new();
-    inserter::insert_code(&config.project_root, path, position, code, &guard).map_err(map_err)?;
-    let result_json = print_write_result(&db, &config, path, position.preview_source(), formatter);
-    if let Ok(entry) = savings::alternative_insert_entry(&db, path, code.len(), result_json.len()) {
-        savings::record_v2(&db, &entry);
-    }
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let result_json = session
+        .insert(&InsertInput {
+            path,
+            position,
+            code,
+        })
+        .map_err(map_err)?;
+    print_str(formatter, &result_json);
     Ok(())
 }
 
-pub fn cmd_partition(path: &str, strategy_str: &str, formatter: Formatter) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let query = PartitionQuery {
-        strategy: parse_strategy(strategy_str)?,
-        project_root: config.project_root.clone(),
-    };
-    let response = record_file_query(&db, &query, path).map_err(map_err)?;
-    print_str(formatter, &response.body);
+pub fn cmd_extract(
+    path: &str,
+    symbols: &[String],
+    to: &str,
+    parent: Option<&str>,
+    formatter: Formatter,
+) -> CmdResult {
+    let session = RlmSession::open_cwd().map_err(map_err)?;
+    let result_json = session
+        .extract(&ExtractInput {
+            path,
+            symbols,
+            to,
+            parent,
+        })
+        .map_err(map_err)?;
+    print_str(formatter, &result_json);
     Ok(())
-}
-
-pub fn cmd_summarize(path: &str, formatter: Formatter) -> CmdResult {
-    run_file_pipeline(&SummarizeQuery, path, formatter)
-}
-
-pub fn cmd_diff(path: &str, symbol: Option<&str>, formatter: Formatter) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-
-    let response = if let Some(sym) = symbol {
-        let query = DiffSymbolQuery {
-            symbol: sym.to_string(),
-            project_root: config.project_root.clone(),
-        };
-        record_file_query(&db, &query, path).map_err(map_err)?
-    } else {
-        let query = DiffFileQuery {
-            project_root: config.project_root.clone(),
-        };
-        record_file_query(&db, &query, path).map_err(map_err)?
-    };
-    print_str(formatter, &response.body);
-    Ok(())
-}
-
-pub fn cmd_context(symbol: &str, graph: bool, formatter: Formatter) -> CmdResult {
-    let config = get_config()?;
-    let db = get_db(&config)?;
-    let response = if graph {
-        record_symbol_query::<ContextWithGraphQuery>(&db, symbol).map_err(map_err)?
-    } else {
-        record_symbol_query::<ContextQuery>(&db, symbol).map_err(map_err)?
-    };
-    print_str(formatter, &response.body);
-    Ok(())
-}
-
-pub fn cmd_deps(path: &str, formatter: Formatter) -> CmdResult {
-    run_file_pipeline(&DepsQuery, path, formatter)
-}
-
-pub fn cmd_scope(path: &str, line: u32, formatter: Formatter) -> CmdResult {
-    run_file_pipeline(&ScopeQuery { line }, path, formatter)
 }

@@ -36,6 +36,7 @@ impl<'a> From<&'a ChunkKind> for ChunkKindDto<'a> {
             ChunkKind::Method => Self::Named("method"),
             ChunkKind::Struct => Self::Named("struct"),
             ChunkKind::Enum => Self::Named("enum"),
+            ChunkKind::EnumVariant => Self::Named("enum_variant"),
             ChunkKind::Trait => Self::Named("trait"),
             ChunkKind::Impl => Self::Named("impl"),
             ChunkKind::Class => Self::Named("class"),

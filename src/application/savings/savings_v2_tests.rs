@@ -8,9 +8,10 @@
 
 use super::fixtures::test_db;
 use super::{
-    alternative_insert_entry, alternative_replace_entry, estimate_tokens_from_bytes,
-    get_savings_report, record, record_scoped_op, record_symbol_op, record_v2, with_line_overhead,
-    CC_CALLS_INSERT, CC_CALLS_REPLACE, SNIPPET_TOKENS,
+    alternative_extract_entry, alternative_insert_entry, alternative_replace_entry,
+    estimate_tokens_from_bytes, get_savings_report, record, record_scoped_op, record_symbol_op,
+    record_v2, with_line_overhead, CC_CALLS_EXTRACT, CC_CALLS_INSERT, CC_CALLS_REPLACE,
+    SNIPPET_TOKENS,
 };
 use crate::domain::chunk::{Chunk, ChunkKind};
 use crate::domain::file::FileRecord;
@@ -110,6 +111,48 @@ fn replace_entry_full_roundtrip() {
     assert_eq!(entry.alt_input, V2_ALT_INPUT_REPLACE);
     assert_eq!(entry.alt_output, V2_ALT_OUTPUT_REPLACE);
     assert_eq!(entry.alt_calls, CC_CALLS_REPLACE);
+}
+
+/// Extract is a two-file write: the entry reads both files, edits
+/// each, and the `files_touched` count must be 2. `alt_calls` is the
+/// `CC_CALLS_EXTRACT = 4` (Read+Edit on src, Read+Edit on dest).
+#[test]
+fn extract_entry_roundtrip_charges_both_files() {
+    let db = test_db();
+    let source = FileRecord::new(
+        "src/source.rs".into(),
+        "h".into(),
+        "rust".into(),
+        V2_FILE_SIZE,
+    );
+    let dest = FileRecord::new(
+        "src/dest.rs".into(),
+        "h".into(),
+        "rust".into(),
+        V2_NEW_CODE_LEN as u64,
+    );
+    db.upsert_file(&source).unwrap();
+    db.upsert_file(&dest).unwrap();
+
+    // Source got `bytes_moved` removed, dest received it — mirrors
+    // the post-extract state.
+    let bytes_moved = V2_NEW_CODE_LEN;
+    let entry = alternative_extract_entry(
+        &db,
+        "src/source.rs",
+        "src/dest.rs",
+        bytes_moved,
+        V2_RESULT_LEN,
+    )
+    .unwrap();
+
+    assert_eq!(entry.files_touched, 2, "extract spans source + dest");
+    assert_eq!(entry.alt_calls, CC_CALLS_EXTRACT);
+    assert_eq!(entry.rlm_calls, 1);
+    assert!(
+        entry.alt_output > entry.rlm_output,
+        "CC alternative must cost more — it reads two files + two edits"
+    );
 }
 
 #[test]

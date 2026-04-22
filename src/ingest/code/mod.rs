@@ -11,7 +11,9 @@ pub mod php;
 pub mod python;
 pub mod quality_log;
 pub mod rust;
+pub(crate) mod rust_enum_variants;
 pub(crate) mod rust_impl_methods;
+pub(crate) mod rust_nested;
 pub mod typescript;
 
 #[cfg(test)]

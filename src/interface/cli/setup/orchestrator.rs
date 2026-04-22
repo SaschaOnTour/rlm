@@ -14,7 +14,7 @@ use serde::Serialize;
 use crate::config::Config;
 use crate::error::Result;
 
-use super::{claude_md, settings};
+use super::{claude_md, config_format, settings};
 
 pub use crate::error::SetupError;
 
@@ -56,6 +56,7 @@ pub enum SetupAction {
 pub struct SetupReport {
     pub settings_json: SetupAction,
     pub claude_local_md: SetupAction,
+    pub config_format: SetupAction,
     pub initial_index: SetupAction,
 }
 
@@ -63,10 +64,12 @@ pub struct SetupReport {
 pub fn run_setup(project_dir: &Path, mode: SetupMode) -> Result<SetupReport> {
     let settings_json = settings::setup_settings_json(project_dir, mode)?;
     let claude_local_md = claude_md::setup_claude_local_md(project_dir, mode)?;
+    let config_format = config_format::setup_config_format(project_dir, mode)?;
     let initial_index = setup_initial_index(project_dir, mode)?;
     Ok(SetupReport {
         settings_json,
         claude_local_md,
+        config_format,
         initial_index,
     })
 }

@@ -7,7 +7,7 @@
 
 use super::handle_insert;
 use crate::application::edit::inserter::InsertPosition;
-use crate::db::Database;
+use crate::application::session::RlmSession;
 use crate::output::Formatter;
 
 #[test]
@@ -16,12 +16,12 @@ fn insert_with_relative_path_resolves_to_project_root() {
     let file_path = dir.path().join("test.rs");
     std::fs::write(&file_path, "fn main() {}\n").unwrap();
 
-    let config = crate::config::Config::new(dir.path());
-    config.ensure_rlm_dir().unwrap();
-    let db = Database::open(&config.db_path).unwrap();
+    // Index once so the session can open an existing DB.
+    RlmSession::index_project(dir.path(), None).unwrap();
+    let session = RlmSession::open(dir.path()).unwrap();
 
     let result = handle_insert(
-        Some(&db),
+        Some(&session),
         &crate::mcp::tool_handlers::InsertInput {
             path: "test.rs",
             position: &InsertPosition::Top,
@@ -45,12 +45,12 @@ fn insert_with_relative_path_resolves_to_project_root() {
 #[test]
 fn insert_with_nonexistent_relative_path_returns_error() {
     let dir = tempfile::tempdir().unwrap();
-    let config = crate::config::Config::new(dir.path());
-    config.ensure_rlm_dir().unwrap();
-    let db = Database::open(&config.db_path).unwrap();
+    // Build an empty index so try_open_existing yields a session.
+    RlmSession::index_project(dir.path(), None).unwrap();
+    let session = RlmSession::open(dir.path()).unwrap();
 
     let result = handle_insert(
-        Some(&db),
+        Some(&session),
         &crate::mcp::tool_handlers::InsertInput {
             path: "nonexistent.rs",
             position: &InsertPosition::Top,

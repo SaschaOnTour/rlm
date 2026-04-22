@@ -1,10 +1,15 @@
 /// The kind of a code/document chunk.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ChunkKind {
     Function,
     Method,
     Struct,
     Enum,
+    /// A single variant inside an `enum` declaration. `parent` is set to
+    /// the enum's name so `rlm replace --symbol Variant` can disambiguate
+    /// identical-named variants across different enums within the same file
+    /// (and so consumers can filter variants of a specific enum).
+    EnumVariant,
     Trait,
     Impl,
     Class,
@@ -18,13 +23,14 @@ pub enum ChunkKind {
 
 impl ChunkKind {
     #[must_use]
-    // qual:allow(dry) reason: "inverse of parse — same match arms but opposite direction (serialize vs deserialize)"
+    // qual:inverse(parse)
     pub fn as_str(&self) -> &str {
         match self {
             Self::Function => "fn",
             Self::Method => "method",
             Self::Struct => "struct",
             Self::Enum => "enum",
+            Self::EnumVariant => "enum_variant",
             Self::Trait => "trait",
             Self::Impl => "impl",
             Self::Class => "class",
@@ -44,13 +50,14 @@ impl ChunkKind {
     }
 
     #[must_use]
-    // qual:allow(dry) reason: "inverse of as_str — same match arms but opposite direction (deserialize vs serialize)"
+    // qual:inverse(as_str)
     pub fn parse(s: &str) -> Self {
         match s {
             "fn" => Self::Function,
             "method" => Self::Method,
             "struct" => Self::Struct,
             "enum" => Self::Enum,
+            "enum_variant" => Self::EnumVariant,
             "trait" => Self::Trait,
             "impl" => Self::Impl,
             "class" => Self::Class,

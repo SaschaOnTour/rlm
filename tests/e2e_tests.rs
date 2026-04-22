@@ -20,11 +20,18 @@ fn manifest_dir() -> &'static str {
     env!("CARGO_MANIFEST_DIR")
 }
 
+/// Resolve a repo-relative path against the manifest directory.
+/// Tests load fixtures + docs from the source tree; this helper
+/// keeps every call site to one place (rustqual BP-010).
+fn manifest_path(rel: &str) -> String {
+    format!("{}/{rel}", manifest_dir())
+}
+
 /// Copy the given fixture into a fresh temp directory and run `rlm index` on it.
 /// Shared setup path for the Rust- and Markdown-fixture harnesses.
 fn setup_project_with_fixture(fixture_rel: &str, dest_name: &str) -> TempDir {
     let dir = tempfile::tempdir().expect("create tempdir");
-    let fixture = format!("{}/{}", manifest_dir(), fixture_rel);
+    let fixture = manifest_path(fixture_rel);
     fs::copy(&fixture, dir.path().join(dest_name)).expect("copy fixture");
 
     Command::cargo_bin("rlm")
@@ -604,6 +611,25 @@ fn e2e_files_no_index_required() {
         .stdout(predicate::str::contains("main.rs"))
         .stdout(predicate::str::contains("view.cshtml"));
 }
+/// Regression: `rlm files` must NOT create `.rlm/index.db` on a
+/// fresh project. It reads the filesystem directly; historically a
+/// refactor routed it through `RlmSession::open_cwd()` which calls
+/// `ensure_index`, silently turning a lightweight query into an
+/// expensive index build.
+#[test]
+fn e2e_files_does_not_create_index_db() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
+
+    rlm(&dir).arg("files").assert().success();
+
+    let index_db = dir.path().join(".rlm").join("index.db");
+    assert!(
+        !index_db.exists(),
+        "`rlm files` must not trigger indexing on a fresh project; \
+         found {index_db:?} after the call"
+    );
+}
 
 // ─── rlm stats --savings ───────────────────────────────────────────────────
 
@@ -671,4 +697,281 @@ fn e2e_stats_savings_with_since_filter() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"ops\":1"));
+}
+
+// ─── Docs vs CLI surface synchronisation ────────────────────────────────
+//
+// Regression guard for `docs/bugs/cli-doc-drift.md`. README.md carries a
+// table of every user-facing command; it MUST stay in sync with
+// `rlm --help` or users see commands that don't exist (or miss ones that
+// do). CLAUDE.md intentionally does NOT inventory commands — it points
+// agents at `rlm --help` directly, so there's nothing to drift against.
+//
+// The test treats `rlm --help` as the canonical source (the binary is
+// ground truth). `help` (clap auto) and `mcp` (meta command — starts
+// the MCP server) are exempt from the README docs since they aren't
+// end-user workflows.
+
+fn run_help() -> String {
+    let output = Command::cargo_bin("rlm")
+        .unwrap()
+        .arg("--help")
+        .output()
+        .expect("run rlm --help");
+    assert!(output.status.success(), "rlm --help failed");
+    String::from_utf8(output.stdout).expect("utf-8 help output")
+}
+
+/// Extract `rlm <cmd>` rows from the active-command table in README.md.
+/// Format is `| \`rlm <cmd>` at line start.
+///
+/// Scanning stops at `**Removed in` — below that heading README keeps a
+/// migration table listing obsolete commands on purpose; those should
+/// not count as "currently documented" because the test's job is to make
+/// sure the ACTIVE surface of the CLI matches the doc's ACTIVE table.
+fn extract_doc_cmds(path: &str) -> std::collections::BTreeSet<String> {
+    let full = manifest_path(path);
+    let content = fs::read_to_string(&full).expect("read doc");
+    content
+        .lines()
+        .take_while(|l| !l.trim_start().starts_with("**Removed in"))
+        .filter_map(|l| l.strip_prefix("| `rlm "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(|cmd| cmd.trim_end_matches('`').to_string())
+        .filter(|cmd| !cmd.is_empty())
+        .collect()
+}
+
+/// Extract subcommand names from `rlm --help` output. clap produces
+/// `  <cmd>   <description>` (two-space indent) in the `Commands:`
+/// section, stopping at the `Options:` line.
+fn extract_cli_cmds(help: &str) -> std::collections::BTreeSet<String> {
+    help.lines()
+        .skip_while(|l| !l.starts_with("Commands:"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("Options:"))
+        .filter_map(extract_cmd_from_help_line)
+        .collect()
+}
+
+/// Pull the subcommand name out of one clap-help line. Returns `None`
+/// when the line isn't a subcommand row (blank, or a continuation of a
+/// description indented by more than two spaces).
+fn extract_cmd_from_help_line(line: &str) -> Option<String> {
+    let body = line.strip_prefix("  ")?;
+    if body.starts_with(' ') {
+        return None; // continuation of a description
+    }
+    body.split_whitespace().next().map(str::to_string)
+}
+
+/// Commands that intentionally stay out of README. `help` is clap-auto,
+/// `mcp` starts the server (not an interactive user command).
+fn docs_exempt() -> std::collections::BTreeSet<String> {
+    ["help", "mcp"].iter().map(|s| s.to_string()).collect()
+}
+
+fn assert_doc_agrees_with_cli(doc_path: &str) {
+    let help = run_help();
+    let cli = extract_cli_cmds(&help);
+    let doc = extract_doc_cmds(doc_path);
+    let exempt = docs_exempt();
+
+    let phantoms: Vec<_> = doc.iter().filter(|c| !cli.contains(*c)).collect();
+    let missing: Vec<_> = cli
+        .iter()
+        .filter(|c| !doc.contains(*c) && !exempt.contains(*c))
+        .collect();
+
+    assert!(
+        phantoms.is_empty() && missing.is_empty(),
+        "{doc_path} drift:\n  phantom (in docs, not in CLI): {phantoms:?}\n  missing (in CLI, not in docs): {missing:?}",
+    );
+}
+
+#[test]
+fn cli_readme_command_lists_agree() {
+    assert_doc_agrees_with_cli("README.md");
+}
+
+/// Edge-case guard for the bug workflow of `docs/bugs/cli-doc-drift.md`.
+///
+/// `rlm setup` writes a `CLAUDE.local.md` block from a template baked into
+/// the binary. If that template ever references a command the CLI doesn't
+/// ship, every user who runs `rlm setup` inherits the drift — the
+/// self-propagation mechanism that caused the 0.2.0→0.4.1 window of this
+/// bug. Extract every `` `rlm <cmd>` `` from the template source and
+/// assert each maps to a real CLI subcommand.
+#[test]
+fn setup_template_references_only_real_commands() {
+    let template_src = fs::read_to_string(format!(
+        "{}/src/interface/cli/setup/claude_md.rs",
+        manifest_dir()
+    ))
+    .expect("read claude_md.rs");
+
+    let help = run_help();
+    let cli = extract_cli_cmds(&help);
+
+    // Substring scan: find every `\`rlm <word>` in the template source.
+    // The strings are inside a `format!` literal so a plain text search
+    // is sufficient and robust against future formatting changes.
+    let mut refs = std::collections::BTreeSet::new();
+    let mut cursor = template_src.as_str();
+    while let Some(pos) = cursor.find("`rlm ") {
+        let rest = &cursor[pos + "`rlm ".len()..];
+        if let Some(end) = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+            let cmd = &rest[..end];
+            if !cmd.is_empty() {
+                refs.insert(cmd.to_string());
+            }
+        }
+        cursor = &rest[1..];
+    }
+
+    let phantoms: Vec<_> = refs.iter().filter(|c| !cli.contains(*c)).collect();
+    assert!(
+        phantoms.is_empty(),
+        "rlm setup template references commands that no longer exist in the CLI: {phantoms:?} \
+         (see docs/bugs/cli-doc-drift.md for the self-propagation failure mode)",
+    );
+}
+
+// ─── --code-stdin / --code-file (bug #114) ─────────────────────────────
+
+fn setup_trivial_rust_project(content: &str) -> TempDir {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    fs::write(dir.path().join("lib.rs"), content).unwrap();
+    Command::cargo_bin("rlm")
+        .unwrap()
+        .current_dir(dir.path())
+        .arg("index")
+        .arg(".")
+        .assert()
+        .success();
+    dir
+}
+
+#[test]
+fn cli_replace_reads_code_from_stdin() {
+    let dir = setup_trivial_rust_project("pub fn greet() {}\n");
+    rlm(&dir)
+        .arg("replace")
+        .arg("lib.rs")
+        .arg("--symbol")
+        .arg("greet")
+        .arg("--code-stdin")
+        .write_stdin("pub fn greet() { println!(\"hi\"); }")
+        .assert()
+        .success();
+    let after = fs::read_to_string(dir.path().join("lib.rs")).unwrap();
+    assert!(
+        after.contains("println!(\"hi\");"),
+        "stdin body was not written, got: {after}"
+    );
+}
+
+#[test]
+fn cli_replace_reads_code_from_file() {
+    let dir = setup_trivial_rust_project("pub fn greet() {}\n");
+    let code_path = dir.path().join("patch.rs");
+    // Body contains a byte literal — the exact character class that
+    // mangled via --code '...' in bug #113.
+    fs::write(&code_path, "pub fn greet() { let _ = b'\\n'; }").unwrap();
+    rlm(&dir)
+        .arg("replace")
+        .arg("lib.rs")
+        .arg("--symbol")
+        .arg("greet")
+        .arg("--code-file")
+        .arg(&code_path)
+        .assert()
+        .success();
+    let after = fs::read_to_string(dir.path().join("lib.rs")).unwrap();
+    assert!(
+        after.contains("b'\\n'"),
+        "file-sourced body with byte literal was not written verbatim, got: {after}"
+    );
+}
+
+#[test]
+fn cli_replace_rejects_both_code_flags() {
+    let dir = setup_trivial_rust_project("pub fn greet() {}\n");
+    rlm(&dir)
+        .arg("replace")
+        .arg("lib.rs")
+        .arg("--symbol")
+        .arg("greet")
+        .arg("--code")
+        .arg("pub fn greet() {}")
+        .arg("--code-stdin")
+        .write_stdin("pub fn greet() {}")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn cli_replace_rejects_no_code_flag() {
+    let dir = setup_trivial_rust_project("pub fn greet() {}\n");
+    rlm(&dir)
+        .arg("replace")
+        .arg("lib.rs")
+        .arg("--symbol")
+        .arg("greet")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn cli_insert_reads_code_from_stdin() {
+    let dir = setup_trivial_rust_project("pub fn greet() {}\n");
+    rlm(&dir)
+        .arg("insert")
+        .arg("lib.rs")
+        .arg("--code-stdin")
+        .arg("--position")
+        .arg("bottom")
+        .write_stdin("pub fn farewell() {}\n")
+        .assert()
+        .success();
+    let after = fs::read_to_string(dir.path().join("lib.rs")).unwrap();
+    assert!(
+        after.contains("farewell"),
+        "stdin insert was not written, got: {after}"
+    );
+}
+
+#[test]
+fn cli_insert_reads_code_from_file() {
+    let dir = setup_trivial_rust_project("pub fn greet() {}\n");
+    let code_path = dir.path().join("extra.rs");
+    fs::write(&code_path, "pub fn farewell() {}\n").unwrap();
+    rlm(&dir)
+        .arg("insert")
+        .arg("lib.rs")
+        .arg("--code-file")
+        .arg(&code_path)
+        .arg("--position")
+        .arg("bottom")
+        .assert()
+        .success();
+    let after = fs::read_to_string(dir.path().join("lib.rs")).unwrap();
+    assert!(
+        after.contains("farewell"),
+        "file insert not written: {after}"
+    );
+}
+
+#[test]
+fn cli_replace_code_file_missing_errors_clearly() {
+    let dir = setup_trivial_rust_project("pub fn greet() {}\n");
+    rlm(&dir)
+        .arg("replace")
+        .arg("lib.rs")
+        .arg("--symbol")
+        .arg("greet")
+        .arg("--code-file")
+        .arg(dir.path().join("does_not_exist.rs"))
+        .assert()
+        .failure();
 }

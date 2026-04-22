@@ -19,6 +19,89 @@ const CLAUDE_LOCAL_MD: &str = "CLAUDE.local.md";
 const MARKER_BEGIN: &str = "<!-- rlm:begin -->";
 /// Delimiter marking the end of the rlm-managed block in `CLAUDE.local.md`.
 const MARKER_END: &str = "<!-- rlm:end -->";
+/// Body of the rlm-managed block in CLAUDE.local.md. Surrounded by
+/// [`MARKER_BEGIN`] / [`MARKER_END`] at render time. Kept as a const
+/// so the render function stays short (SRP_FN) and so tests can
+/// assert individual sections without running the full render path.
+const CLAUDE_MD_BODY: &str = r#"
+## rlm Workflow Instructions
+
+### Exploration (progressive disclosure)
+1. `rlm overview --detail minimal` — project map (~50 tokens)
+2. `rlm search <query>` — full-text across symbols + content
+3. `rlm read <path> --symbol <name>` — surgical reads; add `--metadata` for signature + call-count
+4. `rlm refs <symbol>` — semantic impact analysis (not a grep)
+5. `rlm context <symbol> --graph` — body + callers + callees + type info in one call
+
+### Editing (AST-based, Syntax Guard + native-compiler validated)
+- `rlm replace <path> --symbol <name> --code-file /tmp/patch.rs`
+- `rlm insert <path> --code-file /tmp/snippet.rs --position 'after:42'`
+- `rlm delete <path> --symbol <name>` — takes docs/attrs with it by default
+- `rlm extract <src> --symbols A,B,C --to <dest>` — atomic module split
+- Use `--preview` on replace for non-trivial edits
+
+### After every write: read the response
+Every `replace` / `insert` / `delete` / `extract` returns a rich JSON
+envelope. Read it before the next action — it replaces multiple
+follow-up tool calls.
+
+- `build.passed` — `cargo check` / `tsc` result. If `false`, fix the listed
+  errors (file + line + message) **before** moving on.
+- `test_impact.run_tests` — tests covering the changed symbol.
+- `test_impact.test_command` — ready-to-copy shell command to run them.
+- `test_impact.no_tests_warning` — fires when Direct ∪ Transitive coverage
+  is empty. Write a test before shipping; naming-convention candidates
+  in `run_tests` are speculative, not confirmed coverage.
+- `test_impact.similar_symbols` — lexically close idents elsewhere.
+  Check these for consistent parallel changes or typo catches.
+- `deleted.sidecar_lines` — extra lines removed (the doc/attr block).
+
+### Test discipline (do this automatically)
+1. If `test_impact.test_command` is present → run it right after the edit.
+2. If `test_impact.no_tests_warning` is present → write the missing test
+   before your next change.
+3. If `similar_symbols` is populated → decide whether those symbols
+   need a parallel change; otherwise call it out explicitly.
+4. If `build.errors` is non-empty → fix them; do not continue otherwise.
+
+### Using rlm effectively (lessons the hard way)
+- **Never run `rlm index` manually after `rlm replace/insert/delete/extract`.**
+  They auto-reindex (look for `reindexed: true`). The staleness check also
+  catches external edits (`Edit`, `cargo fmt`, git operations) at the next
+  read automatically. Manual index calls are pure overhead.
+- **Prefer `--code-file /tmp/patch.rs` over `--code-stdin` with heredoc**
+  when the code contains `'` / `{` / `"`. Claude Code's shell-obfuscation
+  heuristic may flag mixed heredocs for approval; a file path sidesteps
+  the heuristic entirely.
+- **Don't pipe JSON through `python3 -m json.tool`.** Default output is
+  TOON after `rlm setup` (token-dense). Use `--format pretty` if you
+  need human-readable JSON; `--format json` for minified.
+- **On `AmbiguousSymbol` errors, read the candidate list in the response
+  and pass `--parent <name>`.** Don't guess — the error already tells
+  you which containers exist.
+- **Before a write, inspect:** `rlm read --symbol X --metadata` gives
+  the signature + call count. Cheaper than a wrong edit + compile-fix
+  round-trip.
+- **Write targets:** use `rlm replace` for named symbols, `rlm delete`
+  for named symbols, `rlm extract` to move, `rlm insert` for new code.
+  Avoid `Edit` / `Write` tools on indexed code unless the change isn't
+  symbol-addressable (imports, module docstrings, dispatch arms).
+
+### Concurrency
+- Read-only rlm tools are parallel-friendly (`readOnlyHint=true`); the
+  self-healing refresh may trigger index-DB writes to reconcile drift.
+- For strict parallel read-only usage, set `RLM_SKIP_REFRESH=1`.
+- `replace` / `insert` / `delete` / `extract` / `index` always run sequentially.
+
+### Parse-quality fallback
+- Inspect the `q` field; if `fallback_recommended: true`, use Claude
+  Code's native `Read` / `Grep` for the affected lines.
+
+### Self-healing Index
+- rlm picks up external file changes automatically on the next tool call.
+- Parser upgrades (new rlm version) auto-trigger reindex on first open.
+- Set `RLM_SKIP_REFRESH=1` to bypass the check in performance-sensitive scripts.
+"#;
 
 /// Upsert the rlm-managed block in `CLAUDE.local.md`.
 pub fn setup_claude_local_md(project_dir: &Path, mode: SetupMode) -> Result<SetupAction> {
@@ -227,35 +310,7 @@ fn write_text_atomic(path: &Path, content: &str) -> Result<()> {
 /// (CRLF on Windows-authored `CLAUDE.local.md`, LF everywhere else).
 #[must_use]
 fn render_claude_local_md_section(eol: &str) -> String {
-    let body = format!(
-        "{MARKER_BEGIN}
-## rlm Workflow Instructions
-
-### Exploration (progressive disclosure)
-1. `rlm overview --detail minimal` — project map (~50 tokens)
-2. `rlm search <query>` — full-text across symbols + content
-3. `rlm read <path> --symbol <name>` — surgical reads
-
-### Editing (AST-based, Syntax Guard-validated)
-- `rlm replace <path> --symbol <name> --code '...'`
-- `rlm insert <path> --code '...' --position 'after:42'`
-- Use `--preview` for non-trivial edits
-
-### Concurrency
-- Read-only rlm tools are parallel-friendly (`readOnlyHint=true`), but the
-  self-healing refresh may trigger index-DB writes to reconcile drift.
-- For strict parallel read-only usage, set `RLM_SKIP_REFRESH=1`.
-- `replace` / `insert` / `index` always run sequentially.
-
-### Quality Check
-- Inspect the `q` field; if `fallback_recommended: true`, fall back to native Read/Grep for affected lines.
-
-### Self-healing Index
-- rlm picks up external file changes automatically on the next tool call.
-- Set `RLM_SKIP_REFRESH=1` to bypass the check in performance-sensitive scripts.
-{MARKER_END}
-"
-    );
+    let body = format!("{MARKER_BEGIN}{CLAUDE_MD_BODY}{MARKER_END}\n");
     if eol == "\r\n" {
         body.replace('\n', "\r\n")
     } else {

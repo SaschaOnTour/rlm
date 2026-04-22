@@ -23,6 +23,10 @@ pub mod impact;
 pub mod refs;
 pub mod scope;
 pub mod signature;
+pub mod similar_symbols;
+pub mod test_impact;
+pub mod test_impact_analyze;
+pub mod test_runner;
 pub mod type_info;
 
 pub use context::{ContextQuery, ContextWithGraphQuery};

@@ -4,6 +4,9 @@
 //! into this companion file to match the Phase-4 convention
 //! across the whole codebase. Wired back in via
 //! `#[cfg(test)] #[path = "server_tests.rs"] mod tests;`.
+//!
+//! All test bodies talk to the application layer directly now that
+//! the transitional `crate::operations::*` façade is gone.
 
 use tempfile::TempDir;
 
@@ -51,7 +54,7 @@ fn internal() {
 #[test]
 fn test_stats_operation_returns_expected_format() {
     let (_tmp, _config, db) = setup_indexed_project();
-    let result = crate::operations::get_stats(&db).expect("get stats");
+    let result = crate::application::query::stats::get_stats(&db).expect("get stats");
     assert!(result.files > 0);
     assert!(result.chunks > 0);
 }
@@ -59,22 +62,24 @@ fn test_stats_operation_returns_expected_format() {
 #[test]
 fn test_search_operation_returns_results() {
     let (_tmp, _config, db) = setup_indexed_project();
-    let result =
-        crate::operations::search_chunks(&db, "helper", TEST_SEARCH_LIMIT).expect("search");
+    let result = crate::application::query::search::search_chunks(&db, "helper", TEST_SEARCH_LIMIT)
+        .expect("search");
     assert!(!result.results.is_empty());
 }
 
 #[test]
 fn test_refs_operation_returns_results() {
     let (_tmp, _config, db) = setup_indexed_project();
-    let result = crate::operations::analyze_impact(&db, "helper").expect("refs/impact");
+    let result =
+        crate::application::symbol::impact::analyze_impact(&db, "helper").expect("refs/impact");
     assert!(result.count > 0);
 }
 
 #[test]
 fn test_context_operation_returns_results() {
     let (_tmp, _config, db) = setup_indexed_project();
-    let result = crate::operations::build_context(&db, "helper").expect("context");
+    let result =
+        crate::application::symbol::context::build_context(&db, "helper").expect("context");
     let json = serde_json::to_string(&result).unwrap();
     assert!(json.contains("helper"));
 }
@@ -90,7 +95,7 @@ fn test_overview_minimal_operation() {
 #[test]
 fn test_overview_standard_operation() {
     let (_tmp, _config, db) = setup_indexed_project();
-    let result = crate::operations::build_map(&db, None).expect("map");
+    let result = crate::application::query::map::build_map(&db, None).expect("map");
     assert!(!result.results.is_empty());
 }
 
@@ -104,6 +109,7 @@ fn test_overview_tree_operation() {
 #[test]
 fn test_callgraph_in_context_graph() {
     let (_tmp, _config, db) = setup_indexed_project();
-    let _ctx = crate::operations::build_context(&db, "helper").expect("context");
-    let _graph = crate::operations::build_callgraph(&db, "helper").expect("callgraph");
+    let _ctx = crate::application::symbol::context::build_context(&db, "helper").expect("context");
+    let _graph =
+        crate::application::symbol::callgraph::build_callgraph(&db, "helper").expect("callgraph");
 }

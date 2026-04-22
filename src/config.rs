@@ -42,6 +42,35 @@ pub struct UserSettings {
     pub quality: QualitySettings,
     /// Custom language mappings.
     pub languages: LanguageSettings,
+    /// Write-side post-edit checks (cargo check / tsc / etc.).
+    pub edit: EditSettings,
+}
+
+/// Post-write validation settings. Controls the native-checker pass
+/// that runs after every `rlm replace/insert/delete` to catch
+/// name-resolution and type errors that tree-sitter (Syntax Guard)
+/// can't see.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EditSettings {
+    /// When true, run the language's native checker (cargo check for
+    /// Rust) after every write and include the result in the write
+    /// response's `build` field. Default: true.
+    pub native_check: bool,
+    /// Timeout (seconds) for the native checker. First-compile runs
+    /// may exceed this; on timeout the response reports
+    /// `build.errors[0].message = "timed out after Ns"` rather than
+    /// hanging indefinitely. Default: 10.
+    pub native_check_timeout_secs: u64,
+}
+
+impl Default for EditSettings {
+    fn default() -> Self {
+        Self {
+            native_check: true,
+            native_check_timeout_secs: 10,
+        }
+    }
 }
 
 /// Indexing-related settings.

@@ -7,6 +7,10 @@
 //! name changed to match the "validator in front of writer" semantics.
 
 pub mod error;
+pub mod extractor;
 pub mod inserter;
+pub mod native_check;
 pub mod replacer;
+pub mod savings_hooks;
 pub mod validator;
+pub mod write_dispatch;

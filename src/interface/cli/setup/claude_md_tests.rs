@@ -78,3 +78,50 @@ fn remove_marker_block_noop_when_absent() {
     let out = remove_marker_block(existing);
     assert_eq!(out, existing);
 }
+
+#[test]
+fn template_includes_test_discipline_section() {
+    let body = super::render_claude_local_md_section("\n");
+    assert!(
+        body.contains("### Test discipline"),
+        "template should include the Test discipline heading"
+    );
+    assert!(
+        body.contains("test_command") && body.contains("no_tests_warning"),
+        "template should reference the key test_impact fields"
+    );
+    assert!(
+        body.contains("build.errors"),
+        "template should reference build.errors so agents know to fix compile failures"
+    );
+}
+
+#[test]
+fn template_includes_usage_best_practices() {
+    let body = super::render_claude_local_md_section("\n");
+    assert!(
+        body.contains("Never run `rlm index` manually"),
+        "template should warn against redundant index calls"
+    );
+    assert!(
+        body.contains("--code-file"),
+        "template should recommend --code-file to avoid heredoc escape issues"
+    );
+    assert!(
+        body.contains("AmbiguousSymbol"),
+        "template should explain ambiguous-symbol disambiguation"
+    );
+}
+
+#[test]
+fn template_mentions_similar_symbols_and_extract() {
+    let body = super::render_claude_local_md_section("\n");
+    assert!(
+        body.contains("similar_symbols"),
+        "template should explain what to do with similar_symbols"
+    );
+    assert!(
+        body.contains("rlm extract"),
+        "template should mention the extract command"
+    );
+}

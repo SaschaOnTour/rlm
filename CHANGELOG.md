@@ -7,6 +7,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-21
+
+The **Test Impact** release. Every `rlm replace / insert / delete /
+extract` now returns a rich JSON envelope that tells the agent which
+tests cover the changed symbol, what command runs them, whether
+`cargo check` (or equivalent) passed, and which lexically-similar
+symbols elsewhere might need a parallel change. The write-response
+replaces several follow-up tool calls that an agent would otherwise
+chain manually.
+
+The release also ships four brand-new write primitives (`delete`,
+`extract`, plus `--code-stdin`/`--code-file` on every write) and
+an auto-configured TOON output default that shrinks flat responses
+30–50 % versus JSON. 824 tests pass, rustqual 100 % across all seven
+dimensions.
+
+### Added
+
+- **`rlm delete <path> --symbol <name>`**: AST-aware symbol removal.
+  Takes the leading doc-comment / attribute block with it by default
+  (opt out via `--keep-docs`). Response includes `deleted.sidecar_lines`
+  showing which bytes were additionally removed. Works through Syntax
+  Guard and the new native-compiler check.
+- **`rlm extract <src> --symbols A,B,C --to <dest>`**: atomic
+  "move symbols to another file" refactor. Sidecars (docs, attrs)
+  travel with each symbol. Destination is created if missing,
+  appended to otherwise. Classic module-split in one tool call.
+- **`--code-stdin` and `--code-file <path>` on `rlm replace` and
+  `rlm insert`**: pipe or file-reference the code body instead of
+  passing it through `--code '...'`. Fixes the heredoc-escape trap
+  where Rust byte literals (`b'\n'`) and lifetimes (`'a`) silently
+  broke via shell quoting.
+- **`--parent <name>` on `rlm replace`, `rlm delete`, `rlm read`**:
+  disambiguate when two symbols share an ident in the same file
+  (e.g. `impl Foo::new` vs. `impl Bar::new`). New `AmbiguousSymbol`
+  error lists every candidate with parent + kind + line when
+  `--parent` is missing — no more silent first-match-wins.
+- **`test_impact` field in write responses**: `run_tests` (flat
+  list of covering-test symbols), `test_command` (ready-to-copy
+  shell command), `no_tests_warning` (fires when Direct ∪ Transitive
+  coverage is empty), and `similar_symbols` (Levenshtein ≤ 3 hits
+  elsewhere in the codebase).
+- **`build` field in write responses**: post-write `cargo check`
+  result (Rust only for 0.5.0 — more languages follow). Surfaces
+  name-resolution, type, lifetime errors that Syntax Guard can't
+  see. Opt-out via `[edit] native_check = false` in
+  `.rlm/config.toml`.
+- **`ChunkKind::EnumVariant`**: Rust enum variants are now
+  individually addressable via `rlm replace --symbol <VariantName>`
+  / `rlm delete` / `rlm read`. Particularly useful for extending
+  CLI or AST-kind enums.
+- **Parser-version stamp in `.rlm/index.db`**: new `meta` table
+  tracks which rlm version last wrote the index. On version mismatch
+  (e.g. after upgrading rlm), file hashes are cleared so the next
+  indexing run picks up the new parser vocabulary. No more manual
+  `rm .rlm/index.db` after rlm upgrades.
+- **`rlm setup` auto-configures TOON output**: writes
+  `[output] format = "toon"` to `.rlm/config.toml` when the file is
+  missing or has no `[output]` section. Existing user preferences
+  are preserved. Token-dense output is now the default for projects
+  scoped for AI agents.
+- **Expanded `CLAUDE.local.md` template from `rlm setup`**:
+  now includes test-discipline rules, response-envelope inspection
+  checklist, and six usage best-practices surfaced through
+  dogfood — things like "don't run `rlm index` after rlm writes",
+  "prefer `--code-file` over heredoc", "read `build` before moving on".
+- **Nextest detection also probes `cargo-nextest` on PATH**, not
+  just `.config/nextest.toml`. The common case (nextest installed
+  but no repo config) now correctly defaults to `cargo nextest run`.
+- **New MCP tools**: `delete`, `extract`. Tool count: 20.
+- **README "Performance" section** quantifying the rounds-avoided,
+  rework-avoided, and tasks-made-tractable wins.
+
+### Changed
+
+- **`rlm search` FTS5 semantics corrected**: query `foo bar` now
+  means AND (both words required), `foo OR bar` for OR, `"pub enum
+  Command"` for phrases, `foo*` for prefix. Previously the
+  sanitizer flattened everything to OR.
+- **`rlm search` adds `--fields minimal`**: drops `content` when
+  only names/files are needed (~5500 → ~300 tokens per call on
+  "does X exist?" queries). Default remains `--fields full`.
+- **CLI default format** (after `rlm setup`): TOON instead of JSON.
+  Overridable per-call with `--format json` / `--format pretty`.
+  Projects without `rlm setup` keep the JSON default.
+
+### Fixed
+
+- **`rlm setup` template now references only real CLI commands**.
+  Earlier versions listed 10 phantom commands that had been
+  consolidated in 0.2.0 (see migration table in CLAUDE.md). A
+  regression test now pins the setup template against `rlm --help`.
+- **`rlm replace` no longer silently picks the first matching
+  symbol when multiple share the same ident** in one file.
+  Returns `AmbiguousSymbol` with the candidate list instead.
+- **`rlm insert` now emits `test_impact`** for newly-inserted
+  top-level symbols (diff pre/post reindex chunks to identify
+  what's new).
+- **`no_tests_warning` now fires based on confirmed coverage**
+  (Direct ∪ Transitive) rather than total candidates — speculative
+  naming-convention hits no longer suppress the warning.
+
+### Dogfood fixes
+
+Bugs found by using rlm to build this release, every one caught with
+a regression test before merging. See `docs/bugs/*.md` for the full
+TDD-cycle record of each:
+
+- `cli-doc-drift.md` — 10 phantom commands in the setup template
+- `search-sanitizer.md` — FTS5 query semantics broken (AND/OR/phrase)
+- `search-fields-projection.md` — add opt-in `--fields minimal`
+- `rlm-delete-symbol.md` — new delete primitive
+- `cli-code-escaping.md` — `--code-stdin` / `--code-file`
+- `ambiguous-symbol.md` — silent wrong-match on same-ident symbols
+- `parser-version-stamp.md` — index stale after rlm upgrade
+- `native-post-write-check.md` — `cargo check` integration
+- `delete-orphans-docs.md` — `rlm delete` takes sidecar by default
+- `setup-writes-toon-default.md` — TOON for agent-scoped projects
+- `rlm-extract.md` — new extract primitive
+- `insert-test-impact-and-warning.md` — test_impact on inserts +
+  warning fires on speculative-only coverage
+
 ## [0.4.1] - 2026-04-21
 
 Quality-focused follow-up to the 0.4.0 architecture refactor. No user-facing

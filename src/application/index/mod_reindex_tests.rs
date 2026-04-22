@@ -7,7 +7,10 @@
 
 use super::fixtures::setup_indexed;
 use super::run_index;
-use super::{find_preview, reindex_with_result, Config, PreviewSource, PREVIEW_LINES};
+use super::{
+    find_preview, reindex_with_result, resolve_test_impact_target, snapshot_chunk_keys, Config,
+    PreviewSource, PREVIEW_LINES,
+};
 use std::fs;
 use tempfile::TempDir;
 
@@ -165,4 +168,55 @@ fn run_index_calls_progress_callback() {
     );
     let &(last_current, last_total) = recorded.last().unwrap();
     assert_eq!(last_current, last_total, "last call should be total/total");
+}
+
+/// Same-ident methods under different `impl` blocks must hash to
+/// different keys, otherwise the second `new` method looks like the
+/// first when diffing post-reindex chunks and test-impact is missed.
+#[test]
+fn snapshot_chunk_keys_distinguishes_same_ident_under_different_parent() {
+    const SRC: &str = "\
+struct Foo;
+struct Bar;
+
+impl Foo {
+    fn new() -> Self { Foo }
+}
+
+impl Bar {
+    fn new() -> Self { Bar }
+}
+";
+    let (_tmp, _config, db) = setup_indexed(&[("main.rs", SRC)]);
+    let keys = snapshot_chunk_keys(&db, "src/main.rs");
+    let news: Vec<_> = keys.iter().filter(|(_, ident, _)| ident == "new").collect();
+    assert_eq!(
+        news.len(),
+        2,
+        "both Foo::new and Bar::new must land in the snapshot as distinct keys, got {news:?}"
+    );
+    let parents: std::collections::HashSet<&Option<String>> =
+        news.iter().map(|(_, _, p)| p).collect();
+    assert_eq!(
+        parents.len(),
+        2,
+        "the two `new` methods must differ by parent — otherwise the diff won't detect inserts under a new parent"
+    );
+}
+
+/// A Symbol-preview source short-circuits the diff — the named symbol
+/// is returned verbatim, regardless of what the snapshot looks like.
+/// Pins the contract that `resolve_test_impact_target` is diff-only
+/// for Line / Last preview sources.
+#[test]
+fn resolve_test_impact_target_respects_symbol_preview_source() {
+    let (_tmp, _config, db) = setup_indexed(&[("main.rs", SAMPLE_SOURCE)]);
+    let pre_keys = snapshot_chunk_keys(&db, "src/main.rs");
+    let target = resolve_test_impact_target(
+        &db,
+        "src/main.rs",
+        &PreviewSource::Symbol("helper"),
+        &pre_keys,
+    );
+    assert_eq!(target.as_deref(), Some("helper"));
 }

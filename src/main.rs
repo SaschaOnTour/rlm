@@ -57,34 +57,72 @@ fn main() {
 fn run(cli: Cli, formatter: Formatter) -> Result<(), Box<dyn std::fmt::Display>> {
     match cli.command {
         Command::Index { path } => handlers::cmd_index(&path, formatter),
-        Command::Search { query, limit } => handlers::cmd_search(&query, limit, formatter),
+        Command::Search {
+            query,
+            limit,
+            fields,
+        } => handlers::cmd_search(&query, limit, fields, formatter),
         Command::Read {
             path,
             symbol,
+            parent,
             section,
             metadata,
         } => handlers::cmd_read(
             &path,
             symbol.as_deref(),
+            parent.as_deref(),
             section.as_deref(),
             metadata,
             formatter,
         ),
         Command::Overview { detail, path } => {
-            handlers::cmd_overview(&detail, path.as_deref(), formatter)
+            handlers::cmd_overview(detail, path.as_deref(), formatter)
         }
         Command::Refs { symbol } => handlers::cmd_refs(&symbol, formatter),
         Command::Replace {
             path,
             symbol,
+            parent,
             code,
+            code_stdin,
+            code_file,
             preview,
-        } => handlers::cmd_replace(&path, &symbol, &code, preview, formatter),
+        } => {
+            let resolved =
+                rlm::cli::helpers::resolve_code(code.as_deref(), code_stdin, code_file.as_deref())?;
+            handlers::cmd_replace(
+                &path,
+                &symbol,
+                parent.as_deref(),
+                &resolved,
+                preview,
+                formatter,
+            )
+        }
+        Command::Delete {
+            path,
+            symbol,
+            parent,
+            keep_docs,
+        } => handlers::cmd_delete(&path, &symbol, parent.as_deref(), keep_docs, formatter),
+        Command::Extract {
+            path,
+            symbols,
+            to,
+            parent,
+        } => handlers::cmd_extract(&path, &symbols, &to, parent.as_deref(), formatter),
         Command::Insert {
             path,
             code,
+            code_stdin,
+            code_file,
             position,
-        } => handlers::cmd_insert(&path, &code, &position, formatter),
+        } => {
+            let resolved =
+                rlm::cli::helpers::resolve_code(code.as_deref(), code_stdin, code_file.as_deref())?;
+            handlers::cmd_insert(&path, &resolved, &position, formatter)
+        }
         Command::Stats { savings, since } => {
             handlers_util::cmd_stats(savings, since.as_deref(), formatter)
         }

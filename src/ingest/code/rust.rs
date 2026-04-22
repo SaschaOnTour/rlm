@@ -166,6 +166,24 @@ impl LanguageConfig for RustConfig {
                 chunks.extend(methods);
             }
         }
+
+        // Enum variants: one chunk per variant, parent = <enum_name>.
+        let enum_chunks: Vec<_> = chunks
+            .iter()
+            .filter(|c| c.kind == ChunkKind::Enum)
+            .map(|c| (c.ident.clone(), c.start_byte, c.end_byte))
+            .collect();
+        for (enum_name, start_byte, end_byte) in &enum_chunks {
+            let root = tree.root_node();
+            if let Some(enum_node) =
+                find_node_at_byte_range(root, *start_byte as usize, *end_byte as usize)
+            {
+                let variants = crate::ingest::code::rust_enum_variants::extract_enum_variants(
+                    enum_node, source, file_id, enum_name,
+                );
+                chunks.extend(variants);
+            }
+        }
     }
 }
 
