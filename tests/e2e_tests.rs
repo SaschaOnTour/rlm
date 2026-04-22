@@ -611,6 +611,25 @@ fn e2e_files_no_index_required() {
         .stdout(predicate::str::contains("main.rs"))
         .stdout(predicate::str::contains("view.cshtml"));
 }
+/// Regression: `rlm files` must NOT create `.rlm/index.db` on a
+/// fresh project. It reads the filesystem directly; historically a
+/// refactor routed it through `RlmSession::open_cwd()` which calls
+/// `ensure_index`, silently turning a lightweight query into an
+/// expensive index build.
+#[test]
+fn e2e_files_does_not_create_index_db() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
+
+    rlm(&dir).arg("files").assert().success();
+
+    let index_db = dir.path().join(".rlm").join("index.db");
+    assert!(
+        !index_db.exists(),
+        "`rlm files` must not trigger indexing on a fresh project; \
+         found {index_db:?} after the call"
+    );
+}
 
 // ─── rlm stats --savings ───────────────────────────────────────────────────
 

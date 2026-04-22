@@ -6,9 +6,10 @@
 //! the class of drift that hid `--fields` from MCP for several
 //! slices before it was caught manually.
 //!
-//! CLI-only args are explicit in `CLI_ONLY_ARGS` below (stdio-specific:
-//! `--code-stdin`, `--code-file`, `--preview`, `--format`). MCP-only
-//! fields should not exist by policy; the test fails if one does.
+//! CLI-only args are listed per-tool in `TOOL_PARITY` below
+//! (stdio-specific: `--code-stdin`, `--code-file`, `--preview`,
+//! `--format`). MCP-only fields should not exist by policy; the test
+//! fails if one does.
 use clap::CommandFactory;
 use rlm::cli::commands::Cli;
 use rlm::mcp::server::RlmServer;

@@ -25,7 +25,7 @@ pub fn handle_stats(
     match session.stats(savings_flag, since) {
         Ok(out) => Ok(RlmServer::success_text(
             formatter,
-            formatter.serialize(&out.body),
+            RlmServer::to_json(&out.body),
         )),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }
@@ -41,7 +41,7 @@ pub fn handle_quality(
     match session.quality(flags) {
         Ok(body) => Ok(RlmServer::success_text(
             formatter,
-            formatter.serialize(&body),
+            RlmServer::to_json(&body),
         )),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }

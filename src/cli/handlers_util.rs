@@ -10,6 +10,7 @@ use crate::application::query::files::FilesFilter;
 use crate::application::query::stats::QualityFlags;
 use crate::application::session::RlmSession;
 use crate::cli::helpers::{map_err, CmdResult};
+use crate::config::Config;
 use crate::output::{self, Formatter};
 
 pub fn cmd_stats(show_savings: bool, since: Option<&str>, formatter: Formatter) -> CmdResult {
@@ -61,13 +62,18 @@ pub fn cmd_files(
     indexed_only: bool,
     formatter: Formatter,
 ) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
+    // `files` is filesystem-backed and must not trigger an index
+    // build — `RlmSession::open_cwd` would call `ensure_index`,
+    // which is expensive on a fresh project. MCP's `handle_files`
+    // uses the same direct path.
+    let config = Config::from_cwd().map_err(map_err)?;
     let filter = FilesFilter {
         path_prefix: path_filter.map(String::from),
         skipped_only,
         indexed_only,
     };
-    let result = session.files(filter).map_err(map_err)?;
+    let result = crate::application::query::files::list_files(&config.project_root, filter)
+        .map_err(map_err)?;
     output::print(formatter, &result);
     Ok(())
 }
