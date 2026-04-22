@@ -18,6 +18,13 @@ pub const CC_CALLS_REPLACE: u64 = 3;
 /// CC calls for Read→Edit (insert).
 pub const CC_CALLS_INSERT: u64 = 2;
 
+/// CC calls needed to replicate an `extract`:
+/// Read(src) + Edit(src, remove) + Read(dest) + Edit(dest, append).
+/// When the destination is new a `Write` substitutes for
+/// `Read(dest) + Edit(dest)` — still 4 calls worst-case, still 3 at
+/// best, but the 4-call model is the safe upper bound we charge CC.
+pub const CC_CALLS_EXTRACT: u64 = 4;
+
 /// API pricing ratio: input tokens cost per million (microdollars).
 const INPUT_COST_PER_M: u64 = 3;
 

@@ -401,6 +401,42 @@ fn setup_inject_preserves_crlf_line_endings() {
     );
 }
 
+/// CRLF file with `[output]` mid-file and no trailing newline: the
+/// inject path must not (a) concatenate the injected line onto the
+/// `[output]` header when it happens to be the last line, and
+/// (b) leave a stray `\r` at EOF after the trailing-newline fixup.
+#[test]
+fn setup_inject_handles_crlf_without_trailing_newline() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".rlm")).unwrap();
+    // Header is the last line; no trailing CRLF — reachable because
+    // `[output]` with no keys still parses as an empty table.
+    let pre_existing = "somekey = 1\r\n[output]";
+    fs::write(dir.path().join(".rlm/config.toml"), pre_existing).unwrap();
+
+    let action = setup_config_format(dir.path(), SetupMode::Apply).unwrap();
+    assert_eq!(action, SetupAction::Updated);
+
+    let body = String::from_utf8(fs::read(dir.path().join(".rlm/config.toml")).unwrap()).unwrap();
+    assert!(
+        !body.contains("[output]format"),
+        "injected line must not be concatenated onto the header, got: {body:?}"
+    );
+    assert!(
+        body.contains("[output]\r\nformat = \"toon\""),
+        "injected line must sit on its own line below the header, got: {body:?}"
+    );
+    assert!(
+        !body.ends_with('\r'),
+        "trailing-newline fixup must strip the full CRLF, not leave a stray `\\r`: {body:?}"
+    );
+    // Original had no trailing newline — contract says we preserve that.
+    assert!(
+        !body.ends_with('\n'),
+        "original file had no trailing newline; inject must keep that: {body:?}"
+    );
+}
+
 /// Same guarantee for the append path: a pre-existing CRLF file
 /// without `[output]` gets its appended section in CRLF too.
 #[test]

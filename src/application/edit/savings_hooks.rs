@@ -47,3 +47,20 @@ pub fn record_insert(db: &Database, path: &str, new_code_len: usize, result_json
         savings::record_v2(db, &entry);
     }
 }
+
+/// Record savings after a successful `extract`. Unlike the single-file
+/// operations above, extract touches a source and a destination file —
+/// the entry's `files_touched = 2` reflects that.
+pub fn record_extract(
+    db: &Database,
+    source_path: &str,
+    dest_path: &str,
+    bytes_moved: usize,
+    result_json_len: usize,
+) {
+    if let Ok(entry) =
+        savings::alternative_extract_entry(db, source_path, dest_path, bytes_moved, result_json_len)
+    {
+        savings::record_v2(db, &entry);
+    }
+}

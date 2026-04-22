@@ -166,9 +166,9 @@ pub struct ExtractInput<'a> {
     pub parent: Option<&'a str>,
 }
 
-/// Extract symbols from `path` into `to`, reindexing both files and
+/// Extract symbols from `path` into `to`, reindexing both files,
 /// splicing `source` / `dest` / `extracted` / `dest_reindex` fields
-/// into the response envelope.
+/// into the response envelope, and recording a two-file savings entry.
 pub fn dispatch_extract(
     db: &Database,
     config: &Config,
@@ -186,7 +186,17 @@ pub fn dispatch_extract(
     let source_json = index::reindex_with_result(db, config, input.path, PreviewSource::None);
     let dest_json = index::reindex_with_result(db, config, input.to, PreviewSource::None);
 
-    splice_extract_envelope(&source_json, &dest_json, input.path, input.to, &outcome)
+    let result_json =
+        splice_extract_envelope(&source_json, &dest_json, input.path, input.to, &outcome)?;
+
+    savings_hooks::record_extract(
+        db,
+        input.path,
+        input.to,
+        outcome.bytes_moved,
+        result_json.len(),
+    );
+    Ok(result_json)
 }
 
 /// Both envelope JSONs were produced by our own `reindex_with_result`;

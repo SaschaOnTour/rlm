@@ -682,19 +682,16 @@ fn e2e_stats_savings_with_since_filter() {
 
 // ─── Docs vs CLI surface synchronisation ────────────────────────────────
 //
-// Regression guard for `docs/bugs/cli-doc-drift.md`. The project documents
-// its CLI command list in three places (the clap `--help` output, the
-// table in CLAUDE.md, and the table in README.md) and they MUST stay in
-// sync. A user — and especially an AI agent — picks whichever surface
-// they see first, so drift causes real waste: trying a documented command
-// that doesn't exist, or missing a real command because the docs didn't
-// list it.
+// Regression guard for `docs/bugs/cli-doc-drift.md`. README.md carries a
+// table of every user-facing command; it MUST stay in sync with
+// `rlm --help` or users see commands that don't exist (or miss ones that
+// do). CLAUDE.md intentionally does NOT inventory commands — it points
+// agents at `rlm --help` directly, so there's nothing to drift against.
 //
-// The test treats `rlm --help` as the canonical source, on the premise
-// that the binary is ground truth. `help` (clap auto) and `mcp` (meta
-// command — starts the MCP server) are exempt from the README/CLAUDE.md
-// docs: README targets end-users and doesn't need to document how to
-// start the server, CLAUDE.md likewise.
+// The test treats `rlm --help` as the canonical source (the binary is
+// ground truth). `help` (clap auto) and `mcp` (meta command — starts
+// the MCP server) are exempt from the README docs since they aren't
+// end-user workflows.
 
 fn run_help() -> String {
     let output = Command::cargo_bin("rlm")
@@ -706,13 +703,13 @@ fn run_help() -> String {
     String::from_utf8(output.stdout).expect("utf-8 help output")
 }
 
-/// Extract `rlm <cmd>` rows from the active-command tables in CLAUDE.md and
-/// README.md. Format is always `| \`rlm <cmd>` at line start.
+/// Extract `rlm <cmd>` rows from the active-command table in README.md.
+/// Format is `| \`rlm <cmd>` at line start.
 ///
-/// Scanning stops at `**Removed in` — below that heading each doc keeps a
-/// migration table that lists obsolete commands on purpose; those should
+/// Scanning stops at `**Removed in` — below that heading README keeps a
+/// migration table listing obsolete commands on purpose; those should
 /// not count as "currently documented" because the test's job is to make
-/// sure the ACTIVE surface of the CLI matches the docs' ACTIVE tables.
+/// sure the ACTIVE surface of the CLI matches the doc's ACTIVE table.
 fn extract_doc_cmds(path: &str) -> std::collections::BTreeSet<String> {
     let full = manifest_path(path);
     let content = fs::read_to_string(&full).expect("read doc");
@@ -749,40 +746,13 @@ fn extract_cmd_from_help_line(line: &str) -> Option<String> {
     body.split_whitespace().next().map(str::to_string)
 }
 
-/// Commands that intentionally stay out of the user-facing docs.
-/// `help` is auto-added by clap, `mcp` starts the server (not an
-/// interactive tool).
+/// Commands that intentionally stay out of README. `help` is clap-auto,
+/// `mcp` starts the server (not an interactive user command).
 fn docs_exempt() -> std::collections::BTreeSet<String> {
     ["help", "mcp"].iter().map(|s| s.to_string()).collect()
 }
 
-/// Shared core of the two doc-sync regression tests. Extracted from the
-/// original drift-check duplication; each test just supplies the path.
-///
-/// Handles the case where a doc file isn't present:
-/// - On CI (`CI` env var set — GitHub Actions etc. set it by default):
-///   skip with a clear stderr note. Documents which are deliberately
-///   not versioned (`CLAUDE.md` is dev-local at this project) simply
-///   can't be drift-checked in a clean CI checkout.
-/// - Anywhere else: panic with a message pointing at the fix. A
-///   missing doc in a local dev tree is a setup mistake, not a
-///   CI-skip case — silent-pass would hide real drift.
 fn assert_doc_agrees_with_cli(doc_path: &str) {
-    let full = manifest_path(doc_path);
-    if !std::path::Path::new(&full).exists() {
-        if std::env::var_os("CI").is_some() {
-            eprintln!(
-                "skip: {doc_path} not present in CI checkout — drift check only runs \
-                 where the doc file exists (see assert_doc_agrees_with_cli comment)."
-            );
-            return;
-        }
-        panic!(
-            "doc file not found: {full}. Either create it (dev docs), \
-             or remove/rename the corresponding `cli_*_command_lists_agree` test."
-        );
-    }
-
     let help = run_help();
     let cli = extract_cli_cmds(&help);
     let doc = extract_doc_cmds(doc_path);
@@ -798,38 +768,6 @@ fn assert_doc_agrees_with_cli(doc_path: &str) {
         phantoms.is_empty() && missing.is_empty(),
         "{doc_path} drift:\n  phantom (in docs, not in CLI): {phantoms:?}\n  missing (in CLI, not in docs): {missing:?}",
     );
-}
-
-#[test]
-fn cli_claude_md_command_lists_agree() {
-    assert_doc_agrees_with_cli("CLAUDE.md");
-}
-
-/// Regression: `assert_doc_agrees_with_cli` must not panic when the
-/// doc file is absent and the run is on CI (`CI` env var set).
-/// `CLAUDE.md` is intentionally not versioned — the test of that
-/// file has to survive a clean CI checkout. Pinned here so the
-/// "skip on CI" branch doesn't get accidentally regressed into a
-/// panic on some future rewrite.
-#[test]
-fn assert_doc_agrees_skips_on_ci_when_file_missing() {
-    // Scope-guard pattern: save the original CI value and restore on
-    // drop, so this test doesn't leak env state to sibling tests
-    // (integration tests in the same binary share a process).
-    struct CiGuard(Option<std::ffi::OsString>);
-    impl Drop for CiGuard {
-        fn drop(&mut self) {
-            match &self.0 {
-                Some(v) => std::env::set_var("CI", v),
-                None => std::env::remove_var("CI"),
-            }
-        }
-    }
-    let _guard = CiGuard(std::env::var_os("CI"));
-    std::env::set_var("CI", "true");
-
-    // Path that cannot exist at the manifest dir. No panic → pass.
-    assert_doc_agrees_with_cli("_nonexistent_doc_for_skip_regression.md");
 }
 
 #[test]

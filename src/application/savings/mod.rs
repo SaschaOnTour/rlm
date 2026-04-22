@@ -7,7 +7,7 @@
 use crate::db::Database;
 use crate::domain::savings::{
     savings_pct, with_line_overhead, CommandSavings, SavingsEntry, SavingsReport, CALL_OVERHEAD,
-    CC_CALLS_INSERT, CC_CALLS_REPLACE, SNIPPET_TOKENS,
+    CC_CALLS_EXTRACT, CC_CALLS_INSERT, CC_CALLS_REPLACE, SNIPPET_TOKENS,
 };
 use crate::domain::token_budget::{
     estimate_json_tokens, estimate_tokens, estimate_tokens_from_bytes,
@@ -37,6 +37,28 @@ pub fn alternative_symbol_files(db: &Database, symbol: &str) -> Result<u64> {
 
 // ─── Write operation cost helpers ───────────────────────────────
 
+/// Shared pre-edit size lookup: DB has the post-edit file size (reindex
+/// already ran), CC's hypothetical Read saw the pre-edit file. Callers
+/// pass `pre_minus_post_bytes` — the signed offset needed to recover
+/// the pre-edit size:
+/// * replace:        `old_code_len - new_code_len`
+/// * delete:         `+ old_code_len`
+/// * insert:         `- new_code_len`
+/// * extract source: `+ bytes_moved`
+/// * extract dest:   `- bytes_moved`
+fn pre_edit_tokens_with_lines(
+    db: &Database,
+    file_path: &str,
+    pre_minus_post_bytes: i64,
+) -> Result<u64> {
+    let post = db
+        .get_file_by_path(file_path)?
+        .map(|f| f.size_bytes)
+        .unwrap_or(0);
+    let pre = post.saturating_add_signed(pre_minus_post_bytes);
+    Ok(with_line_overhead(estimate_tokens_from_bytes(pre)))
+}
+
 /// Full round-trip cost for Claude Code's Grep→Read→Edit to replace a symbol.
 pub fn alternative_replace_entry(
     db: &Database,
@@ -45,14 +67,8 @@ pub fn alternative_replace_entry(
     new_code_len: usize,
     rlm_result_len: usize,
 ) -> Result<SavingsEntry> {
-    // DB has post-edit size after reindex; CC's Read sees the pre-edit file.
-    let post_edit_bytes = db
-        .get_file_by_path(file_path)?
-        .map(|f| f.size_bytes)
-        .unwrap_or(0);
-    let pre_edit_bytes =
-        (post_edit_bytes + old_code_len as u64).saturating_sub(new_code_len as u64);
-    let file_tokens_with_lines = with_line_overhead(estimate_tokens_from_bytes(pre_edit_bytes));
+    let file_tokens_with_lines =
+        pre_edit_tokens_with_lines(db, file_path, old_code_len as i64 - new_code_len as i64)?;
     let old_tokens = estimate_tokens(old_code_len);
     let new_tokens = estimate_tokens(new_code_len);
 
@@ -81,12 +97,7 @@ pub fn alternative_delete_entry(
     old_code_len: usize,
     rlm_result_len: usize,
 ) -> Result<SavingsEntry> {
-    let post_edit_bytes = db
-        .get_file_by_path(file_path)?
-        .map(|f| f.size_bytes)
-        .unwrap_or(0);
-    let pre_edit_bytes = post_edit_bytes + old_code_len as u64;
-    let file_tokens_with_lines = with_line_overhead(estimate_tokens_from_bytes(pre_edit_bytes));
+    let file_tokens_with_lines = pre_edit_tokens_with_lines(db, file_path, old_code_len as i64)?;
     let old_tokens = estimate_tokens(old_code_len);
 
     Ok(SavingsEntry {
@@ -101,6 +112,39 @@ pub fn alternative_delete_entry(
     })
 }
 
+/// Full round-trip cost for Claude Code's Read→Edit→Read→Edit to
+/// move symbols from one file to another. Extract is a two-file write
+/// so the CC alternative reads both files, edits each, and touches
+/// two files in one atomic call.
+pub fn alternative_extract_entry(
+    db: &Database,
+    source_path: &str,
+    dest_path: &str,
+    bytes_moved: usize,
+    rlm_result_len: usize,
+) -> Result<SavingsEntry> {
+    // Source had `bytes_moved` removed, destination received them —
+    // sign flips between the two lookups.
+    let source_tokens = pre_edit_tokens_with_lines(db, source_path, bytes_moved as i64)?;
+    let dest_tokens = pre_edit_tokens_with_lines(db, dest_path, -(bytes_moved as i64))?;
+    let moved_tokens = estimate_tokens(bytes_moved);
+
+    Ok(SavingsEntry {
+        command: "extract".to_string(),
+        rlm_input: 0, // path + symbol list only
+        rlm_output: estimate_json_tokens(rlm_result_len),
+        rlm_calls: 1,
+        // Edit(src): old=moved, new=""; Edit(dest): old="", new=moved.
+        alt_input: moved_tokens.saturating_mul(2),
+        alt_output: source_tokens                 // Read(src)
+            + dest_tokens                         // Read(dest)
+            + SNIPPET_TOKENS                      // Edit(src) result
+            + SNIPPET_TOKENS, // Edit(dest) result
+        alt_calls: CC_CALLS_EXTRACT,
+        files_touched: 2,
+    })
+}
+
 /// Full round-trip cost for Claude Code's Read→Edit to insert code.
 pub fn alternative_insert_entry(
     db: &Database,
@@ -108,13 +152,7 @@ pub fn alternative_insert_entry(
     new_code_len: usize,
     rlm_result_len: usize,
 ) -> Result<SavingsEntry> {
-    // DB has post-edit size after reindex; CC's Read sees the pre-edit file.
-    let post_edit_bytes = db
-        .get_file_by_path(file_path)?
-        .map(|f| f.size_bytes)
-        .unwrap_or(0);
-    let pre_edit_bytes = post_edit_bytes.saturating_sub(new_code_len as u64);
-    let file_tokens_with_lines = with_line_overhead(estimate_tokens_from_bytes(pre_edit_bytes));
+    let file_tokens_with_lines = pre_edit_tokens_with_lines(db, file_path, -(new_code_len as i64))?;
     let new_tokens = estimate_tokens(new_code_len);
 
     Ok(SavingsEntry {

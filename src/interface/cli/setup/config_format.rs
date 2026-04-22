@@ -176,6 +176,13 @@ fn write_with_injected_format(path: &Path, existing: &str) -> Result<()> {
         // bare `"[output]\n"`. Emit the injected key on the line
         // after the header, with the file's own EOL.
         if !injected && is_output_header(line) {
+            // If the header was the last line of a file that lacks
+            // a trailing newline, `line` won't carry one either.
+            // Insert the EOL ourselves or the injected key ends up
+            // concatenated onto the header line.
+            if !line.ends_with('\n') {
+                out.push_str(eol);
+            }
             out.push_str(&format!("format = \"{DEFAULT_FORMAT}\"{eol}"));
             injected = true;
         }
@@ -183,9 +190,10 @@ fn write_with_injected_format(path: &Path, existing: &str) -> Result<()> {
 
     // `split_inclusive` preserves the original trailing-newline
     // state; ensure we did not accidentally add one when `existing`
-    // lacked one.
-    if !trailing_nl && out.ends_with('\n') {
-        out.pop();
+    // lacked one. Strip the full EOL (CRLF or LF) — popping a single
+    // `\n` on a CRLF file would leave a stray `\r` at EOF.
+    if !trailing_nl && out.ends_with(eol) {
+        out.truncate(out.len() - eol.len());
     }
 
     write_atomic(path, out.as_bytes())?;
