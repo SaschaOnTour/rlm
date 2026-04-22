@@ -141,14 +141,16 @@ fn write_fresh_config(path: &Path) -> Result<()> {
 }
 
 /// Existing file has no `[output]` section. Append a fresh one at
-/// the end, separated from prior content by a blank line.
+/// the end, separated from prior content by a blank line. Uses the
+/// file's own line-ending style so a CRLF config stays pure CRLF.
 fn write_with_appended_section(path: &Path, existing: &str) -> Result<()> {
-    let separator = if existing.ends_with('\n') { "" } else { "\n" };
+    let eol = detect_eol(existing);
+    let separator = if existing.ends_with('\n') { "" } else { eol };
     let appended = format!(
-        "{existing}{separator}\n\
-         # Added by `rlm setup` — TOON for token density on flat responses.\n\
-         [output]\n\
-         format = \"{DEFAULT_FORMAT}\"\n"
+        "{existing}{separator}{eol}\
+         # Added by `rlm setup` — TOON for token density on flat responses.{eol}\
+         [output]{eol}\
+         format = \"{DEFAULT_FORMAT}\"{eol}"
     );
     write_atomic(path, appended.as_bytes())?;
     Ok(())
@@ -162,15 +164,19 @@ fn write_with_injected_format(path: &Path, existing: &str) -> Result<()> {
     let mut out = String::with_capacity(existing.len() + INJECTED_FORMAT_LINE_CAPACITY);
     let mut injected = false;
     let trailing_nl = existing.ends_with('\n');
+    // Match the file's existing line-ending style so injected lines
+    // don't introduce mixed EOLs (e.g. `\n` inside an otherwise CRLF
+    // file on Windows). Files with no newline at all fall back to LF.
+    let eol = detect_eol(existing);
 
     for line in existing.split_inclusive('\n') {
         out.push_str(line);
         // The header detector is the same one `classify_output` uses,
         // so a line like `"[output]   # note\n"` matches just like a
         // bare `"[output]\n"`. Emit the injected key on the line
-        // after the header.
+        // after the header, with the file's own EOL.
         if !injected && is_output_header(line) {
-            out.push_str(&format!("format = \"{DEFAULT_FORMAT}\"\n"));
+            out.push_str(&format!("format = \"{DEFAULT_FORMAT}\"{eol}"));
             injected = true;
         }
     }
@@ -184,6 +190,18 @@ fn write_with_injected_format(path: &Path, existing: &str) -> Result<()> {
 
     write_atomic(path, out.as_bytes())?;
     Ok(())
+}
+
+/// Detect the dominant line ending in `content`: CRLF if any line is
+/// CRLF-terminated, otherwise LF. Good enough for config files that
+/// conventionally use one style throughout; mixed-EOL files keep
+/// whatever we first see.
+fn detect_eol(content: &str) -> &'static str {
+    if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
 }
 
 /// True if `raw` (possibly with trailing `\n`) is an `[output]` table

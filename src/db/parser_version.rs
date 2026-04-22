@@ -33,10 +33,10 @@ pub enum ParserVersionState {
     Fresh,
     /// Stored value equals `CURRENT_PARSER_VERSION`; nothing to do.
     UpToDate,
-    /// Stored value differed (typically an older rlm release). All
-    /// `files.hash` rows have been cleared so the next `rlm index`
-    /// sees hash="" everywhere and re-parses every file with the
-    /// current binary.
+    /// Stored value differed (typically an older rlm release). Every
+    /// file's `hash` **and** `mtime_nanos` have been cleared so the
+    /// next `rlm index` forces a full rehash-and-reparse with the
+    /// current binary, bypassing the mtime fast-path in staleness.
     UpgradedFrom(String),
 }
 
@@ -86,7 +86,7 @@ fn reconcile_locked(conn: &Connection) -> Result<ParserVersionState> {
         }
         Some(v) if v == CURRENT_PARSER_VERSION => Ok(ParserVersionState::UpToDate),
         Some(prev) => {
-            clear_file_hashes(conn)?;
+            clear_file_staleness_markers(conn)?;
             stamp_current(conn)?;
             Ok(ParserVersionState::UpgradedFrom(prev))
         }
@@ -101,8 +101,13 @@ fn stamp_current(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn clear_file_hashes(conn: &Connection) -> Result<()> {
-    conn.execute("UPDATE files SET hash = ''", [])?;
+/// Reset every file's staleness markers so the next staleness pass
+/// cannot short-circuit: both `hash` (the slow-path comparison) and
+/// `mtime_nanos` (the fast-path equality gate in
+/// `application::index::staleness`) are cleared. Clearing only one
+/// is not enough — the fast-path returns before it reaches the hash.
+fn clear_file_staleness_markers(conn: &Connection) -> Result<()> {
+    conn.execute("UPDATE files SET hash = '', mtime_nanos = 0", [])?;
     Ok(())
 }
 

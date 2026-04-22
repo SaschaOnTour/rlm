@@ -375,3 +375,49 @@ fn setup_leaves_no_tempfile_artefacts_in_rlm_dir() {
         );
     }
 }
+
+/// A pre-existing CRLF config keeps CRLF everywhere — the inject path
+/// must not silently introduce bare LFs and produce mixed line
+/// endings on Windows.
+#[test]
+fn setup_inject_preserves_crlf_line_endings() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".rlm")).unwrap();
+    let pre_existing = "[output]\r\nverbose = true\r\n";
+    fs::write(dir.path().join(".rlm/config.toml"), pre_existing).unwrap();
+
+    let action = setup_config_format(dir.path(), SetupMode::Apply).unwrap();
+    assert_eq!(action, SetupAction::Updated);
+
+    let body = fs::read(dir.path().join(".rlm/config.toml")).unwrap();
+    let body = String::from_utf8(body).unwrap();
+    assert!(
+        body.contains("format = \"toon\"\r\n"),
+        "injected line must use CRLF to match existing file style: {body:?}"
+    );
+    assert!(
+        !body.contains("\r\n\n") && !body.replace("\r\n", "").contains('\n'),
+        "file must not contain bare LFs after inject (mixed EOL), got: {body:?}"
+    );
+}
+
+/// Same guarantee for the append path: a pre-existing CRLF file
+/// without `[output]` gets its appended section in CRLF too.
+#[test]
+fn setup_append_preserves_crlf_line_endings() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".rlm")).unwrap();
+    let pre_existing = "[indexing]\r\nmax_file_size_mb = 5\r\n";
+    fs::write(dir.path().join(".rlm/config.toml"), pre_existing).unwrap();
+
+    let action = setup_config_format(dir.path(), SetupMode::Apply).unwrap();
+    assert_eq!(action, SetupAction::Updated);
+
+    let body = String::from_utf8(fs::read(dir.path().join(".rlm/config.toml")).unwrap()).unwrap();
+    assert!(body.contains("[output]\r\n"));
+    assert!(body.contains("format = \"toon\"\r\n"));
+    assert!(
+        !body.replace("\r\n", "").contains('\n'),
+        "file must stay pure CRLF after append, got: {body:?}"
+    );
+}
