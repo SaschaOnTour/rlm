@@ -34,6 +34,7 @@ pub struct ReadSymbolInput<'a> {
 
 /// Response from [`read_symbol`]: the pre-serialised JSON body plus
 /// its token count. Adapters emit `body` through their own formatter.
+#[derive(Debug)]
 pub struct ReadSymbolOutput {
     pub body: String,
     pub tokens_out: u64,
@@ -51,13 +52,29 @@ pub fn read_symbol(db: &Database, input: &ReadSymbolInput<'_>) -> Result<ReadSym
     }
 
     let file_chunks = filter_by_file_and_parent(db, &chunks, input.path, input.parent)?;
-    // Fall back to every match when none of them live in `path` — keeps
-    // the old "here's every X I know about" behaviour so agents don't
-    // get an empty result when they typed the wrong path.
-    let selected: Vec<ChunkDto> = if file_chunks.is_empty() {
-        chunks.iter().map(ChunkDto::from).collect()
-    } else {
+    // Fallback policy:
+    // * no `--parent`: path typos are common, so return every match
+    //   for the ident across the project.
+    // * with `--parent`: the flag exists to disambiguate (e.g.
+    //   `Foo::new` vs `Bar::new`); dropping it on fallback would
+    //   silently defeat the disambiguation. Filter the fallback by
+    //   parent too, and error out if nothing matches that parent
+    //   anywhere.
+    let selected: Vec<ChunkDto> = if !file_chunks.is_empty() {
         file_chunks.iter().copied().map(ChunkDto::from).collect()
+    } else if let Some(p) = input.parent {
+        let parent_matches: Vec<&Chunk> = chunks
+            .iter()
+            .filter(|c| c.parent.as_deref() == Some(p))
+            .collect();
+        if parent_matches.is_empty() {
+            return Err(crate::error::RlmError::SymbolNotFound {
+                ident: format!("{p}::{}", input.symbol),
+            });
+        }
+        parent_matches.iter().copied().map(ChunkDto::from).collect()
+    } else {
+        chunks.iter().map(ChunkDto::from).collect()
     };
 
     let body = if input.metadata {
