@@ -98,9 +98,14 @@ fn cli_mcp_argument_parity() {
         let mcp_fields = match mcp_fields_for(&server, tool) {
             Some(f) => f,
             None => {
-                // MCP tool missing entirely — may be intentional (e.g.
-                // `mcp` command itself isn't exposed as a tool). Skip
-                // without failing but report once.
+                // Every entry in TOOL_PARITY is a tool we expect on
+                // MCP — a missing one *is* the drift this test guards
+                // against. (`mcp`, the meta-command, never appears
+                // here; the command-set parity test handles exempt
+                // commands separately.)
+                failures.push(format!(
+                    "tool `{tool}`: declared in TOOL_PARITY but MCP has no matching tool"
+                ));
                 continue;
             }
         };

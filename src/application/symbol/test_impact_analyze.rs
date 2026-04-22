@@ -113,9 +113,6 @@ fn build_warning(symbol: &str, confirmed_count: usize, total_candidates: usize) 
     ))
 }
 
-/// Run all three discovery strategies in priority order and merge
-/// their results, keeping the highest-priority strategy for duplicate
-/// `(test_symbol, file)` pairs.
 /// Run all three discovery strategies in priority order, merge their
 /// results, and return `(merged, confirmed_count)` where
 /// `confirmed_count` is the number of matches that came from Direct
