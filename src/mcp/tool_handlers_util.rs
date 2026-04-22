@@ -7,6 +7,7 @@
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 
+use crate::application::content::partition;
 use crate::application::query::stats::QualityFlags;
 use crate::application::session::RlmSession;
 use crate::output::Formatter;
@@ -54,7 +55,11 @@ pub fn handle_partition(
     strategy_str: &str,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match session.partition(path, strategy_str) {
+    let strategy: partition::Strategy = match strategy_str.parse() {
+        Ok(s) => s,
+        Err(e) => return Ok(RlmServer::error_text(formatter, e.to_string())),
+    };
+    match session.partition(path, strategy) {
         Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use serde::Serialize;
 
@@ -20,6 +21,40 @@ pub enum Strategy {
     Semantic,
     /// Regex-based filtering before partition.
     Keyword(String),
+}
+
+impl FromStr for Strategy {
+    type Err = RlmError;
+
+    /// Parse the partition-strategy DSL: `"semantic"`, `"uniform:N"`
+    /// (N ≥ 1), or `"keyword:PATTERN"`. Everything else is an
+    /// `InvalidPattern` error so adapters can forward a clean
+    /// message to the user.
+    fn from_str(s: &str) -> Result<Self> {
+        if s == "semantic" {
+            return Ok(Self::Semantic);
+        }
+        if let Some(rest) = s.strip_prefix("uniform:") {
+            let n: usize = rest.parse().map_err(|_| RlmError::InvalidPattern {
+                pattern: s.to_string(),
+                reason: "uniform expects a usize after the colon (e.g. 'uniform:50')".into(),
+            })?;
+            if n == 0 {
+                return Err(RlmError::InvalidPattern {
+                    pattern: s.to_string(),
+                    reason: "uniform chunk size must be >= 1".into(),
+                });
+            }
+            return Ok(Self::Uniform(n));
+        }
+        if let Some(rest) = s.strip_prefix("keyword:") {
+            return Ok(Self::Keyword(rest.to_string()));
+        }
+        Err(RlmError::InvalidPattern {
+            pattern: s.to_string(),
+            reason: "strategy must be one of: 'semantic', 'uniform:N', 'keyword:PATTERN'".into(),
+        })
+    }
 }
 
 /// A partition (chunk) of content.

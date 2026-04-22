@@ -39,17 +39,8 @@ fn resolve_index_root(
     Ok(canonical)
 }
 
-/// Handle the `index` tool: scan and index the codebase.
-// qual:api
-pub fn handle_index(
-    path: Option<&str>,
-    project_root: &std::path::Path,
-    formatter: Formatter,
-) -> Result<CallToolResult, McpError> {
-    handle_index_with_progress(path, project_root, None, formatter)
-}
-
-/// Handle index with optional progress callback (used by MCP async handler).
+/// Handle the `index` tool: scan and index the codebase, optionally
+/// with a progress callback. Pass `progress = None` for a silent run.
 // qual:api
 pub fn handle_index_with_progress(
     path: Option<&str>,

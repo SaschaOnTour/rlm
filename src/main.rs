@@ -77,7 +77,7 @@ fn run(cli: Cli, formatter: Formatter) -> Result<(), Box<dyn std::fmt::Display>>
             formatter,
         ),
         Command::Overview { detail, path } => {
-            handlers::cmd_overview(&detail, path.as_deref(), formatter)
+            handlers::cmd_overview(detail, path.as_deref(), formatter)
         }
         Command::Refs { symbol } => handlers::cmd_refs(&symbol, formatter),
         Command::Replace {

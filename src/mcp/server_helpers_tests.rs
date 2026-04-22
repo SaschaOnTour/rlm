@@ -48,13 +48,13 @@ fn guard_output_truncates_large_result() {
 
 #[test]
 fn ensure_session_runs_staleness_check_on_mcp_path() {
-    // Regression test: the MCP canonical session-open (RlmServer::ensure_session)
-    // must invoke the self-healing staleness check, mirroring the CLI
-    // session open. Probed through an **index-backed** query (FTS
+    // The MCP canonical session-open (RlmServer::ensure_session)
+    // must invoke the self-healing staleness check, mirroring the
+    // CLI session open. Probed through an index-backed query (FTS
     // search) so the assertion actually depends on the DB being
     // reconciled — a filesystem scan like `list_files` would find
-    // externally-added files even if staleness never ran and silently
-    // mask the bug (caught by Copilot on PR).
+    // externally-added files even if staleness never ran and
+    // silently mask the bug.
     use crate::application::query::search::FieldsMode;
     use std::fs;
     use tempfile::TempDir;

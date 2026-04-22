@@ -230,7 +230,7 @@ fn cargo_check_ignores_inherited_cargo_target_dir() {
     );
 }
 
-// ─── wait_with_timeout stderr-capture contract (Copilot #5) ───────────
+// ─── wait_with_timeout stderr-capture contract ─────────────────────────
 //
 // The `drain_once` polling implementation races against child exit:
 // `ChildStderr::read()` is blocking, so the main loop only reads when

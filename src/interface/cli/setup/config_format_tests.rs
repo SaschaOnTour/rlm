@@ -111,11 +111,10 @@ fn setup_is_idempotent_when_toon_already_set() {
     );
 }
 
-/// Regression: `has_output_format` used `line.starts_with("format")`, which
-/// falsely matched keys like `formatting` / `formatter` / `format_version`
-/// and skipped appending the real `format = "..."` line. Caught by Copilot
-/// on PR. The detector must key on the exact `format` identifier, not a
-/// prefix match.
+/// Regression: a prefix-match (`starts_with("format")`) incorrectly
+/// matched `formatting` / `formatter` / `format_version` and skipped
+/// writing the real `format = "..."` line. The detector must key on
+/// the exact `format` identifier, not a prefix.
 #[test]
 fn setup_adds_format_when_existing_output_has_only_similar_prefix_keys() {
     let dir = TempDir::new().unwrap();
@@ -185,11 +184,122 @@ fn setup_ignores_format_key_outside_output_section() {
     assert!(body.contains("format = \"toon\""));
 }
 
-/// Regression (Copilot): if `[output]` exists but has no `format`
-/// key (only look-alike keys like `formatting`), the old impl
-/// appended a SECOND `[output]` table, producing invalid TOML that
-/// `Config::load_settings` cannot parse. The file must stay a valid
-/// TOML document with a single `[output]` section.
+/// A TOML header with a trailing comment (`[output] # note`) is
+/// valid TOML; the classifier must still recognise it as the
+/// `[output]` section. Without that recognition, setup would append
+/// a second `[output]` table and produce invalid TOML.
+#[test]
+fn setup_detects_output_section_with_trailing_comment() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".rlm")).unwrap();
+    let pre_existing = "[output]   # produced by rlm setup on 2026-04-22\n\
+                        format = \"pretty\"\n";
+    fs::write(dir.path().join(".rlm/config.toml"), pre_existing).unwrap();
+
+    let action = setup_config_format(dir.path(), SetupMode::Apply).unwrap();
+    assert_eq!(
+        action,
+        SetupAction::Skipped,
+        "[output]-with-trailing-comment must be recognised and user's format preserved"
+    );
+
+    let body = read_config(&dir);
+    assert_eq!(
+        body.matches("[output]").count(),
+        1,
+        "must not duplicate the [output] table: {body}"
+    );
+    assert!(
+        body.contains("format = \"pretty\""),
+        "user's explicit format must survive: {body}"
+    );
+    // Parse-sanity: whole result is valid TOML with exactly one `output`.
+    let parsed: toml::Value = toml::from_str(&body).expect("result must be valid TOML");
+    assert_eq!(
+        parsed
+            .get("output")
+            .and_then(|v| v.as_table())
+            .and_then(|t| t.get("format"))
+            .and_then(|v| v.as_str()),
+        Some("pretty"),
+    );
+}
+
+/// `Path::exists()` returns `false` on permission/I/O errors too,
+/// which would send an unreadable `config.toml` down the "file
+/// missing" path and clobber it. Setup must distinguish "genuinely
+/// absent" (→ create) from "exists but unreadable" (→ surface the
+/// error).
+#[test]
+#[cfg(unix)]
+fn setup_propagates_read_error_instead_of_treating_unreadable_as_missing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".rlm")).unwrap();
+    let config_path = dir.path().join(".rlm/config.toml");
+    fs::write(&config_path, "[output]\nformat = \"json\"\n").unwrap();
+    // chmod 000 — owner cannot read. Verify the chmod is actually
+    // effective before asserting; under `sudo` / root / some
+    // container filesystems the bits don't constrain the owner, and
+    // the test-scenario would be meaningless. Standard CI escape.
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_to_string(&config_path).is_ok() {
+        // Permission bits don't constrain us here (e.g. root). Skip —
+        // restore permissions first so tempdir cleanup works.
+        let _ = fs::set_permissions(&config_path, fs::Permissions::from_mode(0o644));
+        return;
+    }
+
+    let result = setup_config_format(dir.path(), SetupMode::Apply);
+
+    // Best-effort restore so the tempdir can clean up.
+    let _ = fs::set_permissions(&config_path, fs::Permissions::from_mode(0o644));
+
+    assert!(
+        result.is_err(),
+        "unreadable config must surface as Err — got Ok({:?})",
+        result.ok()
+    );
+    // The original content must still be there: we never overwrote it
+    // via the "NoFile → create" path.
+    let content = fs::read_to_string(&config_path).unwrap();
+    assert!(
+        content.contains("format = \"json\""),
+        "must not have clobbered the unreadable file: {content:?}"
+    );
+}
+
+/// Same pathology but the `[output]` section has NO `format` key —
+/// should inject rather than duplicate.
+#[test]
+fn setup_injects_into_output_section_with_trailing_comment() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".rlm")).unwrap();
+    let pre_existing = "[output] # header comment\nformatting = \"dense\"\n";
+    fs::write(dir.path().join(".rlm/config.toml"), pre_existing).unwrap();
+
+    let action = setup_config_format(dir.path(), SetupMode::Apply).unwrap();
+    assert_eq!(action, SetupAction::Updated);
+
+    let body = read_config(&dir);
+    assert_eq!(body.matches("[output]").count(), 1);
+    let parsed: toml::Value = toml::from_str(&body).expect("result must be valid TOML");
+    let output = parsed
+        .get("output")
+        .and_then(|v| v.as_table())
+        .expect("[output] must be a table");
+    assert_eq!(output.get("format").and_then(|v| v.as_str()), Some("toon"));
+    assert_eq!(
+        output.get("formatting").and_then(|v| v.as_str()),
+        Some("dense")
+    );
+}
+
+/// If `[output]` exists but has no `format` key (only look-alike
+/// keys like `formatting`), the writer must inject `format` INTO the
+/// existing section — appending a SECOND `[output]` table produces
+/// invalid TOML that `Config::load_settings` cannot parse.
 #[test]
 fn setup_injects_format_into_existing_output_section_without_duplicating_it() {
     let dir = TempDir::new().unwrap();
@@ -240,13 +350,11 @@ fn setup_injects_format_into_existing_output_section_without_duplicating_it() {
     );
 }
 
-/// The file is written via an atomic-rename path just like the other
-/// setup writers (settings.rs, claude_md.rs). We don't probe the
-/// crash-during-write behaviour directly — that'd need fault
-/// injection — but we pin the observable consequence: after a
-/// successful setup run, no `*.tmp` / partial-file artefacts are
-/// left behind in `.rlm/`. Copilot flagged the inconsistency with
-/// `write_atomic` in neighbouring writers.
+/// The file is written via an atomic-rename path just like the
+/// other setup writers (settings.rs, claude_md.rs). We don't probe
+/// crash-during-write directly — that'd need fault injection — but
+/// we pin the observable consequence: after a successful setup run,
+/// no `*.tmp` / partial-file artefacts are left behind in `.rlm/`.
 #[test]
 fn setup_leaves_no_tempfile_artefacts_in_rlm_dir() {
     let dir = TempDir::new().unwrap();

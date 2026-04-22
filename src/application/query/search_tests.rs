@@ -309,9 +309,9 @@ fn sanitize_fts_query_preserves_underscore_in_identifier() {
 // The sanitizer whitelists `*` and preserves the literal token `OR`
 // so users can opt into prefix matching and explicit disjunction.
 // Pathological shapes — a bare `*`, a dangling `OR`, repeated `OR` —
-// are still valid on the whitelist but would become a syntactically
-// invalid FTS5 query (Copilot finding). These pin that the sanitizer
-// cleans those up before the query reaches FTS5.
+// pass the whitelist but would become syntactically invalid FTS5.
+// These pin that the sanitizer cleans them up before the query
+// reaches FTS5.
 
 #[test]
 fn sanitize_fts_query_standalone_star_drops_to_empty() {

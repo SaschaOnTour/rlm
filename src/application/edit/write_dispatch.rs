@@ -94,31 +94,29 @@ pub fn dispatch_delete(db: &Database, config: &Config, input: &DeleteInput<'_>) 
 
     let base_json =
         index::reindex_with_result(db, config, input.path, PreviewSource::Symbol(input.symbol));
-    let result_json = splice_delete_sidecar(&base_json, outcome.sidecar_lines);
+    let result_json = splice_delete_sidecar(&base_json, outcome.sidecar_lines)?;
 
     savings_hooks::record_delete(db, input.path, outcome.old_code_len, result_json.len());
     Ok(result_json)
 }
 
 /// Add a `deleted.sidecar_lines` field when the delete also removed a
-/// leading doc-comment / attribute block. Best-effort: if anything
-/// unexpected shows up in `base_json` the original envelope passes
-/// through unchanged so the adapter still gets a valid response.
-fn splice_delete_sidecar(base_json: &str, sidecar: Option<(u32, u32)>) -> String {
+/// leading doc-comment / attribute block. The base envelope is
+/// produced by our own `reindex_with_result`, so a parse failure
+/// here would mean that function emitted malformed JSON — an
+/// internal bug we want to surface, not swallow.
+fn splice_delete_sidecar(base_json: &str, sidecar: Option<(u32, u32)>) -> Result<String> {
     let Some((from, to)) = sidecar else {
-        return base_json.to_string();
+        return Ok(base_json.to_string());
     };
-    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(base_json) else {
-        return base_json.to_string();
-    };
-    let Some(obj) = value.as_object_mut() else {
-        return base_json.to_string();
-    };
-    obj.insert(
-        "deleted".to_string(),
-        serde_json::json!({ "sidecar_lines": [from, to] }),
-    );
-    serde_json::to_string(&value).unwrap_or_else(|_| base_json.to_string())
+    let mut value: serde_json::Value = serde_json::from_str(base_json)?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "deleted".to_string(),
+            serde_json::json!({ "sidecar_lines": [from, to] }),
+        );
+    }
+    Ok(serde_json::to_string(&value)?)
 }
 
 // ─── Insert ──────────────────────────────────────────────────────────
@@ -188,24 +186,21 @@ pub fn dispatch_extract(
     let source_json = index::reindex_with_result(db, config, input.path, PreviewSource::None);
     let dest_json = index::reindex_with_result(db, config, input.to, PreviewSource::None);
 
-    Ok(splice_extract_envelope(
-        &source_json,
-        &dest_json,
-        input.path,
-        input.to,
-        &outcome,
-    ))
+    splice_extract_envelope(&source_json, &dest_json, input.path, input.to, &outcome)
 }
 
+/// Both envelope JSONs were produced by our own `reindex_with_result`;
+/// a parse failure on either is an internal bug and surfaces as an
+/// error rather than a silent "`reindexed: false`" lie.
 fn splice_extract_envelope(
     source_json: &str,
     dest_json: &str,
     source_path: &str,
     dest_path: &str,
     outcome: &ExtractOutcome,
-) -> String {
-    let mut response: serde_json::Value = serde_json::from_str(source_json)
-        .unwrap_or_else(|_| serde_json::json!({"ok": true, "reindexed": false}));
+) -> Result<String> {
+    let mut response: serde_json::Value = serde_json::from_str(source_json)?;
+    let dest_val: serde_json::Value = serde_json::from_str(dest_json)?;
     if let Some(obj) = response.as_object_mut() {
         obj.insert(
             "source".to_string(),
@@ -215,13 +210,8 @@ fn splice_extract_envelope(
             "dest".to_string(),
             serde_json::Value::String(dest_path.into()),
         );
-        obj.insert(
-            "extracted".to_string(),
-            serde_json::to_value(outcome).unwrap_or(serde_json::Value::Null),
-        );
-        if let Ok(dest_val) = serde_json::from_str::<serde_json::Value>(dest_json) {
-            obj.insert("dest_reindex".to_string(), dest_val);
-        }
+        obj.insert("extracted".to_string(), serde_json::to_value(outcome)?);
+        obj.insert("dest_reindex".to_string(), dest_val);
     }
-    response.to_string()
+    Ok(response.to_string())
 }

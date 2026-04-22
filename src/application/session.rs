@@ -51,7 +51,7 @@ use crate::application::middleware::{
 use crate::application::query::{
     files::{self, FilesFilter, FilesResult},
     peek, read as read_query, search as search_query, stats as stats_query, supported, tree,
-    verify,
+    verify, DetailLevel,
 };
 use crate::application::symbol::{ContextQuery, ContextWithGraphQuery, RefsQuery, ScopeQuery};
 use crate::config::Config;
@@ -89,38 +89,33 @@ impl RlmSession {
 
     fn open_with_config(config: Config) -> Result<Self> {
         let db = index::ensure_index(&config)?;
-        // Self-healing: pick up external edits (CC-native, vim, git
-        // pull, …) before the caller uses the index. Set
-        // RLM_SKIP_REFRESH=1 to skip.
-        index::staleness::ensure_index_fresh(&db, &config)?;
-        Ok(Self { db, config })
+        Self::from_db(db, config)
     }
 
     /// Open a session only if an index already exists, returning
     /// `None` when the project has not been indexed yet. Used by the
     /// MCP server for every tool call — MCP must not auto-index, but
-    /// it **must** honour the same self-healing staleness contract as
+    /// it honours the same self-healing staleness contract as
     /// [`Self::open`] so every tool sees a current index.
-    ///
-    /// Regression: `try_open_existing` previously returned the raw
-    /// handle without running the staleness refresh. Callers that
-    /// relied on the docstring's "refreshes staleness" promise (CLI
-    /// parity, external-edit tests) silently saw stale data. The
-    /// refresh is now mandatory on this path and verified by
-    /// `server_helpers_tests::ensure_session_runs_staleness_check_on_mcp_path`.
     pub fn try_open_existing(project_root: &Path) -> Result<Option<Self>> {
         let config = Config::new(project_root);
         match Database::open_required(&config.db_path) {
-            Ok(db) => {
-                // Self-healing: pick up external edits (CC-native,
-                // vim, git pull, …) before the caller uses the index.
-                // Set RLM_SKIP_REFRESH=1 to skip.
-                index::staleness::ensure_index_fresh(&db, &config)?;
-                Ok(Some(Self { db, config }))
-            }
+            Ok(db) => Ok(Some(Self::from_db(db, config)?)),
             Err(RlmError::IndexNotFound) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// Wrap a freshly-opened DB + config in a session and refresh
+    /// staleness. Single seam for both constructors — ensures every
+    /// session handed out, regardless of how the DB was acquired,
+    /// has been reconciled against the filesystem.
+    fn from_db(db: Database, config: Config) -> Result<Self> {
+        // Self-healing: pick up external edits (CC-native, vim, git
+        // pull, …) before the caller uses the index. Set
+        // `RLM_SKIP_REFRESH=1` to skip.
+        index::staleness::ensure_index_fresh(&db, &config)?;
+        Ok(Self { db, config })
     }
 
     /// Read-only accessor for the project [`Config`]. Composition-root
@@ -195,10 +190,15 @@ impl RlmSession {
         read_query::read_section(&self.db, path, heading)
     }
 
-    /// Overview at one of three detail levels: `"minimal"`,
-    /// `"standard"`, `"tree"`. Invalid detail returns a user-facing
-    /// [`RlmError::InvalidPattern`].
-    pub fn overview(&self, detail: &str, path_filter: Option<&str>) -> Result<OperationResponse> {
+    /// Project-structure overview at one of three detail levels.
+    /// Adapters parse the user input into `DetailLevel` at the edge
+    /// (clap `ValueEnum` / MCP `from_optional`), so the session
+    /// itself never sees invalid tokens.
+    pub fn overview(
+        &self,
+        detail: DetailLevel,
+        path_filter: Option<&str>,
+    ) -> Result<OperationResponse> {
         let meta = OperationMeta {
             command: "overview",
             files_touched: 0,
@@ -207,22 +207,18 @@ impl RlmSession {
             },
         };
         match detail {
-            "minimal" => {
+            DetailLevel::Minimal => {
                 let result = peek::peek(&self.db, path_filter)?;
                 Ok(record_operation(&self.db, &meta, &result))
             }
-            "standard" => {
+            DetailLevel::Standard => {
                 let entries = crate::application::query::map::build_map(&self.db, path_filter)?;
                 Ok(record_operation(&self.db, &meta, &entries))
             }
-            "tree" => {
+            DetailLevel::Tree => {
                 let nodes = tree::build_tree(&self.db, path_filter)?;
                 Ok(record_operation(&self.db, &meta, &nodes))
             }
-            other => Err(RlmError::InvalidPattern {
-                pattern: other.to_string(),
-                reason: "unknown detail level — use 'minimal', 'standard', or 'tree'".into(),
-            }),
         }
     }
 
@@ -251,10 +247,15 @@ impl RlmSession {
         record_file_query(&self.db, &ScopeQuery { line }, path)
     }
 
-    /// Partition a file using a strategy string (`"semantic"`,
-    /// `"uniform:N"`, `"keyword:PATTERN"`).
-    pub fn partition(&self, path: &str, strategy_str: &str) -> Result<OperationResponse> {
-        let strategy = parse_partition_strategy(strategy_str)?;
+    /// Partition a file using a typed strategy. Adapters parse the
+    /// DSL (`"semantic"` / `"uniform:N"` / `"keyword:PATTERN"`) at the
+    /// edge via `Strategy::from_str`, so the session receives a typed
+    /// value.
+    pub fn partition(
+        &self,
+        path: &str,
+        strategy: partition::Strategy,
+    ) -> Result<OperationResponse> {
         let query = PartitionQuery {
             strategy,
             project_root: self.config.project_root.clone(),
@@ -364,36 +365,6 @@ pub enum VerifyOutput {
     Report(crate::db::queries::VerifyReport),
     /// `fix = true` and issues were fixed.
     Fixed(verify::FixResult),
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────
-
-/// Parse the partition strategy DSL into a [`partition::Strategy`].
-/// Recognises `"semantic"`, `"uniform:N"`, `"keyword:PATTERN"`.
-fn parse_partition_strategy(s: &str) -> Result<partition::Strategy> {
-    if s == "semantic" {
-        return Ok(partition::Strategy::Semantic);
-    }
-    if let Some(rest) = s.strip_prefix("uniform:") {
-        let n: usize = rest.parse().map_err(|_| RlmError::InvalidPattern {
-            pattern: s.to_string(),
-            reason: "uniform expects a usize after the colon (e.g. 'uniform:50')".into(),
-        })?;
-        if n == 0 {
-            return Err(RlmError::InvalidPattern {
-                pattern: s.to_string(),
-                reason: "uniform chunk size must be >= 1".into(),
-            });
-        }
-        return Ok(partition::Strategy::Uniform(n));
-    }
-    if let Some(rest) = s.strip_prefix("keyword:") {
-        return Ok(partition::Strategy::Keyword(rest.to_string()));
-    }
-    Err(RlmError::InvalidPattern {
-        pattern: s.to_string(),
-        reason: "strategy must be one of: 'semantic', 'uniform:N', 'keyword:PATTERN'".into(),
-    })
 }
 
 /// Re-export of the progress-callback type so adapters building an

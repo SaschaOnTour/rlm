@@ -320,18 +320,21 @@ fn is_sidecar_line(trimmed: &str) -> bool {
     trimmed.starts_with("///") || trimmed.starts_with("//!") || trimmed.starts_with("#[")
 }
 
+/// 1-based line number of `byte_pos` in `source`. Clamped to the
+/// source length so callers don't have to range-check.
+pub(super) fn line_at(source: &str, byte_pos: usize) -> u32 {
+    (source[..byte_pos.min(source.len())]
+        .bytes()
+        .filter(|&b| b == b'\n')
+        .count()
+        + 1) as u32
+}
+
 /// Convert a `[start..end)` byte range into 1-based inclusive line
 /// numbers. Used by `delete_symbol` to report which lines the sidecar
 /// occupied.
 fn byte_range_to_lines(source: &str, start: usize, end: usize) -> (u32, u32) {
-    let line_at = |byte_pos: usize| -> u32 {
-        (source[..byte_pos.min(source.len())]
-            .bytes()
-            .filter(|&b| b == b'\n')
-            .count()
-            + 1) as u32
-    };
-    let l1 = line_at(start);
-    let l2 = line_at(end.saturating_sub(1)).max(l1);
+    let l1 = line_at(source, start);
+    let l2 = line_at(source, end.saturating_sub(1)).max(l1);
     (l1, l2)
 }

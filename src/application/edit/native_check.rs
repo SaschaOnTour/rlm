@@ -178,14 +178,12 @@ pub(crate) enum WaitOutcome {
 /// Wait for the child with a wall-clock timeout.
 ///
 /// A dedicated reader thread consumes the full `stderr` stream so the
-/// main loop only has to `try_wait()` + check the deadline. The
-/// previous polling-drain approach called `ChildStderr::read()` —
-/// which is blocking — from the same loop as the timeout check, and
-/// races against a fast-exiting child: if the child exits before the
-/// main loop's first drain pass, stderr can be silently lost or
-/// truncated depending on OS pipe buffering (Copilot finding #5).
-/// The reader thread reads until EOF, which happens when the pipe
-/// closes (child exit or explicit `kill`), so capture is
+/// main loop only has to `try_wait()` + check the deadline. A naive
+/// polling drain from the main loop would call `ChildStderr::read()`
+/// — which is blocking — and race a fast-exiting child: if the child
+/// exits before the first drain pass, stderr is silently lost or
+/// truncated depending on OS pipe buffering. The reader thread reads
+/// until EOF (child exit or explicit `kill`), so capture is
 /// timing-independent.
 pub(crate) fn wait_with_timeout(child: &mut Child, timeout: Duration) -> WaitOutcome {
     let stderr_reader = spawn_stderr_reader(child.stderr.take());

@@ -18,7 +18,7 @@
 
 use std::path::Path;
 
-use super::replacer::{delete_symbol, find_sidecar_start, find_symbol_in_file};
+use super::replacer::{delete_symbol, find_sidecar_start, find_symbol_in_file, line_at};
 use super::validator::{validate_and_write, SyntaxGuard};
 use crate::db::Database;
 use crate::error::{Result, RlmError};
@@ -89,7 +89,7 @@ pub fn extract_symbols(
         to_lines,
     } = assemble_dest(&dest_full, &plan)?;
     write_dest(&dest_full, dest_path, &dest_content)?;
-    delete_from_source(db, source_path, idents, parent, project_root)?;
+    delete_from_source(db, source_path, &plan, parent, project_root)?;
 
     let bytes_moved = plan.iter().map(|p| p.bytes.len()).sum();
     let moved = plan
@@ -188,20 +188,23 @@ fn assemble_dest(dest_full: &Path, plan: &[ExtractionPlan]) -> Result<Assembled>
         .collect::<Vec<_>>()
         .join("\n");
 
-    let (prefix_line_count, dest_created, content) = if dest_full.exists() {
-        let existing = std::fs::read_to_string(dest_full)?;
-        let separator = if existing.ends_with('\n') {
-            "\n"
-        } else {
-            "\n\n"
-        };
-        // prefix = existing + separator; both arms end with "\n\n", so
-        // the next character starts on a fresh line after a blank.
-        let prefix = format!("{existing}{separator}");
-        let prefix_lines = line_count(&prefix);
-        (prefix_lines, false, format!("{prefix}{extracted}"))
-    } else {
-        (0, true, extracted)
+    // Direct read + ErrorKind::NotFound match — avoids the TOCTOU
+    // two-syscall dance of `exists()` + `read_to_string`.
+    let (prefix_line_count, dest_created, content) = match std::fs::read_to_string(dest_full) {
+        Ok(existing) => {
+            let separator = if existing.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            };
+            // prefix = existing + separator; both arms end with "\n\n",
+            // so the next character starts on a fresh line after a blank.
+            let prefix = format!("{existing}{separator}");
+            let prefix_lines = line_count(&prefix);
+            (prefix_lines, false, format!("{prefix}{extracted}"))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (0, true, extracted),
+        Err(e) => return Err(e.into()),
     };
 
     Ok(Assembled {
@@ -270,33 +273,23 @@ fn write_dest(dest_full: &Path, dest_path: &str, content: &str) -> Result<()> {
 /// Deletions happen in reverse byte order: deleting a later-positioned
 /// symbol first leaves the DB-stored byte ranges of earlier symbols
 /// intact, so their staleness check still matches the file content.
+/// Reuses `plan.symbol_start` for ordering so we don't re-query the DB.
 fn delete_from_source(
     db: &Database,
     source_path: &str,
-    idents: &[String],
+    plan: &[ExtractionPlan],
     parent: Option<&str>,
     project_root: &Path,
 ) -> Result<()> {
-    let mut ordered: Vec<(String, u32)> = idents
+    let mut ordered: Vec<(&str, usize)> = plan
         .iter()
-        .map(|ident| {
-            let chunk = find_symbol_in_file(db, source_path, ident, parent)?;
-            Ok((ident.clone(), chunk.start_byte))
-        })
-        .collect::<Result<Vec<_>>>()?;
+        .map(|p| (p.ident.as_str(), p.symbol_start))
+        .collect();
     ordered.sort_by_key(|(_, start)| std::cmp::Reverse(*start));
     for (ident, _) in ordered {
-        delete_symbol(db, source_path, &ident, parent, false, project_root)?;
+        delete_symbol(db, source_path, ident, parent, false, project_root)?;
     }
     Ok(())
-}
-
-fn line_at(source: &str, byte_pos: usize) -> u32 {
-    (source[..byte_pos.min(source.len())]
-        .bytes()
-        .filter(|&b| b == b'\n')
-        .count()
-        + 1) as u32
 }
 
 #[cfg(test)]

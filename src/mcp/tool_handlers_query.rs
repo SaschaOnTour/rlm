@@ -5,6 +5,7 @@ use rmcp::ErrorData as McpError;
 
 use crate::application::query::files::FilesFilter;
 use crate::application::query::search::FieldsMode;
+use crate::application::query::DetailLevel;
 use crate::application::session::RlmSession;
 use crate::output::Formatter;
 
@@ -29,15 +30,21 @@ pub fn handle_search(
     }
 }
 
-/// Handle the `overview` tool: project structure at three detail levels.
+/// Handle the `overview` tool: project structure at three detail
+/// levels. The detail string comes from the JSON payload — we parse
+/// it at the adapter boundary so the session receives a typed value.
 // qual:api
 pub fn handle_overview(
     session: &RlmSession,
-    detail: &str,
+    detail: Option<&str>,
     path: Option<&str>,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match session.overview(detail, path) {
+    let level = match DetailLevel::from_optional(detail) {
+        Ok(l) => l,
+        Err(e) => return Ok(RlmServer::error_text(formatter, e.to_string())),
+    };
+    match session.overview(level, path) {
         Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
     }

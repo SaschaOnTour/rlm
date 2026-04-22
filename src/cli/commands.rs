@@ -27,6 +27,19 @@ pub enum FieldsArg {
     Minimal,
 }
 
+/// Detail level for `rlm overview`. Mirrors the application-layer
+/// [`crate::application::query::DetailLevel`] so clap can parse
+/// `--detail <level>` without dragging clap into the application layer.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum DetailArg {
+    /// Symbol names / kinds / lines only (~50 tokens).
+    Minimal,
+    /// File map: language, line count, public symbols, descriptions.
+    Standard,
+    /// Directory hierarchy with symbol annotations.
+    Tree,
+}
+
 #[derive(Parser)]
 #[command(
     name = "rlm",
@@ -107,9 +120,9 @@ pub enum Command {
     /// 'standard' (default): file map with language, line count, public symbols, descriptions.
     /// 'tree': directory hierarchy with symbol annotations.
     Overview {
-        /// Detail level: minimal, standard, tree
-        #[arg(long, default_value = "standard")]
-        detail: String,
+        /// Detail level.
+        #[arg(long, value_enum, default_value = "standard")]
+        detail: DetailArg,
         /// Optional path prefix filter (e.g. "src/")
         #[arg(long)]
         path: Option<String>,

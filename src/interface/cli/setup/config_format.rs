@@ -64,10 +64,9 @@ pub fn setup_config_format(project_dir: &Path, mode: SetupMode) -> Result<SetupA
 
 /// Classification of an existing (or absent) `config.toml` relative to
 /// the question "is the `[output].format` key set?". The three
-/// non-`FormatAlreadySet` variants each take a distinct write path,
-/// because appending a fresh `[output]` table when one already
-/// exists would produce a **duplicate** section and invalid TOML
-/// (Copilot finding).
+/// non-`FormatAlreadySet` variants each take a distinct write path:
+/// appending a fresh `[output]` table when one already exists would
+/// produce a duplicate section and invalid TOML.
 enum State {
     /// No `config.toml` on disk at all.
     NoFile,
@@ -84,14 +83,31 @@ enum State {
 }
 
 fn inspect(config_path: &Path) -> Result<State> {
-    if !config_path.exists() {
-        return Ok(State::NoFile);
-    }
-    let content = fs::read_to_string(config_path)?;
-    Ok(match classify_output(&content) {
-        OutputLocation::AbsentSection => State::NoOutputSection(content),
-        OutputLocation::SectionWithoutFormat => State::OutputWithoutFormat(content),
-        OutputLocation::SectionWithFormat => State::FormatAlreadySet,
+    // Direct read + ErrorKind::NotFound match rather than
+    // `Path::exists()`: the latter returns `false` on permission/I/O
+    // errors too, which would funnel an unreadable file into the
+    // "create fresh" path and clobber it.
+    let content = match fs::read_to_string(config_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(State::NoFile),
+        Err(e) => return Err(e.into()),
+    };
+
+    // Classify via the toml crate itself instead of a hand-rolled
+    // line scan — the parser handles trailing comments, alternative
+    // quoting, nested tables, whitespace, and all the edge cases
+    // we'd otherwise have to reimplement. Malformed TOML folds into
+    // `NoOutputSection`: the writer then appends a fresh `[output]`
+    // table, which is the best we can do without second-guessing
+    // the user's mistake.
+    let output_table = toml::from_str::<toml::Value>(&content)
+        .ok()
+        .and_then(|v| v.get("output").and_then(|o| o.as_table().cloned()));
+
+    Ok(match output_table {
+        Some(tbl) if tbl.contains_key("format") => State::FormatAlreadySet,
+        Some(_) => State::OutputWithoutFormat(content),
+        None => State::NoOutputSection(content),
     })
 }
 
@@ -106,54 +122,6 @@ fn classify_action(state: &State, mode: SetupMode) -> SetupAction {
         State::NoOutputSection(_) | State::OutputWithoutFormat(_) => SetupAction::Updated,
         State::FormatAlreadySet => SetupAction::Skipped,
     }
-}
-
-/// Where is `[output].format` relative to the rest of the config?
-enum OutputLocation {
-    /// No `[output]` section anywhere.
-    AbsentSection,
-    /// `[output]` section exists, but no `format` key inside it.
-    SectionWithoutFormat,
-    /// `[output]` section exists and contains a `format` key.
-    SectionWithFormat,
-}
-
-/// Simple line-based scan — avoids depending on a TOML parser for this
-/// single check. Key matching is **exact**: only a `format` key
-/// counts, not `formatting` / `formatter` / `format_version` / etc.
-/// (The old prefix-match silently suppressed the real `format` line
-/// write when such lookalikes were present.)
-fn classify_output(content: &str) -> OutputLocation {
-    let mut in_output = false;
-    let mut saw_output = false;
-    for raw in content.lines() {
-        let line = raw.trim();
-        if line.starts_with('[') && line.ends_with(']') {
-            in_output = line.eq_ignore_ascii_case("[output]");
-            if in_output {
-                saw_output = true;
-            }
-            continue;
-        }
-        if in_output && is_format_key_line(line) {
-            return OutputLocation::SectionWithFormat;
-        }
-    }
-    if saw_output {
-        OutputLocation::SectionWithoutFormat
-    } else {
-        OutputLocation::AbsentSection
-    }
-}
-
-/// A TOML key/value line whose key is exactly `format` (ignoring
-/// whitespace on either side of the `=`). Trailing value is not
-/// validated — we only care about detecting the key's presence.
-fn is_format_key_line(line: &str) -> bool {
-    let Some((key, _value)) = line.split_once('=') else {
-        return false;
-    };
-    key.trim() == "format"
 }
 
 fn write_fresh_config(path: &Path) -> Result<()> {
@@ -197,10 +165,11 @@ fn write_with_injected_format(path: &Path, existing: &str) -> Result<()> {
 
     for line in existing.split_inclusive('\n') {
         out.push_str(line);
-        // `split_inclusive` keeps the trailing `\n` on the line, so a
-        // bare header line comes through as `"[output]\n"`. Trim
-        // before comparing, then emit the injected key right after.
-        if !injected && line.trim().eq_ignore_ascii_case("[output]") {
+        // The header detector is the same one `classify_output` uses,
+        // so a line like `"[output]   # note\n"` matches just like a
+        // bare `"[output]\n"`. Emit the injected key on the line
+        // after the header.
+        if !injected && is_output_header(line) {
             out.push_str(&format!("format = \"{DEFAULT_FORMAT}\"\n"));
             injected = true;
         }
@@ -215,6 +184,26 @@ fn write_with_injected_format(path: &Path, existing: &str) -> Result<()> {
 
     write_atomic(path, out.as_bytes())?;
     Ok(())
+}
+
+/// True if `raw` (possibly with trailing `\n`) is an `[output]` table
+/// header — tolerates trailing whitespace and `# comment`, rejects
+/// array-of-tables (`[[output]]`). Only needed by the write path;
+/// the read path uses `toml::from_str` directly.
+fn is_output_header(raw: &str) -> bool {
+    let line = raw.trim();
+    let before_comment = line.split_once('#').map_or(line, |(pre, _)| pre).trim_end();
+    let Some(inner) = before_comment
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+    else {
+        return false;
+    };
+    // Reject `[[...]]` — we only handle plain tables.
+    if inner.starts_with('[') || inner.ends_with(']') {
+        return false;
+    }
+    inner.trim().eq_ignore_ascii_case("output")
 }
 
 #[cfg(test)]

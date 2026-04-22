@@ -8,7 +8,7 @@
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 
-use crate::application::query::read::{ReadSectionResult, ReadSymbolInput, MAX_SECTION_HINT};
+use crate::application::query::read::ReadSymbolInput;
 use crate::application::session::RlmSession;
 use crate::output::Formatter;
 
@@ -57,38 +57,10 @@ fn handle_read_section(
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
     match session.read_section(path, heading) {
-        Ok(ReadSectionResult::Found { body, .. }) => Ok(RlmServer::success_text(formatter, body)),
-        Ok(ReadSectionResult::NotFound {
-            heading,
-            available,
-            total,
-        }) => Ok(RlmServer::error_text(
-            formatter,
-            section_not_found_hint(&heading, &available, total),
-        )),
-        Ok(ReadSectionResult::FileNotFound { path }) => Ok(RlmServer::error_text(
-            formatter,
-            format!(
-                "File not found: {path}. Run 'index' to update, or check 'files' for available paths."
-            ),
-        )),
+        Ok(result) => match result.into_body_or_error() {
+            Ok(body) => Ok(RlmServer::success_text(formatter, body)),
+            Err(msg) => Ok(RlmServer::error_text(formatter, msg)),
+        },
         Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-    }
-}
-
-fn section_not_found_hint(heading: &str, available: &[String], total: usize) -> String {
-    if available.is_empty() {
-        return format!("section not found: {heading}. File has no sections.");
-    }
-    if total > available.len() {
-        format!(
-            "section not found: {heading}. Available ({total} total, first {MAX_SECTION_HINT}): {}",
-            available.join(", ")
-        )
-    } else {
-        format!(
-            "section not found: {heading}. Available: {}",
-            available.join(", ")
-        )
     }
 }

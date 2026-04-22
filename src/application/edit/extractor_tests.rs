@@ -214,7 +214,7 @@ fn extract_rejects_empty_symbols_list() {
     assert!(result.is_err(), "empty symbol list must error");
 }
 
-// ─── to_lines population (Copilot finding #4) ─────────────────────────
+// ─── to_lines population ──────────────────────────────────────────────
 
 /// Regression: `MovedSymbol::to_lines` was always `None` even though
 /// the doc said "populated when the destination file existed before

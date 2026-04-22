@@ -126,6 +126,43 @@ pub enum ReadSectionResult {
 /// Maximum number of section headings surfaced in a `NotFound` hint.
 pub const MAX_SECTION_HINT: usize = 10;
 
+impl ReadSectionResult {
+    /// Destructure into `(body, None)` on `Found` or
+    /// `(String::new(), Some(error_message))` otherwise. Used by
+    /// adapters that want to emit body-or-error without reimplementing
+    /// the error-message format per surface.
+    pub fn into_body_or_error(self) -> std::result::Result<String, String> {
+        match self {
+            Self::Found { body, .. } => Ok(body),
+            Self::FileNotFound { path } => Err(format!(
+                "File not found: {path}. Run 'index' to update, or check 'files' for available paths."
+            )),
+            Self::NotFound {
+                heading,
+                available,
+                total,
+            } => Err(format_section_not_found(&heading, &available, total)),
+        }
+    }
+}
+
+fn format_section_not_found(heading: &str, available: &[String], total: usize) -> String {
+    if available.is_empty() {
+        return format!("section not found: {heading}. File has no sections.");
+    }
+    if total > available.len() {
+        format!(
+            "section not found: {heading}. Available ({total} total, first {MAX_SECTION_HINT}): {}",
+            available.join(", ")
+        )
+    } else {
+        format!(
+            "section not found: {heading}. Available: {}",
+            available.join(", ")
+        )
+    }
+}
+
 /// Resolve a Markdown section read. Savings are recorded on the
 /// success path only; `NotFound` doesn't count as a "real" read.
 pub fn read_section(db: &Database, path: &str, heading: &str) -> Result<ReadSectionResult> {

@@ -4,7 +4,6 @@
 //! For tool functionality tests, see e2e_tests.rs which tests through the CLI.
 
 use std::fs;
-use std::path::PathBuf;
 
 use rmcp::ServerHandler;
 use tempfile::TempDir;
@@ -17,6 +16,18 @@ use rlm::output::Formatter;
 // =============================================================================
 // Test Setup Helpers
 // =============================================================================
+
+/// Build an `RlmServer` rooted at a fresh tempdir. These tests only
+/// inspect the static tool router / schema / server-info, so any
+/// valid path works — but a tempdir keeps the tests cross-platform
+/// (Windows has no `/tmp`) and isolated from any real filesystem
+/// state. The returned `TempDir` guard must be kept alive for the
+/// test's duration so the directory isn't removed prematurely.
+fn server_for_schema_test() -> (TempDir, RlmServer) {
+    let tmp = TempDir::new().expect("tempdir for schema test");
+    let server = RlmServer::new(tmp.path().to_path_buf(), Formatter::default());
+    (tmp, server)
+}
 
 /// Create a temp directory with a Rust test file and index it.
 fn setup_indexed_project() -> (TempDir, RlmServer) {
@@ -63,8 +74,7 @@ fn internal() {
 
 #[test]
 fn test_server_new() {
-    let path = PathBuf::from("/tmp/test");
-    let _server = RlmServer::new(path, Formatter::default());
+    let (_tmp, _server) = server_for_schema_test();
 }
 
 #[test]
@@ -79,8 +89,7 @@ fn test_server_new_with_real_path() {
 
 #[test]
 fn test_server_info() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let info = server.get_info();
 
     assert!(info.instructions.is_some());
@@ -91,8 +100,7 @@ fn test_server_info() {
 
 #[test]
 fn test_server_info_mentions_key_concepts() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let info = server.get_info();
 
     let instructions = info.instructions.unwrap();
@@ -118,8 +126,7 @@ fn test_server_info_mentions_key_concepts() {
 
 #[test]
 fn test_server_capabilities() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let info = server.get_info();
 
     assert!(info.capabilities.tools.is_some());
@@ -131,8 +138,7 @@ fn test_server_capabilities() {
 
 #[test]
 fn test_tool_list_count() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     assert_eq!(
@@ -146,8 +152,7 @@ fn test_tool_list_count() {
 
 #[test]
 fn test_tool_list_core_tools() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
@@ -164,8 +169,7 @@ fn test_tool_list_core_tools() {
 
 #[test]
 fn test_tool_list_code_intelligence_tools() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
@@ -178,8 +182,7 @@ fn test_tool_list_code_intelligence_tools() {
 
 #[test]
 fn test_tool_list_edit_tools() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
@@ -190,8 +193,7 @@ fn test_tool_list_edit_tools() {
 
 #[test]
 fn test_tool_list_utility_tools() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
@@ -213,8 +215,7 @@ fn test_tool_list_utility_tools() {
 
 #[test]
 fn test_removed_tools_not_present() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
@@ -262,8 +263,7 @@ fn test_removed_tools_not_present() {
 
 #[test]
 fn test_tool_descriptions_exist() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     for tool in &tools {
@@ -283,8 +283,7 @@ fn test_tool_descriptions_exist() {
 
 #[test]
 fn test_tool_descriptions_informative() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     for tool in &tools {
@@ -300,8 +299,7 @@ fn test_tool_descriptions_informative() {
 
 #[test]
 fn test_overview_tool_description() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let overview_tool = tools.iter().find(|t| t.name == "overview").unwrap();
@@ -320,8 +318,7 @@ fn test_overview_tool_description() {
 
 #[test]
 fn test_tool_schemas_defined() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     for tool in &tools {
@@ -336,8 +333,7 @@ fn test_tool_schemas_defined() {
 
 #[test]
 fn test_search_tool_requires_query() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let search_tool = tools.iter().find(|t| t.name == "search").unwrap();
@@ -350,8 +346,7 @@ fn test_search_tool_requires_query() {
 
 #[test]
 fn test_read_tool_requires_path() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let read_tool = tools.iter().find(|t| t.name == "read").unwrap();
@@ -368,8 +363,7 @@ fn test_read_tool_requires_path() {
 
 #[test]
 fn test_overview_tool_has_detail_param() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let overview_tool = tools.iter().find(|t| t.name == "overview").unwrap();
@@ -386,8 +380,7 @@ fn test_overview_tool_has_detail_param() {
 
 #[test]
 fn test_context_tool_has_graph_param() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let context_tool = tools.iter().find(|t| t.name == "context").unwrap();
@@ -425,8 +418,7 @@ fn test_tool_list_unchanged_with_index() {
 
 #[test]
 fn test_all_tools_have_valid_names() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     for tool in &tools {
@@ -443,8 +435,7 @@ fn test_all_tools_have_valid_names() {
 
 #[test]
 fn test_partition_tool_has_strategy_param() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let partition_tool = tools.iter().find(|t| t.name == "partition").unwrap();
@@ -461,8 +452,7 @@ fn test_partition_tool_has_strategy_param() {
 
 #[test]
 fn test_replace_tool_has_required_params() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let replace_tool = tools.iter().find(|t| t.name == "replace").unwrap();
@@ -474,8 +464,7 @@ fn test_replace_tool_has_required_params() {
 
 #[test]
 fn test_insert_tool_has_position_param() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let insert_tool = tools.iter().find(|t| t.name == "insert").unwrap();
@@ -496,8 +485,7 @@ fn test_insert_tool_has_position_param() {
 
 #[test]
 fn test_stats_tool_has_savings_and_since_params() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let stats_tool = tools.iter().find(|t| t.name == "stats").unwrap();
@@ -514,8 +502,7 @@ fn test_stats_tool_has_savings_and_since_params() {
 
 #[test]
 fn test_savings_tool_removed() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
@@ -527,8 +514,7 @@ fn test_savings_tool_removed() {
 
 #[test]
 fn test_quality_tool_exists() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
@@ -540,8 +526,7 @@ fn test_quality_tool_exists() {
 
 #[test]
 fn test_quality_tool_has_expected_flags() {
-    let path = PathBuf::from("/tmp/test");
-    let server = RlmServer::new(path, Formatter::default());
+    let (_tmp, server) = server_for_schema_test();
     let tools = server.get_tool_router().list_all();
 
     let tool = tools.iter().find(|t| t.name == "quality").unwrap();

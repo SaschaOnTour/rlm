@@ -180,8 +180,12 @@ impl RlmServer {
         params: Parameters<OverviewParams>,
     ) -> Result<CallToolResult, McpError> {
         let session = self.ensure_session()?;
-        let detail = params.0.detail.as_deref().unwrap_or("standard");
-        tool_handlers::handle_overview(&session, detail, params.0.path.as_deref(), self.formatter)
+        tool_handlers::handle_overview(
+            &session,
+            params.0.detail.as_deref(),
+            params.0.path.as_deref(),
+            self.formatter,
+        )
     }
 
     #[tool(

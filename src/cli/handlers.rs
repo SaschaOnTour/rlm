@@ -6,14 +6,16 @@
 //! bookkeeping, envelope splicing — lives behind `RlmSession` in
 //! the application layer.
 
+use crate::application::content::partition;
 use crate::application::edit::inserter::InsertPosition;
 use crate::application::edit::write_dispatch::{
     DeleteInput, ExtractInput, InsertInput, ReplaceInput,
 };
-use crate::application::query::read::{ReadSectionResult, ReadSymbolInput, MAX_SECTION_HINT};
+use crate::application::query::read::ReadSymbolInput;
 use crate::application::query::search::FieldsMode;
+use crate::application::query::DetailLevel;
 use crate::application::session::RlmSession;
-use crate::cli::commands::FieldsArg;
+use crate::cli::commands::{DetailArg, FieldsArg};
 use crate::cli::helpers::{map_err, print_str, CmdResult};
 use crate::output::{self, Formatter};
 
@@ -91,42 +93,24 @@ fn cmd_read_symbol(
 
 fn cmd_read_section(path: &str, heading: &str, formatter: Formatter) -> CmdResult {
     let session = RlmSession::open_cwd().map_err(map_err)?;
-    match session.read_section(path, heading).map_err(map_err)? {
-        ReadSectionResult::Found { body, .. } => {
+    let result = session.read_section(path, heading).map_err(map_err)?;
+    match result.into_body_or_error() {
+        Ok(body) => {
             print_str(formatter, &body);
             Ok(())
         }
-        ReadSectionResult::NotFound {
-            heading,
-            available,
-            total,
-        } => Err(map_err(format_section_not_found(
-            &heading, &available, total,
-        ))),
-        ReadSectionResult::FileNotFound { path } => Err(map_err(format!("file not found: {path}"))),
+        Err(msg) => Err(map_err(msg)),
     }
 }
 
-fn format_section_not_found(heading: &str, available: &[String], total: usize) -> String {
-    if available.is_empty() {
-        return format!("section not found: {heading}. File has no sections.");
-    }
-    if total > available.len() {
-        format!(
-            "section not found: {heading}. Available ({total} total, first {MAX_SECTION_HINT}): {}",
-            available.join(", ")
-        )
-    } else {
-        format!(
-            "section not found: {heading}. Available: {}",
-            available.join(", ")
-        )
-    }
-}
-
-pub fn cmd_overview(detail: &str, path: Option<&str>, formatter: Formatter) -> CmdResult {
+pub fn cmd_overview(detail: DetailArg, path: Option<&str>, formatter: Formatter) -> CmdResult {
     let session = RlmSession::open_cwd().map_err(map_err)?;
-    let response = session.overview(detail, path).map_err(map_err)?;
+    let level = match detail {
+        DetailArg::Minimal => DetailLevel::Minimal,
+        DetailArg::Standard => DetailLevel::Standard,
+        DetailArg::Tree => DetailLevel::Tree,
+    };
+    let response = session.overview(level, path).map_err(map_err)?;
     print_str(formatter, &response.body);
     Ok(())
 }
@@ -140,7 +124,8 @@ pub fn cmd_refs(symbol: &str, formatter: Formatter) -> CmdResult {
 
 pub fn cmd_partition(path: &str, strategy: &str, formatter: Formatter) -> CmdResult {
     let session = RlmSession::open_cwd().map_err(map_err)?;
-    let response = session.partition(path, strategy).map_err(map_err)?;
+    let parsed: partition::Strategy = strategy.parse().map_err(map_err)?;
+    let response = session.partition(path, parsed).map_err(map_err)?;
     print_str(formatter, &response.body);
     Ok(())
 }
