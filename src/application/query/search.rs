@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::db::Database;
 use crate::domain::chunk::Chunk;
 use crate::domain::token_budget::{estimate_tokens_str, TokenEstimate};
-use crate::error::Result;
+use crate::error::{Result, RlmError};
 
 /// Approximate number of characters per token for output size estimation.
 const MIN_FTS_TOKEN_LENGTH: u64 = 4;
@@ -48,16 +48,34 @@ pub struct SearchHit {
 /// Which fields to populate on every [`SearchHit`] — see
 /// `docs/bugs/search-fields-projection.md` for the break-even
 /// analysis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FieldsMode {
     /// Default: include the full chunk content so the caller doesn't
     /// need a second `rlm read`. Optimal when the agent plans to read
     /// at least one of the hits.
+    #[default]
     Full,
     /// Drop `content`, keep metadata (id, kind, name, lines). Optimal
     /// for "does X exist?" / "which files?" where only identifiers
     /// matter; per-call output drops from ~5k tokens to a few hundred.
     Minimal,
+}
+
+impl FieldsMode {
+    /// Parse from optional `&str`, defaulting to `Full` when the
+    /// adapter didn't pass one. Unknown values error at the adapter
+    /// edge so typos surface instead of silently falling back.
+    pub fn from_optional(s: Option<&str>) -> Result<Self> {
+        match s {
+            None => Ok(Self::default()),
+            Some("full") => Ok(Self::Full),
+            Some("minimal") => Ok(Self::Minimal),
+            Some(other) => Err(RlmError::InvalidPattern {
+                pattern: other.to_string(),
+                reason: "unknown fields mode — use 'full' or 'minimal'".into(),
+            }),
+        }
+    }
 }
 
 /// Perform a full-text search across indexed chunks. Convenience wrapper

@@ -277,8 +277,9 @@ reason = "Domain stays synchronous — async is an adapter concern."
 # triplicated across `cli::handlers_util`, `mcp::tool_handlers_util`,
 # and the application layer before consolidation.
 #
-# The `interface::shared::*` middleware is **not** an adapter — it's
-# the seam adapters funnel through — so it keeps direct DB access.
+# `crate::application::middleware::*` is part of the application seam
+# that adapters funnel through, not an adapter surface itself — so it
+# keeps direct DB access and is absent from the forbid list below.
 [[architecture.pattern]]
 name = "adapters_no_direct_infrastructure"
 forbid_path_prefix = [

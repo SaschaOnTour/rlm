@@ -1,5 +1,5 @@
 /// The kind of a code/document chunk.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ChunkKind {
     Function,
     Method,

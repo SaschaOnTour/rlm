@@ -538,3 +538,26 @@ fn search_no_hits_minimal_still_serialises_empty_results() {
     let json = serde_json::to_string(&result).unwrap();
     assert!(json.contains("\"results\":[]"));
 }
+
+#[test]
+fn fields_mode_from_optional_accepts_known_values() {
+    assert_eq!(FieldsMode::from_optional(None).unwrap(), FieldsMode::Full);
+    assert_eq!(
+        FieldsMode::from_optional(Some("full")).unwrap(),
+        FieldsMode::Full
+    );
+    assert_eq!(
+        FieldsMode::from_optional(Some("minimal")).unwrap(),
+        FieldsMode::Minimal
+    );
+}
+
+#[test]
+fn fields_mode_from_optional_rejects_typos() {
+    let err = FieldsMode::from_optional(Some("minimall")).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("minimall") && msg.contains("'full'") && msg.contains("'minimal'"),
+        "error should name the bad value and list the valid options, got {msg}"
+    );
+}

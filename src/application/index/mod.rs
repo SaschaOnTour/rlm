@@ -321,9 +321,10 @@ pub fn reindex_with_result(
     rel_path: &str,
     source: PreviewSource<'_>,
 ) -> String {
-    // Snapshot pre-write chunk idents so Line/Last writes can
-    // identify newly-added top-level symbols after reindex.
-    let pre_idents = snapshot_idents(db, rel_path);
+    // Snapshot pre-write chunk keys so Line/Last writes can identify
+    // newly-added symbols after reindex. Keyed on (kind, ident, parent)
+    // so same-name chunks under different parents register as new.
+    let pre_keys = snapshot_chunk_keys(db, rel_path);
 
     match reindex_single_file(db, config, rel_path) {
         Ok((chunks, refs)) => {
@@ -340,7 +341,7 @@ pub fn reindex_with_result(
             if let Some(build) = run_post_write_check(db, config, rel_path) {
                 result["build"] = serde_json::to_value(build).unwrap_or(serde_json::Value::Null);
             }
-            if let Some(target_sym) = resolve_test_impact_target(db, rel_path, &source, &pre_idents)
+            if let Some(target_sym) = resolve_test_impact_target(db, rel_path, &source, &pre_keys)
             {
                 if let Some(impact) = run_test_impact(db, config, rel_path, &target_sym) {
                     result["test_impact"] =
@@ -356,17 +357,27 @@ pub fn reindex_with_result(
     }
 }
 
-/// Collect the idents of every chunk currently indexed for the file.
-/// Returns an empty set on lookup failure — the caller uses it for
-/// "what's new?" diffing, where an empty baseline just means every
-/// post-reindex ident looks new (which is fine for fresh files).
-fn snapshot_idents(db: &Database, rel_path: &str) -> std::collections::HashSet<String> {
+/// Stable identity for a chunk across a reindex — survives byte-range
+/// shifts but distinguishes "second `new` method in a different impl".
+/// Keyed on `(kind, ident, parent)` so adding `impl Bar { fn new() }`
+/// next to an existing `impl Foo { fn new() }` still registers as new.
+type ChunkKey = (crate::domain::chunk::ChunkKind, String, Option<String>);
+
+fn chunk_key(c: &crate::domain::chunk::Chunk) -> ChunkKey {
+    (c.kind.clone(), c.ident.clone(), c.parent.clone())
+}
+
+/// Collect the identity keys of every chunk currently indexed for the
+/// file. Returns an empty set on lookup failure — the caller uses it
+/// for "what's new?" diffing, where an empty baseline just means every
+/// post-reindex chunk looks new (fine for fresh files).
+fn snapshot_chunk_keys(db: &Database, rel_path: &str) -> std::collections::HashSet<ChunkKey> {
     let file = match db.get_file_by_path(rel_path).ok().flatten() {
         Some(f) => f,
         None => return std::collections::HashSet::new(),
     };
     db.get_chunks_for_file(file.id)
-        .map(|chunks| chunks.into_iter().map(|c| c.ident).collect())
+        .map(|chunks| chunks.iter().map(chunk_key).collect())
         .unwrap_or_default()
 }
 
@@ -374,13 +385,13 @@ fn snapshot_idents(db: &Database, rel_path: &str) -> std::collections::HashSet<S
 ///
 /// For a replace/delete that names its symbol (PreviewSource::Symbol),
 /// use that. For an insert (Line/Last), diff post-reindex chunks
-/// against `pre_idents` and pick the first newly-appeared top-level
-/// ident. Returns `None` when no target can be identified.
+/// against `pre_keys` and pick the first newly-appeared chunk. Returns
+/// `None` when no target can be identified.
 fn resolve_test_impact_target(
     db: &Database,
     rel_path: &str,
     source: &PreviewSource<'_>,
-    pre_idents: &std::collections::HashSet<String>,
+    pre_keys: &std::collections::HashSet<ChunkKey>,
 ) -> Option<String> {
     if let PreviewSource::Symbol(sym) = source {
         return Some((*sym).to_string());
@@ -389,7 +400,7 @@ fn resolve_test_impact_target(
     let chunks = db.get_chunks_for_file(file.id).ok()?;
     chunks
         .into_iter()
-        .find(|c| !pre_idents.contains(&c.ident))
+        .find(|c| !pre_keys.contains(&chunk_key(c)))
         .map(|c| c.ident)
 }
 

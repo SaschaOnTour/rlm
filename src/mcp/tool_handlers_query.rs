@@ -20,9 +20,9 @@ pub fn handle_search(
     fields: Option<&str>,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    let mode = match fields {
-        Some("minimal") => FieldsMode::Minimal,
-        _ => FieldsMode::Full,
+    let mode = match FieldsMode::from_optional(fields) {
+        Ok(m) => m,
+        Err(e) => return Ok(RlmServer::error_text(formatter, e.to_string())),
     };
     match session.search(query, limit, mode) {
         Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
