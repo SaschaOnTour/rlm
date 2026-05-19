@@ -40,6 +40,16 @@ pub fn handle_quality(
     RlmServer::respond_json(formatter, facades::quality_project(project_root, flags))
 }
 
+/// Handle the `quality_clear` tool: truncate the parse-quality log.
+/// Companion to [`handle_quality`] — surfaced as a separate MCP tool
+/// without the `read_only_hint` annotation since this *is* a write.
+pub fn handle_quality_clear(
+    project_root: &Path,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
+    RlmServer::respond_json(formatter, facades::quality_clear_project(project_root))
+}
+
 /// Handle the `partition` tool: split a file into chunks.
 pub fn handle_partition(
     project_root: &Path,

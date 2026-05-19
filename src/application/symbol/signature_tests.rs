@@ -65,7 +65,7 @@ fn get_signature_basic() {
     };
     db.insert_ref(&reference).unwrap();
 
-    let result = get_signature(&db, "foo").unwrap();
+    let result = get_signature(&db, "foo", None).unwrap();
     assert_eq!(result.symbol, "foo");
     assert_eq!(result.signatures.len(), 1);
     assert_eq!(result.signatures[0].signature, "fn foo(x: i32) -> String");
@@ -93,7 +93,7 @@ fn get_signature_includes_parent_for_method() {
     let file_id = db.upsert_file(&file).unwrap();
     insert_method_with_sig(&db, file_id, "make", "Foo", "fn make() -> Self");
 
-    let result = get_signature(&db, "make").unwrap();
+    let result = get_signature(&db, "make", None).unwrap();
 
     assert_eq!(result.signatures.len(), 1);
     assert_eq!(result.signatures[0].parent.as_deref(), Some("Foo"));
@@ -108,7 +108,7 @@ fn get_signature_lists_each_polysemic_definition_with_its_parent() {
     insert_method_with_sig(&db, file_id, "new", "Foo", "fn new() -> Self");
     insert_method_with_sig(&db, file_id, "new", "Bar", "fn new(seed: u32) -> Self");
 
-    let result = get_signature(&db, "new").unwrap();
+    let result = get_signature(&db, "new", None).unwrap();
 
     assert_eq!(result.signatures.len(), 2);
     let mut parents: Vec<&str> = result
@@ -118,6 +118,37 @@ fn get_signature_lists_each_polysemic_definition_with_its_parent() {
         .collect();
     parents.sort_unstable();
     assert_eq!(parents, vec!["Bar", "Foo"]);
+}
+
+#[test]
+fn get_signature_filters_to_parent_when_polysemic() {
+    let db = test_db();
+    let file = FileRecord::new("src/x.rs".into(), "h".into(), "rust".into(), 1);
+    let file_id = db.upsert_file(&file).unwrap();
+    insert_method_with_sig(&db, file_id, "new", "Foo", "fn new() -> Self");
+    insert_method_with_sig(&db, file_id, "new", "Bar", "fn new(seed: u32) -> Self");
+
+    let result = get_signature(&db, "new", Some("Foo")).unwrap();
+    assert_eq!(
+        result.signatures.len(),
+        1,
+        "--parent Foo must drop Bar::new from the signatures list",
+    );
+    assert_eq!(result.signatures[0].parent.as_deref(), Some("Foo"));
+}
+
+#[test]
+fn get_signature_empty_when_parent_has_no_match() {
+    let db = test_db();
+    let file = FileRecord::new("src/x.rs".into(), "h".into(), "rust".into(), 1);
+    let file_id = db.upsert_file(&file).unwrap();
+    insert_method_with_sig(&db, file_id, "new", "Foo", "fn new() -> Self");
+
+    let result = get_signature(&db, "new", Some("Bar")).unwrap();
+    assert!(
+        result.signatures.is_empty(),
+        "parent that doesn't match any chunk must yield an empty list",
+    );
 }
 
 #[test]
@@ -134,7 +165,7 @@ fn get_signature_omits_parent_field_for_free_function() {
     };
     db.insert_chunk(&chunk).unwrap();
 
-    let result = get_signature(&db, "helper").unwrap();
+    let result = get_signature(&db, "helper", None).unwrap();
 
     assert_eq!(result.signatures.len(), 1);
     assert!(result.signatures[0].parent.is_none());
@@ -176,6 +207,6 @@ fn get_signature_no_signature() {
     };
     db.insert_chunk(&chunk).unwrap();
 
-    let result = get_signature(&db, "mymod").unwrap();
+    let result = get_signature(&db, "mymod", None).unwrap();
     assert!(result.signatures.is_empty());
 }

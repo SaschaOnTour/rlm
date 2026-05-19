@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **`rlm quality` split into read + write surfaces** on both CLI and
+  MCP for honest annotations:
+  - CLI: `rlm quality --clear` is removed. Use `rlm quality clear`
+    (subcommand) to truncate the parse-quality log. `rlm quality`
+    (no subcommand) remains read-only with `--unknown-only` / `--all`
+    / `--summary`.
+  - MCP: `quality` tool keeps `read_only_hint = true` and the
+    `clear` field is gone from `QualityParams`. New `quality_clear`
+    tool — no `read_only_hint` annotation — performs the truncate.
+  - Application layer mirrors the split: `quality_dispatch` /
+    `quality_project` are pure reads; new `clear_quality_log` /
+    `quality_clear_project` own the destructive side. Scripts that
+    relied on `--clear` will fail loudly (clap rejects the flag);
+    migration is a one-token rename to the subcommand.
+
+### Fixed
+
+- **`rlm read --symbol X --parent Foo --metadata` no longer leaks
+  metadata from other parents**: `get_signature` and `get_type_info`
+  now accept an `Option<&str>` parent filter and apply it before
+  building the response. Without this, the chunks list correctly
+  showed only `Foo::X` while `signature.signatures` and
+  `type_info.parent` could still surface entries from `Bar::X` or
+  other polysemic siblings — defeating the disambiguation the
+  `--parent` flag exists for.
+- **Concurrent reads no longer race to `SQLITE_BUSY`**: the
+  `Database::open` PRAGMA bundle now sets `busy_timeout=5000` (also
+  the current rusqlite default; set explicitly so a future rusqlite
+  default change doesn't silently regress). MCP tools annotated
+  `read_only_hint = true` still write to the rlm-managed `.rlm/`
+  (savings counters + staleness-driven reindex), so multiple agents
+  reading the same project contend for the single SQLite writer; the
+  annotation means "no writes to your *source files*", not "no DB
+  writes at all". A new `tests/concurrent_reads_tests.rs` spawns five
+  parallel `rlm read` processes against one project and asserts none
+  surface `database is locked`.
+
 ## [0.6.0] - 2026-05-18
 
 The combined **call-parity + polysemy + adapter-helper + perf** release.

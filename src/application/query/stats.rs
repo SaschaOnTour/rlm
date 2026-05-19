@@ -149,9 +149,7 @@ pub fn stats_dispatch(
     })
 }
 
-/// Per-tool confirmation payload emitted when `quality_dispatch` is
-/// called with `clear = true`. Carries the boolean flag under its own
-/// field so the untagged `QualityBody` picks this variant by structure.
+/// Confirmation payload emitted by [`clear_quality_log`].
 #[derive(Debug, Serialize)]
 pub struct QualityClearedAck {
     pub cleared: bool,
@@ -170,8 +168,6 @@ pub struct QualityIssues {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum QualityBody {
-    /// `{"cleared": true}` after a successful `--clear`.
-    Cleared(QualityClearedAck),
     /// Issue counts grouped by language / issue type when `summary`.
     Summary(IssueSummary),
     /// Per-issue list (default).
@@ -185,7 +181,6 @@ pub enum QualityBody {
 pub struct QualityFlags {
     pub unknown_only: bool,
     pub all: bool,
-    pub clear: bool,
     pub summary: bool,
 }
 
@@ -195,12 +190,6 @@ pub struct QualityFlags {
 /// `summary`) and returns a typed [`QualityBody`] so each adapter just
 /// serialises it with its own formatter.
 pub fn quality_dispatch(log_path: &Path, flags: QualityFlags) -> Result<QualityBody> {
-    if flags.clear {
-        let logger = quality_log::QualityLogger::new(log_path, true);
-        logger.clear()?;
-        return Ok(QualityBody::Cleared(QualityClearedAck { cleared: true }));
-    }
-
     let mut issues = quality_log::read_quality_log(log_path)?;
     quality_log::annotate_known_issues(&mut issues);
 
@@ -218,6 +207,16 @@ pub fn quality_dispatch(log_path: &Path, flags: QualityFlags) -> Result<QualityB
             issues,
         }))
     }
+}
+
+/// Truncate the quality log at `log_path`. Mirror of the read-side
+/// [`quality_dispatch`] for the write-side surface — kept as its own
+/// function so the destructive call site is explicit and so MCP can
+/// expose it as a dedicated tool with `read_only_hint = false`.
+pub fn clear_quality_log(log_path: &Path) -> Result<QualityClearedAck> {
+    let logger = quality_log::QualityLogger::new(log_path, true);
+    logger.clear()?;
+    Ok(QualityClearedAck { cleared: true })
 }
 
 #[cfg(test)]

@@ -30,7 +30,6 @@ pub fn cmd_stats(show_savings: bool, since: Option<&str>, formatter: Formatter) 
 pub fn cmd_quality(
     unknown_only: bool,
     all: bool,
-    clear: bool,
     summary: bool,
     formatter: Formatter,
 ) -> CmdResult {
@@ -40,12 +39,18 @@ pub fn cmd_quality(
         QualityFlags {
             unknown_only,
             all,
-            clear,
             summary,
         },
     )
     .map_err(map_err)?;
     output::print(formatter, &body);
+    Ok(())
+}
+
+pub fn cmd_quality_clear(formatter: Formatter) -> CmdResult {
+    let root = cwd_project_root()?;
+    let ack = facades::quality_clear_project(&root).map_err(map_err)?;
+    output::print(formatter, &ack);
     Ok(())
 }
 

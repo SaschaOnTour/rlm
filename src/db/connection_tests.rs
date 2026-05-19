@@ -26,6 +26,35 @@ fn open_creates_file() {
     assert!(path.exists());
 }
 
+/// `read_only_hint = true` on MCP tools means rlm doesn't modify the
+/// user's *source files*, but reads still write to the rlm-managed
+/// `.rlm/` (savings counters + staleness reindex). Multiple agents
+/// reading the same project concurrently therefore contend for the
+/// single SQLite writer; without a non-zero `busy_timeout`, the loser
+/// fails immediately with `SQLITE_BUSY`. rusqlite currently defaults
+/// to 5000 ms, and `Database::open` re-asserts that floor with an
+/// explicit PRAGMA so a future rusqlite version that drops the
+/// default can't silently degrade us. The contract this test pins
+/// down is the outcome: every opened connection waits at least 5 s
+/// before reporting BUSY.
+#[test]
+fn open_sets_busy_timeout_to_at_least_5000ms() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("test.db");
+    let db = Database::open(&path).unwrap();
+    let ms: i64 = db
+        .conn()
+        .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+        .unwrap();
+    assert!(
+        ms >= 5000,
+        "busy_timeout must be ≥ 5000ms (actual: {ms}). rlm reads can \
+         contend for the SQLite writer when savings or staleness writes \
+         race; a small/zero busy_timeout surfaces that as SQLITE_BUSY \
+         instead of a brief stall."
+    );
+}
+
 #[test]
 fn ancient_schema_is_wiped_and_reseeded() {
     // Simulate an ancient rlm DB: `files` exists but without

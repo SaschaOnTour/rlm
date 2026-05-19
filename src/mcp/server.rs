@@ -4,6 +4,31 @@
 //! Each `#[tool]` method is a two-liner: open a [`RlmSession`] for
 //! the current project (or bail with a nice error if no index), then
 //! call the matching handler in `tool_handlers*`.
+//!
+//! ## `read_only_hint = true` semantics
+//!
+//! Every query tool below carries `annotations(read_only_hint = true)`.
+//! In rlm that means: **no writes to the user's source files** — never
+//! to `*.rs`, `*.py`, `*.md`, or any indexed artifact. It does *not*
+//! mean "no writes at all": the rlm-managed `.rlm/` directory may
+//! still be written on the read path for
+//!
+//! 1. **Savings counters** — every successful query records a row in
+//!    `.rlm/index.db` so `rlm stats --savings` can report what rlm
+//!    saved versus a full-file read.
+//! 2. **Staleness-driven reindex** — `RlmSession::open` reconciles
+//!    `files.hash` against the filesystem; an external edit causes
+//!    the affected file to be re-parsed before the read returns.
+//!
+//! Both are part of the read contract: the index stays current, and
+//! the savings model stays honest. The single SQLite writer lock is
+//! held briefly per operation; `Database::open` sets
+//! `busy_timeout=5000` so concurrent agents reading the same project
+//! never surface `SQLITE_BUSY`.
+//!
+//! Tools that *do* mutate source files (`replace`, `insert`, `delete`,
+//! `extract`) and tools that mutate `.rlm/` outside the read contract
+//! (`index`, `quality_clear`) deliberately omit `read_only_hint`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -238,7 +263,7 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Inspect parse-quality issues logged during indexing. Flags: unknown_only (only issues without a regression test), all (known + unknown), clear (truncate the log), summary (counts by language / issue type).",
+        description = "Inspect parse-quality issues logged during indexing. Flags: unknown_only (only issues without a regression test), all (known + unknown), summary (counts by language / issue type). For truncating the log, use the separate `quality_clear` tool.",
         annotations(read_only_hint = true)
     )]
     // qual:api
@@ -246,10 +271,17 @@ impl RlmServer {
         let flags = QualityFlags {
             unknown_only: params.0.unknown_only.unwrap_or(false),
             all: params.0.all.unwrap_or(false),
-            clear: params.0.clear.unwrap_or(false),
             summary: params.0.summary.unwrap_or(false),
         };
         tool_handlers_util::handle_quality(self.project_root(), flags, self.formatter)
+    }
+
+    #[tool(
+        description = "Truncate the parse-quality log. Destructive: replaces the log file's contents with an empty list. Returns `{\"cleared\": true}` on success."
+    )]
+    // qual:api
+    async fn quality_clear(&self) -> Result<CallToolResult, McpError> {
+        tool_handlers_util::handle_quality_clear(self.project_root(), self.formatter)
     }
 
     #[tool(

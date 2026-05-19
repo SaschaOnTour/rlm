@@ -136,22 +136,7 @@ pub fn read_symbol(db: &Database, input: &ReadSymbolInput<'_>) -> Result<ReadOut
     };
 
     let body = if input.metadata {
-        let type_info = crate::application::symbol::type_info::get_type_info(db, input.symbol).ok();
-        let signature = crate::application::symbol::signature::get_signature(db, input.symbol).ok();
-        #[derive(Serialize)]
-        struct Enriched<'a> {
-            chunks: &'a [ChunkDto<'a>],
-            #[serde(skip_serializing_if = "Option::is_none")]
-            type_info: Option<crate::application::symbol::type_info::TypeInfoResult>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            signature: Option<crate::application::symbol::signature::SignatureResult>,
-        }
-        serde_json::to_string(&Enriched {
-            chunks: &selected,
-            type_info,
-            signature,
-        })
-        .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string())
+        render_enriched_body(db, &selected, input.symbol, input.parent)
     } else {
         serde_json::to_string(&selected)
             .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string())
@@ -160,6 +145,36 @@ pub fn read_symbol(db: &Database, input: &ReadSymbolInput<'_>) -> Result<ReadOut
     let tokens_out = estimate_json_tokens(body.len());
     savings::record_read_symbol(db, tokens_out, input.path);
     Ok(ReadOutput { body, tokens_out })
+}
+
+/// Serialise the `--metadata` envelope: the parent-filtered chunks
+/// plus the same-parent-scoped `type_info` and `signature` lookups.
+/// Both metadata calls take the caller's `parent` filter so the
+/// enriched view stays consistent with the chunks slice — without
+/// this, `rlm read --symbol new --parent Foo --metadata` would leak
+/// `Bar::new`'s signature into the response.
+fn render_enriched_body(
+    db: &Database,
+    chunks: &[ChunkDto<'_>],
+    symbol: &str,
+    parent: Option<&str>,
+) -> String {
+    let type_info = crate::application::symbol::type_info::get_type_info(db, symbol, parent).ok();
+    let signature = crate::application::symbol::signature::get_signature(db, symbol, parent).ok();
+    #[derive(Serialize)]
+    struct Enriched<'a> {
+        chunks: &'a [ChunkDto<'a>],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        type_info: Option<crate::application::symbol::type_info::TypeInfoResult>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<crate::application::symbol::signature::SignatureResult>,
+    }
+    serde_json::to_string(&Enriched {
+        chunks,
+        type_info,
+        signature,
+    })
+    .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string())
 }
 
 fn filter_by_file_and_parent<'a>(

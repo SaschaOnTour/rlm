@@ -143,8 +143,8 @@ fn test_tool_list_count() {
 
     assert_eq!(
         tools.len(),
-        20,
-        "Expected exactly 20 tools, got {}. Tools: {:?}",
+        21,
+        "Expected exactly 21 tools, got {}. Tools: {:?}",
         tools.len(),
         tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>()
     );
@@ -409,7 +409,7 @@ fn test_tool_list_unchanged_with_index() {
     let (_tmp, server) = setup_indexed_project();
     let tools = server.get_tool_router().list_all();
 
-    assert_eq!(tools.len(), 20, "Tool count should be 20 with index");
+    assert_eq!(tools.len(), 21, "Tool count should be 21 with index");
 }
 
 // =============================================================================
@@ -531,10 +531,34 @@ fn test_quality_tool_has_expected_flags() {
 
     let tool = tools.iter().find(|t| t.name == "quality").unwrap();
     let schema_str = serde_json::to_string(&tool.input_schema).unwrap();
-    for flag in ["unknown_only", "all", "clear", "summary"] {
+    // `clear` moved to the dedicated `quality_clear` tool in 0.6.x;
+    // the read-only `quality` schema must no longer expose it.
+    for flag in ["unknown_only", "all", "summary"] {
         assert!(
             schema_str.contains(flag),
             "Quality tool schema should expose `{flag}`: schema={schema_str}"
         );
     }
+    assert!(
+        !schema_str.contains("clear"),
+        "Quality tool schema must NOT expose `clear` (use the `quality_clear` tool): schema={schema_str}"
+    );
+}
+
+#[test]
+fn test_quality_clear_tool_is_registered_without_read_only_hint() {
+    let (_tmp, server) = server_for_schema_test();
+    let tools = server.get_tool_router().list_all();
+
+    let tool = tools
+        .iter()
+        .find(|t| t.name == "quality_clear")
+        .expect("quality_clear MCP tool must be registered");
+    // The whole reason we split this surface: the destructive truncate
+    // surface must not advertise `read_only_hint = true`.
+    let read_only_hint = tool.annotations.as_ref().and_then(|a| a.read_only_hint);
+    assert!(
+        read_only_hint != Some(true),
+        "quality_clear must NOT carry read_only_hint = true (got {read_only_hint:?})"
+    );
 }

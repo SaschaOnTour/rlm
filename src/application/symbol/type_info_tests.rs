@@ -53,7 +53,7 @@ fn get_type_info_basic() {
     };
     db.insert_chunk(&chunk).unwrap();
 
-    let result = get_type_info(&db, "MyStruct").unwrap();
+    let result = get_type_info(&db, "MyStruct", None).unwrap();
     assert_eq!(result.symbol, "MyStruct");
     assert_eq!(result.kind, "struct");
     assert_eq!(result.signature, Some("struct MyStruct".into()));
@@ -107,7 +107,7 @@ fn get_type_info_prioritizes_src() {
     };
     db.insert_chunk(&src_chunk).unwrap();
 
-    let result = get_type_info(&db, "foo").unwrap();
+    let result = get_type_info(&db, "foo", None).unwrap();
     // Should prioritize src/ over fixtures/
     assert_eq!(result.file, "src/lib.rs");
     assert_eq!(result.signature, Some("fn foo() [src]".into()));
@@ -116,7 +116,7 @@ fn get_type_info_prioritizes_src() {
 #[test]
 fn get_type_info_symbol_not_found() {
     let db = test_db();
-    let result = get_type_info(&db, "NonExistent");
+    let result = get_type_info(&db, "NonExistent", None);
     assert!(result.is_err());
 }
 
@@ -137,7 +137,7 @@ fn get_type_info_carries_parent_for_methods() {
     };
     db.insert_chunk(&chunk).unwrap();
 
-    let result = get_type_info(&db, "render").unwrap();
+    let result = get_type_info(&db, "render", None).unwrap();
 
     assert_eq!(result.parent.as_deref(), Some("Widget"));
     assert_eq!(result.symbol, "render");
@@ -157,12 +157,66 @@ fn get_type_info_omits_parent_field_for_free_functions() {
     };
     db.insert_chunk(&chunk).unwrap();
 
-    let result = get_type_info(&db, "helper").unwrap();
+    let result = get_type_info(&db, "helper", None).unwrap();
 
     assert!(result.parent.is_none());
     let json = serde_json::to_string(&result).unwrap();
     assert!(
         !json.contains("\"parent\""),
         "free-fn type info must not serialise the parent key, got {json}",
+    );
+}
+
+#[test]
+fn get_type_info_filters_to_parent_when_polysemic() {
+    let db = test_db();
+    let file = FileRecord::new("src/x.rs".into(), "h".into(), "rust".into(), 1);
+    let file_id = db.upsert_file(&file).unwrap();
+    let foo_chunk = Chunk {
+        kind: ChunkKind::Method,
+        ident: "new".into(),
+        parent: Some("Foo".into()),
+        signature: Some("fn new() -> Foo".into()),
+        content: "fn new() -> Foo { Foo }".into(),
+        ..Chunk::stub(file_id)
+    };
+    let bar_chunk = Chunk {
+        kind: ChunkKind::Method,
+        ident: "new".into(),
+        parent: Some("Bar".into()),
+        signature: Some("fn new() -> Bar".into()),
+        content: "fn new() -> Bar { Bar }".into(),
+        ..Chunk::stub(file_id)
+    };
+    db.insert_chunk(&foo_chunk).unwrap();
+    db.insert_chunk(&bar_chunk).unwrap();
+
+    let result = get_type_info(&db, "new", Some("Foo")).unwrap();
+    assert_eq!(
+        result.parent.as_deref(),
+        Some("Foo"),
+        "--parent Foo must pick the Foo::new chunk regardless of priority pass",
+    );
+}
+
+#[test]
+fn get_type_info_errors_when_parent_has_no_match() {
+    let db = test_db();
+    let file = FileRecord::new("src/x.rs".into(), "h".into(), "rust".into(), 1);
+    let file_id = db.upsert_file(&file).unwrap();
+    let chunk = Chunk {
+        kind: ChunkKind::Method,
+        ident: "new".into(),
+        parent: Some("Foo".into()),
+        signature: Some("fn new() -> Foo".into()),
+        content: "fn new() -> Foo { Foo }".into(),
+        ..Chunk::stub(file_id)
+    };
+    db.insert_chunk(&chunk).unwrap();
+
+    let err = get_type_info(&db, "new", Some("Bar"));
+    assert!(
+        err.is_err(),
+        "parent that doesn't match must surface as SymbolNotFound",
     );
 }

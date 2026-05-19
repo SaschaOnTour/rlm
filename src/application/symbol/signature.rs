@@ -38,12 +38,22 @@ pub struct SignatureResult {
 }
 
 /// Get the signature of a symbol plus the count of all call sites.
-pub fn get_signature(db: &Database, symbol: &str) -> Result<SignatureResult> {
+///
+/// When `parent` is `Some(...)`, only signatures of methods on that
+/// parent type are surfaced — keeps the metadata aligned with the
+/// caller's polysemy filter (`rlm read --symbol new --parent Foo
+/// --metadata` doesn't bleed `Bar::new` into the signatures list).
+/// `None` returns every signature across the polysemic group.
+pub fn get_signature(db: &Database, symbol: &str, parent: Option<&str>) -> Result<SignatureResult> {
     let chunks = db.get_chunks_by_ident(symbol)?;
     let refs = db.get_refs_to(symbol)?;
 
     let sigs: Vec<SignatureEntry> = chunks
         .iter()
+        .filter(|c| match parent {
+            None => true,
+            Some(p) => c.parent.as_deref() == Some(p),
+        })
         .filter_map(|c| {
             c.signature.as_ref().map(|s| SignatureEntry {
                 parent: c.parent.clone(),

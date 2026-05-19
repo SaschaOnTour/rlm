@@ -297,6 +297,16 @@ rlm index .
 > for MCP server scenarios where an agent might land on workspaces
 > the user didn't intend to index.
 
+> **What `read_only_hint = true` means on MCP tools.** rlm annotates
+> every query tool (`read`, `search`, `refs`, `context`, …) as
+> read-only — meaning *your source files are never touched*. Reads
+> may still write to the rlm-managed `.rlm/`: a savings counter is
+> updated per call, and changes to your source files (an editor save,
+> a git pull, a Claude Code edit) trigger a staleness-driven reindex.
+> Multiple agents can read the same project concurrently — the SQLite
+> writer lock is held briefly per op and `busy_timeout=5000` absorbs
+> short contention windows.
+
 ### Explore
 
 ```bash

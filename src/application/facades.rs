@@ -172,6 +172,13 @@ pub fn quality_project(
     session.quality(flags)
 }
 
+/// Truncate the parse-quality log. Separate from `quality_project`
+/// so the destructive surface is explicit on both adapters.
+pub fn quality_clear_project(project_root: &Path) -> Result<stats::QualityClearedAck> {
+    let session = RlmSession::open(project_root)?;
+    session.quality_clear()
+}
+
 /// Verify index integrity, optionally auto-fixing recoverable issues.
 pub fn verify_project(project_root: &Path, fix: bool) -> Result<VerifyOutput> {
     let session = RlmSession::open(project_root)?;

@@ -283,9 +283,6 @@ pub struct QualityParams {
     /// Matches CLI `--all`.
     #[schemars(description = "Return every logged issue (known + unknown)")]
     pub all: Option<bool>,
-    /// Clear the quality-issues log. Matches CLI `--clear`.
-    #[schemars(description = "Truncate the quality-issues log")]
-    pub clear: Option<bool>,
     /// Return counts by language/issue type instead of the per-issue
     /// list. Matches CLI `--summary`.
     #[schemars(description = "Emit summary counts instead of the per-issue list")]

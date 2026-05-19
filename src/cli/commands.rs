@@ -296,17 +296,18 @@ pub enum Command {
     /// Start MCP server (stdio transport)
     Mcp,
 
-    /// [read-only, write with --clear] Inspect parse quality issues
+    /// [read-only] Inspect parse quality issues. Use `quality clear` to truncate the log.
     Quality {
+        /// Optional subcommand (currently only `clear`). `None` =
+        /// read-only inspect with the flags below.
+        #[command(subcommand)]
+        cmd: Option<QualityCmd>,
         /// Show only unknown issues (without tests)
         #[arg(long)]
         unknown_only: bool,
         /// Show all issues (including known)
         #[arg(long)]
         all: bool,
-        /// Clear the quality log
-        #[arg(long)]
-        clear: bool,
         /// Show summary statistics
         #[arg(long)]
         summary: bool,
@@ -363,3 +364,17 @@ pub enum Command {
         remove: bool,
     },
 }
+
+/// Subcommands for `rlm quality`. Split out so the destructive
+/// `clear` action is its own opt-in surface (matching the MCP
+/// `quality_clear` tool); the read-only inspection remains
+/// reachable as `rlm quality` with no subcommand.
+#[derive(Debug, Subcommand)]
+pub enum QualityCmd {
+    /// [write] Truncate the parse-quality log.
+    Clear,
+}
+
+#[cfg(test)]
+#[path = "commands_tests.rs"]
+mod tests;

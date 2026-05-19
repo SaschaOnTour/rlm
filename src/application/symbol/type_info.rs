@@ -46,8 +46,17 @@ pub struct TypeInfoResult {
 ///
 /// This ensures consistent results when a symbol exists in multiple locations
 /// (e.g., both in source and test fixtures).
-pub fn get_type_info(db: &Database, symbol: &str) -> Result<TypeInfoResult> {
+///
+/// When `parent` is `Some(...)`, candidate chunks are filtered to
+/// methods of that parent type before the priority pass — keeps the
+/// type-info aligned with the caller's polysemy filter so
+/// `rlm read --symbol new --parent Foo --metadata` doesn't surface
+/// `Bar::new`'s parent.
+pub fn get_type_info(db: &Database, symbol: &str, parent: Option<&str>) -> Result<TypeInfoResult> {
     let mut chunks = db.get_chunks_by_ident(symbol)?;
+    if let Some(p) = parent {
+        chunks.retain(|c| c.parent.as_deref() == Some(p));
+    }
     let path_by_id = build_file_path_index(db)?;
     let idx = pick_priority_chunk_index(symbol, &chunks, &path_by_id)?;
     // `swap_remove` is O(1) and the surrounding order is irrelevant

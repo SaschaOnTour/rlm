@@ -19,12 +19,19 @@ impl Database {
     /// file cannot observe a half-wiped state.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // `busy_timeout=5000` is also the current rusqlite default; we
+        // set it explicitly because rlm's `read_only_hint=true` reads
+        // still write to `.rlm/` (savings counters + staleness reindex)
+        // and may briefly contend with peers. If rusqlite ever drops
+        // the default we don't want concurrent agent reads to start
+        // reporting SQLITE_BUSY.
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;\
              PRAGMA foreign_keys=ON;\
              PRAGMA synchronous=NORMAL;\
              PRAGMA cache_size=-64000;\
-             PRAGMA temp_store=MEMORY;",
+             PRAGMA temp_store=MEMORY;\
+             PRAGMA busy_timeout=5000;",
         )?;
         migrations::apply(&conn)?;
         // Clears `files.hash` on parser-version mismatch so the CLI's

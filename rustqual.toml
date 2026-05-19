@@ -7,8 +7,17 @@
 
 # Function names (or glob patterns) to exclude from analysis.
 # Examples: "main", "test_*", "visit_*"
+#
+# `main` and `run` together form the composition root in `src/main.rs`:
+# `main` does formatter setup and delegates to `run`, which is a single
+# `match cli.command` with one arm per `Command` variant. Both grow
+# linearly with the command count by design — a `LONG_FN` finding on
+# either would punish adding commands instead of catching real
+# complexity. The dispatch itself stays trivial because every arm just
+# forwards to a handler; per-arm logic lives in those handlers.
 ignore_functions = [
     "main",
+    "run",
     "test_*",
 ]
 

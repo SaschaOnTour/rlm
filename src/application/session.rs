@@ -298,6 +298,14 @@ impl RlmSession {
     pub fn quality(&self, flags: stats_query::QualityFlags) -> Result<stats_query::QualityBody> {
         stats_query::quality_dispatch(&self.config.get_quality_log_path(), flags)
     }
+
+    /// Truncate the quality log. Companion to [`Self::quality`] —
+    /// split out from the read path so the destructive call is a
+    /// separate, explicitly invoked operation (MCP exposes it as the
+    /// dedicated `quality_clear` tool without the read-only hint).
+    pub fn quality_clear(&self) -> Result<stats_query::QualityClearedAck> {
+        stats_query::clear_quality_log(&self.config.get_quality_log_path())
+    }
 }
 
 // ─── Write-side dispatchers ──────────────────────────────────────────

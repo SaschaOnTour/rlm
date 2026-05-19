@@ -84,3 +84,38 @@ fn get_quality_info_with_issues() {
     assert_eq!(info.files[0].path, "src/lib.rs");
     assert_eq!(info.files[0].quality, "partial");
 }
+
+#[test]
+fn clear_quality_log_truncates_existing_log() {
+    use std::io::Write;
+    let tmp = tempfile::tempdir().unwrap();
+    let log_path = tmp.path().join("quality.log");
+    // Seed the log with a non-empty payload that read_quality_log would
+    // happily parse — we want clear() to remove it.
+    let mut f = std::fs::File::create(&log_path).unwrap();
+    writeln!(
+        f,
+        r#"{{"file":"src/x.rs","lang":"rust","issue_type":"unknown","line":1}}"#
+    )
+    .unwrap();
+    assert!(std::fs::metadata(&log_path).unwrap().len() > 0);
+
+    let ack = super::clear_quality_log(&log_path).unwrap();
+    assert!(ack.cleared);
+
+    let len_after = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(
+        len_after, 0,
+        "clear_quality_log must leave the file empty (or absent), got {len_after} bytes",
+    );
+}
+
+#[test]
+fn clear_quality_log_succeeds_when_log_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log_path = tmp.path().join("quality.log");
+    assert!(!log_path.exists());
+
+    let ack = super::clear_quality_log(&log_path).unwrap();
+    assert!(ack.cleared);
+}
