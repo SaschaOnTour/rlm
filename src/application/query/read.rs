@@ -200,14 +200,21 @@ struct EnrichedCtx<'a, 'c> {
     parent: Option<&'a str>,
 }
 
-/// Serialise the `--metadata` envelope. Metadata is derived from the
-/// chunks the read actually returns, not from a fresh global lookup
-/// — so when two files both define `Foo::new` and the user reads
-/// from one, the type-info / signatures / ref-count describe **that**
-/// file's `Foo::new`, not the sibling. `ref_count` flips to
-/// parent-aware impact analysis whenever `--parent` is set, since the
-/// raw `target_ident = symbol` count includes calls to every
-/// same-named symbol in the project.
+/// Serialise the `--metadata` envelope. `type_info` and
+/// `signatures` are derived from the chunks the read actually
+/// returns, not from a fresh global lookup — so when two files both
+/// define `Foo::new` and the user reads from one, those two views
+/// describe **that** file's `Foo::new`, not the sibling.
+///
+/// `signature.ref_count` is the one field that stays parent-wide:
+/// refs in the index carry only `target_ident`, so we can't tell
+/// which `Foo::new` definition a `Foo::new()` call resolves to.
+/// `--parent` lets us drop `Bar::new()` calls (column-aware
+/// path-call filter), but among multiple `Foo::new` definitions the
+/// callers can't be attributed to one specific definition without
+/// flow analysis. See `SignatureResult::ref_count` for the contract
+/// the caller sees, and the
+/// `ref_count_is_parent_wide_not_definition_scoped` test for the pin.
 fn render_enriched_body(ctx: &EnrichedCtx<'_, '_>) -> String {
     let type_info = build_type_info(ctx.db, ctx.selected_chunks, ctx.symbol).ok();
     let signature = build_signature(
@@ -299,12 +306,21 @@ fn build_signature(
     Ok(result)
 }
 
-/// Count refs to `symbol`, parent-aware when set: without `parent`,
-/// every ref with `target_ident = symbol` counts (matches the old
-/// behaviour for the unfiltered case); with `parent`, the count is
-/// the impact analysis filtered through `filter_impacted_by_parent`,
-/// which uses column-aware source inspection to keep only calls of
-/// the path-qualified form (`parent::symbol`).
+/// Count refs to `symbol`, parent-aware when set. **Parent-wide,
+/// not definition-scoped**: when several files define the same
+/// `parent::symbol`, the count is the same from every file's
+/// perspective because refs don't carry a per-definition target
+/// id. See `SignatureResult::ref_count` for the caller-facing
+/// contract.
+///
+/// Without `parent`: every ref with `target_ident = symbol` counts
+/// (matches pre-S31 behaviour for the unfiltered case).
+///
+/// With `parent`: impact analysis filtered through
+/// [`filter_impacted_by_parent`], which uses column-aware source
+/// inspection to keep only calls of the path-qualified form
+/// (`parent::symbol`). Drops sibling `other_parent::symbol` calls
+/// and bare `symbol()` calls.
 fn count_refs(
     db: &Database,
     project_root: &Path,

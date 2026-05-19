@@ -25,11 +25,22 @@ pub struct SignatureEntry {
 }
 
 /// Wire-format of the `signature` view emitted under
-/// `read --metadata`. Reflects the chunks the read actually returned
-/// (chunk-scoped), and a `ref_count` that is parent-aware when the
-/// caller scoped by `--parent` (uses column-aware path-call
-/// resolution from the impact analyser to drop refs that actually
-/// targeted a sibling `parent::symbol`).
+/// `read --metadata`.
+///
+/// `signatures` are chunk-scoped — they list the signatures of the
+/// chunks the read returned, nothing more.
+///
+/// `ref_count` is **parent-wide, not selected-definition-scoped**.
+/// When `--parent` is set the counter uses column-aware path-call
+/// resolution to drop refs that targeted a sibling `parent::symbol`
+/// (e.g. excludes `Bar::new()` when the caller asked about `Foo`).
+/// But rlm cannot tell at the ref level which of multiple
+/// `Foo::new` definitions a `Foo::new()` call resolves to — refs
+/// carry only a target ident, and the parser does no flow analysis.
+/// So when two files both define `Foo::new`, both reads return the
+/// same parent-wide count. Treat `ref_count` as "calls to the
+/// `parent::symbol` pair in the project", not "callers of the
+/// specific definition this read returned".
 #[derive(Debug, Clone, Serialize)]
 pub struct SignatureResult {
     /// The symbol name.
@@ -38,9 +49,10 @@ pub struct SignatureResult {
     /// entries when the read isn't fully disambiguating (e.g. no
     /// `--parent` and the ident is polysemic in the read file).
     pub signatures: Vec<SignatureEntry>,
-    /// Count of call sites, parent-scoped when the caller passed
-    /// `--parent`. See
-    /// [`crate::application::symbol::impact::filter_impacted_by_parent`].
+    /// Project-wide count of calls to the `parent::symbol` pair
+    /// (parent-aware when `--parent` is set, raw `target_ident`
+    /// count otherwise). Not scoped to the specific definition the
+    /// read returned — see the struct-level doc for why.
     pub ref_count: usize,
     /// Token estimate for this response.
     pub tokens: TokenEstimate,

@@ -28,16 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`rlm read --symbol X --parent Foo --metadata` no longer leaks
   metadata across files or parents**: the `--metadata` envelope now
-  derives `type_info`, `signature.signatures`, and `signature.ref_count`
-  from the chunks the read actually returns (file + parent scoped),
-  not from a fresh global `(symbol, parent)` lookup. Concretely: when
-  two files both define `Foo::new`, a read from one file no longer
-  surfaces the other file's signature, `type_info.file` no longer
-  jumps to whichever priority-pick the global query made, and
-  `ref_count` flips to parent-aware impact analysis (column-aware
-  path-call resolution) instead of inflating with `Bar::new` / bare
-  `new()` calls. Two regression tests pin the scoped shape and the
-  scoped count.
+  derives `type_info` and `signature.signatures` from the chunks the
+  read actually returns (file + parent scoped), not from a fresh
+  global `(symbol, parent)` lookup. Concretely: when two files both
+  define `Foo::new`, a read from one file no longer surfaces the
+  other file's signature, and `type_info.file` no longer jumps to
+  whichever priority-pick the global query made. `signature.ref_count`
+  is parent-aware (column-aware path-call resolution drops
+  `Bar::new()` and bare `new()` calls when `--parent Foo` is set) but
+  stays **parent-wide, not definition-scoped** — refs in the index
+  carry only `target_ident`, so attributing a `Foo::new()` call to
+  one specific `Foo::new` definition needs flow analysis rlm
+  intentionally doesn't do. `SignatureResult::ref_count`'s doc string
+  and a contract-pin test (`ref_count_is_parent_wide_not_definition_
+  scoped`) make the limit explicit.
 - **MCP `ServerInfo.instructions` re-synced with the tool surface**:
   the leading sentence now reads "21 tools" (it had stayed at 20
   after the `quality_clear` split), names `quality_clear` in the

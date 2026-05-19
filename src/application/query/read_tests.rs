@@ -290,6 +290,122 @@ fn ref_count_with_parent_excludes_other_parents_calls() {
     );
 }
 
+/// Contract pin: `ref_count` is **parent-wide**, not
+/// **selected-definition-scoped**. When two files both define
+/// `Foo::new`, rlm has no way to tell at the ref level which
+/// definition a `Foo::new()` call resolves to — refs carry only
+/// `target_ident`, not a definition fingerprint. So a single
+/// project-wide `Foo::new()` call site contributes `ref_count: 1`
+/// regardless of which file the user reads from. The signature view
+/// describes the *parent::symbol pair* across the project, not the
+/// callers of the specific definition the read returned.
+///
+/// We document this rather than fix it: the structurally correct fix
+/// (attributing each call to a concrete target) needs full type-flow
+/// analysis, which rlm doesn't do. The honest contract — "calls to
+/// `Foo::new` exist project-wide; attribution to a specific
+/// definition is ambiguous when multiple definitions exist" — is
+/// what the `SignatureResult::ref_count` doc string asserts and what
+/// this test pins.
+#[test]
+fn ref_count_is_parent_wide_not_definition_scoped() {
+    let db = Database::open_in_memory().unwrap();
+
+    let foo_new_base = Chunk {
+        id: 0,
+        file_id: 0,
+        start_line: 0,
+        end_line: 0,
+        start_byte: 0,
+        end_byte: 0,
+        kind: ChunkKind::Method,
+        ident: "new".into(),
+        parent: Some("Foo".into()),
+        signature: Some("fn new()".into()),
+        visibility: None,
+        ui_ctx: None,
+        doc_comment: None,
+        attributes: None,
+        content: String::new(),
+    };
+
+    let lib_file = FileRecord::new("src/lib.rs".into(), "h1".into(), "rust".into(), 200);
+    let lib_id = db.upsert_file(&lib_file).unwrap();
+    db.insert_chunk(&Chunk {
+        file_id: lib_id,
+        ..foo_new_base.clone()
+    })
+    .unwrap();
+
+    let fix_file = FileRecord::new("tests/fixture.rs".into(), "h2".into(), "rust".into(), 100);
+    let fix_id = db.upsert_file(&fix_file).unwrap();
+    db.insert_chunk(&Chunk {
+        file_id: fix_id,
+        ..foo_new_base.clone()
+    })
+    .unwrap();
+
+    // Single caller — calls `Foo::new()` once in src/lib.rs (cannot
+    // be unambiguously attributed to either definition).
+    let tmp = tempfile::tempdir().unwrap();
+    let caller_rel = "src/caller.rs";
+    let caller_src = "fn use_news() {\n    Foo::new();\n}\n";
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::write(tmp.path().join(caller_rel), caller_src).unwrap();
+    let caller_file = FileRecord::new(caller_rel.into(), "h3".into(), "rust".into(), 30);
+    let caller_id = db.upsert_file(&caller_file).unwrap();
+    let caller_chunk_id = db
+        .insert_chunk(&Chunk {
+            file_id: caller_id,
+            start_line: 1,
+            end_line: 3,
+            start_byte: 0,
+            end_byte: caller_src.len() as u32,
+            kind: ChunkKind::Function,
+            ident: "use_news".into(),
+            parent: None,
+            content: caller_src.into(),
+            ..foo_new_base.clone() // shape only — overrides above set the real values
+        })
+        .unwrap();
+    db.insert_ref(&Reference {
+        id: 0,
+        chunk_id: caller_chunk_id,
+        target_ident: "new".into(),
+        ref_kind: RefKind::Call,
+        line: 2,
+        col: 9,
+    })
+    .unwrap();
+
+    // Reading from EITHER file with `--parent Foo` must report the
+    // same parent-wide count: 1. The reviewer's expectation that
+    // reading from `tests/fixture.rs` should yield `ref_count: 0`
+    // (since the only caller is in src/) cannot be satisfied at the
+    // ref-resolution layer — and we document that explicitly.
+    for read_path in ["src/lib.rs", "tests/fixture.rs"] {
+        let out = read_symbol(
+            &db,
+            tmp.path(),
+            &ReadSymbolInput {
+                path: read_path,
+                symbol: "new",
+                parent: Some("Foo"),
+                metadata: true,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            out.body.contains("\"ref_count\":1"),
+            "ref_count must be parent-wide (1) regardless of which \
+             Foo::new definition the read targeted (tried {read_path}). \
+             body: {}",
+            out.body,
+        );
+    }
+}
+
 /// Existing behaviour preserved: without `--parent`, a wrong path still
 /// falls back to every match for the ident — the "maybe you typed the
 /// path wrong" affordance.
