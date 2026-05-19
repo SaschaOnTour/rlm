@@ -14,8 +14,13 @@
 /// Strip a balanced `open ... close` block from the end of `s`.
 /// Returns `s` unchanged if it doesn't end with `close` or if the
 /// brackets aren't balanced.
-pub(super) fn strip_trailing_balanced_brackets(s: &str, open: char, close: char) -> &str {
-    let Some(without_close) = s.strip_suffix(close) else {
+///
+/// `open` / `close` are `u8` because this whole family scans bytes
+/// (matching tree-sitter's byte-offset convention). A `char` API
+/// would silently lose non-ASCII delimiters via an `as u8` truncation
+/// — the byte-typed signature keeps the contract honest.
+pub(super) fn strip_trailing_balanced_brackets(s: &str, open: u8, close: u8) -> &str {
+    let Some(without_close) = s.strip_suffix(close as char) else {
         return s;
     };
     find_matching_open(without_close, open, close).map_or(s, |open_idx| &without_close[..open_idx])
@@ -24,10 +29,8 @@ pub(super) fn strip_trailing_balanced_brackets(s: &str, open: char, close: char)
 /// Given `s` that conceptually ends just after a stripped `close`
 /// bracket, find the byte index of the matching `open`. Returns
 /// `None` when brackets aren't balanced.
-pub(super) fn find_matching_open(s: &str, open: char, close: char) -> Option<usize> {
+pub(super) fn find_matching_open(s: &str, open: u8, close: u8) -> Option<usize> {
     let bytes = s.as_bytes();
-    let open_b = open as u8;
-    let close_b = close as u8;
     // Depth starts at 1 because the caller has already stripped one
     // `close` bracket whose matching `open` we're locating.
     let mut depth: i32 = 1;
@@ -35,9 +38,9 @@ pub(super) fn find_matching_open(s: &str, open: char, close: char) -> Option<usi
     while i > 0 {
         i -= 1;
         let b = bytes[i];
-        if b == close_b {
+        if b == close {
             depth += 1;
-        } else if b == open_b {
+        } else if b == open {
             depth -= 1;
             if depth == 0 {
                 return Some(i);
@@ -50,18 +53,16 @@ pub(super) fn find_matching_open(s: &str, open: char, close: char) -> Option<usi
 /// Consume a balanced `open ... close` block from the start of `s`.
 /// Returns the remainder after the matching `close`, or `None` if
 /// `s` doesn't start with `open` or brackets aren't balanced.
-pub(super) fn consume_balanced_brackets_at_start(s: &str, open: char, close: char) -> Option<&str> {
+pub(super) fn consume_balanced_brackets_at_start(s: &str, open: u8, close: u8) -> Option<&str> {
     let bytes = s.as_bytes();
-    let open_b = open as u8;
-    let close_b = close as u8;
-    if bytes.first().copied() != Some(open_b) {
+    if bytes.first().copied() != Some(open) {
         return None;
     }
     let mut depth: i32 = 0;
     for (i, &b) in bytes.iter().enumerate() {
-        if b == open_b {
+        if b == open {
             depth += 1;
-        } else if b == close_b {
+        } else if b == close {
             depth -= 1;
             if depth == 0 {
                 return Some(&s[i + 1..]);

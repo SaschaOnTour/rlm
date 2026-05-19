@@ -32,11 +32,16 @@ use crate::error::Result;
 
 /// Default chunk size used by [`query_batched_in`].
 ///
-/// Picked well below the SQLite 3.32+ ceiling of 32766 so a single
-/// query stays cheap to prepare and there's headroom for ports that
-/// might still see the historical 999 limit. Two extra placeholders
-/// might be reserved elsewhere in the query (`LIMIT ?`, etc.) — 999
-/// leaves room.
+/// Matches the historical pre-3.32 SQLite ceiling exactly so even
+/// older ports still work — current SQLite (≥ 3.32) tolerates 32766,
+/// so any plausible IN-list we'd want to run fits inside one batch.
+/// The helper's API is "one IN clause per batch": `sql_for(n)` emits
+/// exactly `n` placeholders and the helper binds exactly `n`
+/// parameters, so there's no need to reserve headroom for other
+/// per-statement placeholders (`LIMIT ?` etc.) — those would belong
+/// in a different helper anyway. New callers that need extra
+/// placeholders should extend this module, not silently consume
+/// the budget.
 pub(crate) const SQLITE_VAR_LIMIT: usize = 999;
 
 /// Run an IN-list `SELECT` in batches that stay under the SQLite
@@ -93,7 +98,14 @@ where
     S: Fn(usize) -> String,
     M: Fn(&rusqlite::Row<'_>) -> rusqlite::Result<R>,
 {
-    debug_assert!(limit > 0, "batch limit must be positive");
+    // Runtime assert (not `debug_assert!`): a zero limit would
+    // panic deeper inside `unique.chunks(0)` with a less obvious
+    // backtrace, and shipping that panic into release builds is
+    // worse than catching the invariant at the helper entrance.
+    assert!(
+        limit > 0,
+        "query_batched_in_with_limit: batch limit must be positive (got 0)"
+    );
     // Dedup before batching so cross-batch duplicates can't
     // double-return — see the doc on `query_batched_in` for why
     // this matches single-query `IN(...)` set semantics. Input

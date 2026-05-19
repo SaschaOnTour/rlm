@@ -354,17 +354,17 @@ claude mcp list
 
 That's it. The agent now has direct access to all rlm commands as native tools.
 
-**What the agent sees:** 18 MCP tools organized in 4 tiers:
+**What the agent sees:** 21 MCP tools organized in 4 tiers:
 
 | Tier | Tools | Purpose |
 |------|-------|---------|
 | **Orient** | `overview` (minimal/standard/tree) | Project structure at 3 zoom levels |
 | **Search** | `search`, `read` (symbol/section + metadata) | Find and read code |
 | **Analyze** | `refs` (with impact), `context` (with callgraph), `deps`, `scope` | Understand code |
-| **Edit** | `replace`, `insert` | Modify code with Syntax Guard |
-| **Utility** | `diff`, `partition`, `summarize`, `files`, `stats`, `savings`, `verify`, `supported`, `index` | Maintenance |
+| **Edit** | `replace`, `insert`, `delete`, `extract` | Modify code with Syntax Guard |
+| **Utility** | `diff`, `partition`, `summarize`, `files`, `stats` (with `savings=true` for token-savings report), `quality`, `quality_clear`, `verify`, `supported`, `index` | Maintenance |
 
-> **Note:** Both MCP and CLI offer the same 18-tool surface. Key consolidations: `peek`/`map`/`tree` → `overview`, `type_info`/`signature` → `read --metadata`, `callgraph` → `context --graph`, `impact` → `refs`.
+> **Note:** Both MCP and CLI offer the same 21-tool surface. Key consolidations: `peek`/`map`/`tree` → `overview`, `type_info`/`signature` → `read --metadata`, `callgraph` → `context --graph`, `impact` → `refs`, `savings` → `stats(savings=true)`. The 0.6.0 `rlm quality` split keeps the read tool annotated `read_only_hint=true` and moves the truncate path into the dedicated `quality_clear` tool.
 
 ### Option B: CLI via CLAUDE.md
 
@@ -577,7 +577,7 @@ Example output:
 {"ops":42,"output":3200,"alternative":48000,"saved":44800,"pct":93.3,"by_cmd":[{"cmd":"overview","ops":12,...}]}
 ```
 
-The `savings` MCP tool provides the same report for AI agents.
+The MCP `stats` tool with `savings: true` (and optional `since`) provides the same report for AI agents — the standalone `savings` tool was folded into `stats` in 0.6.0.
 
 ### Checking Quality via CLI
 

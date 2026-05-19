@@ -65,7 +65,7 @@ pub(super) fn line_carries_path_call(line: &str, col: usize, parent: &str, symbo
 /// Bare form: `... Foo`, `... module::Foo`, `... Foo::<T>` — i.e.,
 /// the path written without `<…>::` enclosure.
 fn bare_path_matches_parent(prefix: &str, parent: &str) -> bool {
-    let no_turbofish = strip_trailing_balanced_brackets(prefix, '<', '>');
+    let no_turbofish = strip_trailing_balanced_brackets(prefix, b'<', b'>');
     let trimmed = no_turbofish.trim_end_matches(':');
     ends_with_ident(trimmed, parent)
 }
@@ -76,7 +76,7 @@ fn qualified_path_matches_parent(prefix: &str, parent: &str) -> bool {
     let Some(without_close) = prefix.strip_suffix('>') else {
         return false;
     };
-    let Some(open_idx) = find_matching_open(without_close, '<', '>') else {
+    let Some(open_idx) = find_matching_open(without_close, b'<', b'>') else {
         return false;
     };
     let inside = &without_close[open_idx + 1..];
@@ -132,7 +132,7 @@ fn parse_first_type_expr(s: &str) -> Option<(&str, &str)> {
     }
     // Optional turbofish-style generics on the type: `Foo<T>`.
     if bytes.get(pos).copied() == Some(b'<') {
-        match consume_balanced_brackets_at_start(&s[pos..], '<', '>') {
+        match consume_balanced_brackets_at_start(&s[pos..], b'<', b'>') {
             Some(rest) => pos = s.len() - rest.len(),
             None => return None,
         }

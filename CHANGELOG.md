@@ -316,6 +316,30 @@ work that briefly carried that version number is folded here.
   README claimed `rlm index .` creates `.rlm/config.toml`. It only
   writes `.rlm/index.db`. Updated to point users at `rlm setup` or
   the manual two-line snippet for creating the config file.
+- **README: MCP tool surface table re-synced** to 21 tools (was 18,
+  stale since 0.5.0). Now lists `delete` and `extract` under Edit,
+  `quality` + `quality_clear` under Utility, and clarifies that
+  `savings` lives inside `stats(savings=true)` rather than as a
+  standalone tool. The "savings MCP tool" prose elsewhere in the
+  README was likewise updated.
+- **`text_scan::find_matching_open` / `consume_balanced_brackets_at_start`
+  signature tightened** from `char` to `u8`: the bodies were already
+  byte-typed (matching tree-sitter's byte-offset convention) and
+  silently truncated any non-ASCII delimiter via `open as u8`. The
+  byte-typed API makes the ASCII-only contract honest at the type
+  level; callers pass `b'<'` / `b'>'` instead of `'<'` / `'>'`.
+- **`db::batched::query_batched_in_with_limit` rejects `limit == 0`
+  in release builds**: the previous `debug_assert!` would let a zero
+  batch limit slip past in `--release` and panic deeper inside
+  `chunks(0)` with a less obvious backtrace. Now a runtime `assert!`
+  catches the invariant at the helper boundary. (Production callers
+  use the no-limit wrapper, which hard-codes `SQLITE_VAR_LIMIT`; the
+  guard only matters for the test seam.)
+- **`SQLITE_VAR_LIMIT` doc corrected**: the comment claimed `999`
+  "leaves room" for extra placeholders like `LIMIT ?`. 999 is the
+  legacy SQLite ceiling itself, so adding any extra placeholder
+  would exceed it. The new doc states the helper's contract
+  exactly: one IN-clause per batch, no headroom reserved.
 - **`src/cli/helpers.rs` module doc no longer claims project-root
   upward-walk** that doesn't exist; `cwd_project_root()` is just
   `std::env::current_dir()`. Doc clarifies the assumption and flags
