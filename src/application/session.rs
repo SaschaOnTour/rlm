@@ -148,7 +148,9 @@ impl RlmSession {
     /// `FileNotFound`).
     pub fn read(&self, request: &read_query::ReadRequest<'_>) -> Result<read_query::ReadOutput> {
         match request {
-            read_query::ReadRequest::Symbol(input) => read_query::read_symbol(&self.db, input),
+            read_query::ReadRequest::Symbol(input) => {
+                read_query::read_symbol(&self.db, &self.config.project_root, input)
+            }
             read_query::ReadRequest::Section { path, heading } => {
                 read_query::read_section(&self.db, path, heading)
             }

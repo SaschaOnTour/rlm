@@ -16,13 +16,18 @@
 //! produces the user-facing message — adapters route them through
 //! their normal error channel without further branching.
 
+use std::path::Path;
+
 use serde::Serialize;
 
 use crate::application::dto::chunk_dto::ChunkDto;
 use crate::application::savings;
+use crate::application::symbol::impact::{analyze_impact, filter_impacted_by_parent};
+use crate::application::symbol::signature::{SignatureEntry, SignatureResult};
+use crate::application::symbol::type_info::TypeInfoResult;
 use crate::db::Database;
 use crate::domain::chunk::Chunk;
-use crate::domain::token_budget::estimate_json_tokens;
+use crate::domain::token_budget::{estimate_json_tokens, estimate_output_tokens, TokenEstimate};
 use crate::error::{Result, RlmError, SectionNotFoundError, MAX_SECTION_HINT};
 
 /// Inputs for [`read_symbol`], grouped so the signature stays within
@@ -101,7 +106,17 @@ pub struct ReadOutput {
 /// Resolve a symbol read. Ambiguity is intentional: "show me every X
 /// in this file" returns multiple matches; ambiguity is a write-side
 /// concern only (handled inside `replacer`/`extractor`).
-pub fn read_symbol(db: &Database, input: &ReadSymbolInput<'_>) -> Result<ReadOutput> {
+///
+/// `project_root` threads through so the `--metadata` path can run
+/// parent-aware ref counting via
+/// [`filter_impacted_by_parent`](crate::application::symbol::impact::filter_impacted_by_parent),
+/// which inspects source-file content to disambiguate refs by their
+/// path-call form (`Foo::new` vs `Bar::new` at column N).
+pub fn read_symbol(
+    db: &Database,
+    project_root: &Path,
+    input: &ReadSymbolInput<'_>,
+) -> Result<ReadOutput> {
     let chunks = db.get_chunks_by_ident(input.symbol)?;
     if chunks.is_empty() {
         return Err(crate::error::RlmError::SymbolNotFound {
@@ -109,7 +124,38 @@ pub fn read_symbol(db: &Database, input: &ReadSymbolInput<'_>) -> Result<ReadOut
         });
     }
 
-    let file_chunks = filter_by_file_and_parent(db, &chunks, input.path, input.parent)?;
+    let selected_chunks = select_chunks(db, &chunks, input)?;
+    let selected_dtos: Vec<ChunkDto> = selected_chunks.iter().map(|c| ChunkDto::from(*c)).collect();
+
+    let body = if input.metadata {
+        render_enriched_body(&EnrichedCtx {
+            db,
+            project_root,
+            selected_chunks: &selected_chunks,
+            selected_dtos: &selected_dtos,
+            symbol: input.symbol,
+            parent: input.parent,
+        })
+    } else {
+        serde_json::to_string(&selected_dtos)
+            .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string())
+    };
+
+    let tokens_out = estimate_json_tokens(body.len());
+    savings::record_read_symbol(db, tokens_out, input.path);
+    Ok(ReadOutput { body, tokens_out })
+}
+
+/// Apply the file + parent filter, with the parent-respecting
+/// fallback when the requested path doesn't match anything. Extracted
+/// from `read_symbol` so the metadata-enrichment branch sees a
+/// single, already-selected slice.
+fn select_chunks<'a>(
+    db: &Database,
+    chunks: &'a [Chunk],
+    input: &ReadSymbolInput<'_>,
+) -> Result<Vec<&'a Chunk>> {
+    let file_chunks = filter_by_file_and_parent(db, chunks, input.path, input.parent)?;
     // Fallback policy:
     // * no `--parent`: path typos are common, so return every match
     //   for the ident across the project.
@@ -118,9 +164,10 @@ pub fn read_symbol(db: &Database, input: &ReadSymbolInput<'_>) -> Result<ReadOut
     //   silently defeat the disambiguation. Filter the fallback by
     //   parent too, and error out if nothing matches that parent
     //   anywhere.
-    let selected: Vec<ChunkDto> = if !file_chunks.is_empty() {
-        file_chunks.iter().copied().map(ChunkDto::from).collect()
-    } else if let Some(p) = input.parent {
+    if !file_chunks.is_empty() {
+        return Ok(file_chunks);
+    }
+    if let Some(p) = input.parent {
         let parent_matches: Vec<&Chunk> = chunks
             .iter()
             .filter(|c| c.parent.as_deref() == Some(p))
@@ -130,52 +177,194 @@ pub fn read_symbol(db: &Database, input: &ReadSymbolInput<'_>) -> Result<ReadOut
                 ident: format!("{p}::{}", input.symbol),
             });
         }
-        parent_matches.iter().copied().map(ChunkDto::from).collect()
-    } else {
-        chunks.iter().map(ChunkDto::from).collect()
-    };
-
-    let body = if input.metadata {
-        render_enriched_body(db, &selected, input.symbol, input.parent)
-    } else {
-        serde_json::to_string(&selected)
-            .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string())
-    };
-
-    let tokens_out = estimate_json_tokens(body.len());
-    savings::record_read_symbol(db, tokens_out, input.path);
-    Ok(ReadOutput { body, tokens_out })
+        return Ok(parent_matches);
+    }
+    Ok(chunks.iter().collect())
 }
 
-/// Serialise the `--metadata` envelope: the parent-filtered chunks
-/// plus the same-parent-scoped `type_info` and `signature` lookups.
-/// Both metadata calls take the caller's `parent` filter so the
-/// enriched view stays consistent with the chunks slice — without
-/// this, `rlm read --symbol new --parent Foo --metadata` would leak
-/// `Bar::new`'s signature into the response.
-fn render_enriched_body(
-    db: &Database,
-    chunks: &[ChunkDto<'_>],
-    symbol: &str,
-    parent: Option<&str>,
-) -> String {
-    let type_info = crate::application::symbol::type_info::get_type_info(db, symbol, parent).ok();
-    let signature = crate::application::symbol::signature::get_signature(db, symbol, parent).ok();
+/// Bundled context the `--metadata` envelope needs. Keeps
+/// `render_enriched_body` and its helpers under the SRP parameter
+/// ceiling — every field here is already in scope at the call site
+/// inside [`read_symbol`], the struct just groups them.
+struct EnrichedCtx<'a, 'c> {
+    db: &'a Database,
+    project_root: &'a Path,
+    /// Chunks the read actually returned (file + parent filtered).
+    /// `type_info` derives its pick from this set so a read from
+    /// `tests/fixture.rs` can't pick up `src/lib.rs`'s sibling.
+    selected_chunks: &'a [&'c Chunk],
+    /// Same chunks, wrapped in the wire DTO for serialisation +
+    /// signature listing.
+    selected_dtos: &'a [ChunkDto<'c>],
+    symbol: &'a str,
+    parent: Option<&'a str>,
+}
+
+/// Serialise the `--metadata` envelope. Metadata is derived from the
+/// chunks the read actually returns, not from a fresh global lookup
+/// — so when two files both define `Foo::new` and the user reads
+/// from one, the type-info / signatures / ref-count describe **that**
+/// file's `Foo::new`, not the sibling. `ref_count` flips to
+/// parent-aware impact analysis whenever `--parent` is set, since the
+/// raw `target_ident = symbol` count includes calls to every
+/// same-named symbol in the project.
+fn render_enriched_body(ctx: &EnrichedCtx<'_, '_>) -> String {
+    let type_info = build_type_info(ctx.db, ctx.selected_chunks, ctx.symbol).ok();
+    let signature = build_signature(
+        ctx.db,
+        ctx.project_root,
+        ctx.selected_dtos,
+        ctx.symbol,
+        ctx.parent,
+    )
+    .ok();
     #[derive(Serialize)]
     struct Enriched<'a> {
         chunks: &'a [ChunkDto<'a>],
         #[serde(skip_serializing_if = "Option::is_none")]
-        type_info: Option<crate::application::symbol::type_info::TypeInfoResult>,
+        type_info: Option<TypeInfoResult>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        signature: Option<crate::application::symbol::signature::SignatureResult>,
+        signature: Option<SignatureResult>,
     }
     serde_json::to_string(&Enriched {
-        chunks,
+        chunks: ctx.selected_dtos,
         type_info,
         signature,
     })
     .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string())
 }
+
+/// Build the `type_info` view for the chunks the read returned. The
+/// `src/ > default > fixtures/test` priority lattice still applies
+/// — but only within the already-selected set, so a read from
+/// `tests/fixture.rs` can't pick up `src/lib.rs`'s `Foo::new`.
+fn build_type_info(db: &Database, selected: &[&Chunk], symbol: &str) -> Result<TypeInfoResult> {
+    let path_by_id = build_file_path_index(db)?;
+    let chunk = pick_priority_chunk(selected, &path_by_id, symbol)?;
+    let file = path_by_id.get(&chunk.file_id).cloned().unwrap_or_default();
+    Ok(type_info_from_chunk(chunk, symbol, file))
+}
+
+/// Construct a `TypeInfoResult` from one chunk. Clones the chunk
+/// once and moves its `parent` / `signature` / `content` fields out
+/// instead of cloning them individually in the struct literal —
+/// rustqual's BP-008 fires on 3+ inline `.clone()` calls, and the
+/// whole-chunk clone is honest about what we're doing: we need an
+/// owned snapshot of those four fields. `kind` is materialised via
+/// `as_str().to_string()` because `ChunkKind`'s string form lives in
+/// rustqual-checked static slices, not on the chunk. Token estimate
+/// runs after construction since it needs the populated value.
+fn type_info_from_chunk(chunk: &Chunk, symbol: &str, file: String) -> TypeInfoResult {
+    let owned = chunk.clone();
+    let mut result = TypeInfoResult {
+        symbol: symbol.to_string(),
+        parent: owned.parent,
+        kind: owned.kind.as_str().to_string(),
+        signature: owned.signature,
+        content: owned.content,
+        file,
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    result
+}
+
+/// Build the `signature` view: signatures listed straight from the
+/// returned chunks, ref_count parent-scoped when the caller asked for
+/// a specific parent.
+fn build_signature(
+    db: &Database,
+    project_root: &Path,
+    selected_dtos: &[ChunkDto<'_>],
+    symbol: &str,
+    parent: Option<&str>,
+) -> Result<SignatureResult> {
+    let signatures: Vec<SignatureEntry> = selected_dtos
+        .iter()
+        .filter_map(|c| {
+            c.signature.map(|s| SignatureEntry {
+                parent: c.parent.map(String::from),
+                signature: s.to_string(),
+            })
+        })
+        .collect();
+    let ref_count = count_refs(db, project_root, symbol, parent)?;
+    let mut result = SignatureResult {
+        symbol: symbol.to_string(),
+        signatures,
+        ref_count,
+        tokens: TokenEstimate::default(),
+    };
+    result.tokens = estimate_output_tokens(&result);
+    Ok(result)
+}
+
+/// Count refs to `symbol`, parent-aware when set: without `parent`,
+/// every ref with `target_ident = symbol` counts (matches the old
+/// behaviour for the unfiltered case); with `parent`, the count is
+/// the impact analysis filtered through `filter_impacted_by_parent`,
+/// which uses column-aware source inspection to keep only calls of
+/// the path-qualified form (`parent::symbol`).
+fn count_refs(
+    db: &Database,
+    project_root: &Path,
+    symbol: &str,
+    parent: Option<&str>,
+) -> Result<usize> {
+    if let Some(p) = parent {
+        let mut impact = analyze_impact(db, symbol)?;
+        filter_impacted_by_parent(&mut impact, p, project_root)?;
+        Ok(impact.count)
+    } else {
+        Ok(db.get_refs_to(symbol)?.len())
+    }
+}
+
+/// Build an `O(1)` lookup from `file_id` to file path so the
+/// priority pass doesn't run an `O(chunks × files)` scan.
+fn build_file_path_index(db: &Database) -> Result<std::collections::HashMap<i64, String>> {
+    Ok(db
+        .get_all_files()?
+        .into_iter()
+        .map(|f| (f.id, f.path))
+        .collect())
+}
+
+/// Pick the highest-priority chunk (`src/` > default > `fixtures` /
+/// `test`) from a non-empty slice. Errors with `SymbolNotFound` if
+/// the slice is empty — that should never happen on the read path
+/// (the caller bailed earlier) but we keep the guarantee explicit.
+fn pick_priority_chunk<'a>(
+    selected: &[&'a Chunk],
+    path_by_id: &std::collections::HashMap<i64, String>,
+    symbol: &str,
+) -> Result<&'a Chunk> {
+    selected
+        .iter()
+        .copied()
+        .min_by_key(|c| match path_by_id.get(&c.file_id) {
+            Some(path) => priority_for_path(path),
+            None => UNKNOWN_FILE_PRIORITY,
+        })
+        .ok_or_else(|| crate::error::RlmError::SymbolNotFound {
+            ident: symbol.to_string(),
+        })
+}
+
+/// Priority lattice used by [`pick_priority_chunk`]. Lower wins.
+fn priority_for_path(path: &str) -> i32 {
+    if path.starts_with("src/") {
+        0
+    } else if path.contains("fixtures") || path.contains("test") {
+        2
+    } else {
+        1
+    }
+}
+
+/// Priority value assigned to chunks whose file record is missing,
+/// ensuring they sort below src/ (0), default (1), and fixtures/tests (2).
+const UNKNOWN_FILE_PRIORITY: i32 = 3;
 
 fn filter_by_file_and_parent<'a>(
     db: &Database,

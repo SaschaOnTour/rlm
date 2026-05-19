@@ -413,12 +413,12 @@ impl ServerHandler for RlmServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "rlm: Context Broker for semantic code exploration. 20 tools in 4 tiers:\n\
+                "rlm: Context Broker for semantic code exploration. 21 tools in 4 tiers:\n\
                  ORIENT: overview(detail='minimal'|'standard'|'tree', path?) — project structure at 3 zoom levels.\n\
                  SEARCH: search(query) — full-text across symbols. read(path, symbol|section, metadata?) — symbol body + optional type/signature enrichment.\n\
                  ANALYZE: refs(symbol) — all usages + impact analysis. context(symbol, graph?) — body + callers + callees. deps(path), scope(path, line).\n\
                  EDIT: replace(path, symbol, code, preview?), delete(path, symbol, keep_docs?), insert(path, code, position), extract(path, symbols, to) — Syntax Guard validates all writes.\n\
-                 UTILITY: diff, partition, summarize, files, stats(savings?, since?), quality(unknown_only?, all?, clear?, summary?), verify, supported, index.\n\
+                 UTILITY: diff, partition, summarize, files, stats(savings?, since?), quality(unknown_only?, all?, summary?), quality_clear (destructive — truncates the parse-quality log; split off from `quality` so the read tool can keep read_only_hint=true), verify, supported, index.\n\
                  IMPORTANT: 'read' requires symbol or section. Use Claude Code's Read for full files/line ranges.\n\
                  Check 'q' field: if 'fallback_recommended' is true, prefer Claude Code's Read for affected lines."
                     .into(),

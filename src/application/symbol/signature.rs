@@ -1,12 +1,14 @@
-//! Signature operations shared between CLI and MCP.
+//! Result types for symbol signature views.
 //!
-//! Provides consistent behavior for getting symbol signatures and call site counts.
+//! Used by `application::query::read::render_enriched_body` when the
+//! caller asks for `--metadata`. The shape is shared via these types
+//! so the JSON envelope stays stable across surfaces, even though the
+//! values are derived directly from the chunks the read returns
+//! rather than from a separate `(symbol, parent)` lookup.
 
 use serde::Serialize;
 
-use crate::db::Database;
-use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
-use crate::error::Result;
+use crate::domain::token_budget::TokenEstimate;
 
 /// One concrete signature for the queried symbol, tagged with its
 /// parent type. Polysemic idents (e.g. `new` defined on every type
@@ -22,56 +24,24 @@ pub struct SignatureEntry {
     pub signature: String,
 }
 
-/// Result of getting a symbol's signature.
+/// Wire-format of the `signature` view emitted under
+/// `read --metadata`. Reflects the chunks the read actually returned
+/// (chunk-scoped), and a `ref_count` that is parent-aware when the
+/// caller scoped by `--parent` (uses column-aware path-call
+/// resolution from the impact analyser to drop refs that actually
+/// targeted a sibling `parent::symbol`).
 #[derive(Debug, Clone, Serialize)]
 pub struct SignatureResult {
     /// The symbol name.
     pub symbol: String,
-    /// The signatures (may have multiple if symbol is defined in
-    /// multiple places). Each entry tags its parent so polysemy is
-    /// machine-readable.
+    /// The signatures of the chunks the read returned. Multiple
+    /// entries when the read isn't fully disambiguating (e.g. no
+    /// `--parent` and the ident is polysemic in the read file).
     pub signatures: Vec<SignatureEntry>,
-    /// The count of all call sites.
+    /// Count of call sites, parent-scoped when the caller passed
+    /// `--parent`. See
+    /// [`crate::application::symbol::impact::filter_impacted_by_parent`].
     pub ref_count: usize,
     /// Token estimate for this response.
     pub tokens: TokenEstimate,
 }
-
-/// Get the signature of a symbol plus the count of all call sites.
-///
-/// When `parent` is `Some(...)`, only signatures of methods on that
-/// parent type are surfaced — keeps the metadata aligned with the
-/// caller's polysemy filter (`rlm read --symbol new --parent Foo
-/// --metadata` doesn't bleed `Bar::new` into the signatures list).
-/// `None` returns every signature across the polysemic group.
-pub fn get_signature(db: &Database, symbol: &str, parent: Option<&str>) -> Result<SignatureResult> {
-    let chunks = db.get_chunks_by_ident(symbol)?;
-    let refs = db.get_refs_to(symbol)?;
-
-    let sigs: Vec<SignatureEntry> = chunks
-        .iter()
-        .filter(|c| match parent {
-            None => true,
-            Some(p) => c.parent.as_deref() == Some(p),
-        })
-        .filter_map(|c| {
-            c.signature.as_ref().map(|s| SignatureEntry {
-                parent: c.parent.clone(),
-                signature: s.clone(),
-            })
-        })
-        .collect();
-
-    let mut result = SignatureResult {
-        symbol: symbol.to_string(),
-        signatures: sigs,
-        ref_count: refs.len(),
-        tokens: TokenEstimate::default(),
-    };
-    result.tokens = estimate_output_tokens(&result);
-    Ok(result)
-}
-
-#[cfg(test)]
-#[path = "signature_tests.rs"]
-mod tests;

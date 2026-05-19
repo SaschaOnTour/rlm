@@ -132,6 +132,38 @@ fn test_server_capabilities() {
     assert!(info.capabilities.tools.is_some());
 }
 
+/// The instructions string ships as the first thing an MCP host
+/// shows an agent. If it claims "20 tools" while the router exposes
+/// 21, or advertises a `clear?` field on `quality` that no longer
+/// exists, agents will pick the wrong tool. Pin both: tool count
+/// matches reality and `quality_clear` is named where `quality`'s
+/// removed `clear` flag used to be.
+#[test]
+fn test_server_info_instructions_match_actual_tool_surface() {
+    let (_tmp, server) = server_for_schema_test();
+    let actual_tool_count = server.get_tool_router().list_all().len();
+    let instructions = server.get_info().instructions.unwrap();
+
+    assert!(
+        instructions.contains(&format!("{actual_tool_count} tools")),
+        "instructions claim a different tool count than the router exposes \
+         ({actual_tool_count} actual). Update the leading sentence.\n\n{instructions}"
+    );
+
+    assert!(
+        instructions.contains("quality_clear"),
+        "instructions must name the `quality_clear` tool — it replaced the \
+         old `quality --clear` flag on the destructive side. Without it, \
+         agents won't know how to truncate the parse-quality log.\n\n{instructions}"
+    );
+
+    assert!(
+        !instructions.contains("clear?"),
+        "`quality(... clear? ...)` was removed; the field no longer exists \
+         on the read-only `quality` tool and listing it misleads agents.\n\n{instructions}"
+    );
+}
+
 // =============================================================================
 // 3. Tool List Tests
 // =============================================================================

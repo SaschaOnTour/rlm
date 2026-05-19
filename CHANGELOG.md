@@ -27,13 +27,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **`rlm read --symbol X --parent Foo --metadata` no longer leaks
-  metadata from other parents**: `get_signature` and `get_type_info`
-  now accept an `Option<&str>` parent filter and apply it before
-  building the response. Without this, the chunks list correctly
-  showed only `Foo::X` while `signature.signatures` and
-  `type_info.parent` could still surface entries from `Bar::X` or
-  other polysemic siblings — defeating the disambiguation the
-  `--parent` flag exists for.
+  metadata across files or parents**: the `--metadata` envelope now
+  derives `type_info`, `signature.signatures`, and `signature.ref_count`
+  from the chunks the read actually returns (file + parent scoped),
+  not from a fresh global `(symbol, parent)` lookup. Concretely: when
+  two files both define `Foo::new`, a read from one file no longer
+  surfaces the other file's signature, `type_info.file` no longer
+  jumps to whichever priority-pick the global query made, and
+  `ref_count` flips to parent-aware impact analysis (column-aware
+  path-call resolution) instead of inflating with `Bar::new` / bare
+  `new()` calls. Two regression tests pin the scoped shape and the
+  scoped count.
+- **MCP `ServerInfo.instructions` re-synced with the tool surface**:
+  the leading sentence now reads "21 tools" (it had stayed at 20
+  after the `quality_clear` split), names `quality_clear` in the
+  utility list, and drops the obsolete `clear?` flag from `quality`'s
+  parameter sketch. A new parity test fails if the count or the
+  `clear?` token ever drift again.
 - **Concurrent reads no longer race to `SQLITE_BUSY`**: the
   `Database::open` PRAGMA bundle now sets `busy_timeout=5000` (also
   the current rusqlite default; set explicitly so a future rusqlite

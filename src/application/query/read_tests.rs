@@ -7,9 +7,17 @@
 
 use super::{read_symbol, ReadInputs, ReadRequest, ReadSymbolInput};
 use crate::db::Database;
-use crate::domain::chunk::{Chunk, ChunkKind};
+use crate::domain::chunk::{Chunk, ChunkKind, RefKind, Reference};
 use crate::domain::file::FileRecord;
 use crate::error::RlmError;
+use std::path::Path;
+
+/// Most tests in this module exercise the non-metadata path, where
+/// `project_root` is only used to thread through — the parent-aware
+/// ref count never runs. An empty path keeps the test setup minimal
+/// without affecting outcomes; the dedicated `ref_count_*` test below
+/// sets up a real tempdir for the cases that do read source files.
+const TEST_PROJECT_ROOT: &str = "";
 
 fn make_db_with_two_news() -> Database {
     let db = Database::open_in_memory().unwrap();
@@ -52,6 +60,7 @@ fn read_symbol_with_wrong_path_and_parent_filters_fallback_by_parent() {
     let db = make_db_with_two_news();
     let out = read_symbol(
         &db,
+        Path::new(TEST_PROJECT_ROOT),
         &ReadSymbolInput {
             path: "src/does_not_exist.rs",
             symbol: "new",
@@ -82,6 +91,7 @@ fn read_symbol_with_parent_not_found_anywhere_errors() {
     let db = make_db_with_two_news();
     let err = read_symbol(
         &db,
+        Path::new(TEST_PROJECT_ROOT),
         &ReadSymbolInput {
             path: "src/lib.rs",
             symbol: "new",
@@ -97,6 +107,189 @@ fn read_symbol_with_parent_not_found_anywhere_errors() {
     }
 }
 
+/// Two files both define `Foo::new`. Reading from `tests/fixture.rs`
+/// with `--metadata` must report metadata about the chunk it actually
+/// returns — not bleed `src/lib.rs`'s `Foo::new` signature/file into
+/// the response. Before the chunk-scoped derivation, `type_info` was
+/// computed by a global `(symbol, parent)` query and got its `file`
+/// from src/lib.rs (priority pass), while `signature.signatures`
+/// listed entries from both files. This test pins the scoped shape.
+#[test]
+fn metadata_scopes_to_the_returned_chunks_when_parent_repeats_across_files() {
+    let db = Database::open_in_memory().unwrap();
+
+    // Shared baseline for both `Foo::new` chunks; per-file values are
+    // overridden via the struct-update syntax below. Cuts the
+    // duplication rustqual's BP-009 flags when the same struct gets
+    // constructed twice with overlapping fields.
+    let foo_new_base = Chunk {
+        id: 0,
+        file_id: 0,
+        start_line: 0,
+        end_line: 0,
+        start_byte: 0,
+        end_byte: 0,
+        kind: ChunkKind::Method,
+        ident: "new".into(),
+        parent: Some("Foo".into()),
+        signature: None,
+        visibility: None,
+        ui_ctx: None,
+        doc_comment: None,
+        attributes: None,
+        content: String::new(),
+    };
+
+    let lib_file = FileRecord::new("src/lib.rs".into(), "h1".into(), "rust".into(), 200);
+    let lib_id = db.upsert_file(&lib_file).unwrap();
+    db.insert_chunk(&Chunk {
+        file_id: lib_id,
+        start_line: 10,
+        end_line: 12,
+        start_byte: 100,
+        end_byte: 140,
+        signature: Some("fn new() -> Lib".into()),
+        content: "fn new() -> Lib { Lib }".into(),
+        ..foo_new_base.clone()
+    })
+    .unwrap();
+
+    let fix_file = FileRecord::new("tests/fixture.rs".into(), "h2".into(), "rust".into(), 100);
+    let fix_id = db.upsert_file(&fix_file).unwrap();
+    db.insert_chunk(&Chunk {
+        file_id: fix_id,
+        start_line: 5,
+        end_line: 7,
+        start_byte: 50,
+        end_byte: 95,
+        signature: Some("fn new() -> Fixture".into()),
+        content: "fn new() -> Fixture { Fixture }".into(),
+        ..foo_new_base
+    })
+    .unwrap();
+
+    let out = read_symbol(
+        &db,
+        Path::new(TEST_PROJECT_ROOT),
+        &ReadSymbolInput {
+            path: "tests/fixture.rs",
+            symbol: "new",
+            parent: Some("Foo"),
+            metadata: true,
+        },
+    )
+    .unwrap();
+
+    // type_info must point at the file the user actually read.
+    assert!(
+        out.body.contains("\"file\":\"tests/fixture.rs\""),
+        "type_info.file must be the read file, got body: {}",
+        out.body
+    );
+    assert!(
+        !out.body.contains("\"file\":\"src/lib.rs\""),
+        "type_info must not leak src/lib.rs into a tests/fixture.rs read: {}",
+        out.body
+    );
+
+    // signatures must come only from the chunk(s) the read returned.
+    assert!(
+        out.body.contains("fn new() -> Fixture"),
+        "signature for the read chunk must be present: {}",
+        out.body
+    );
+    assert!(
+        !out.body.contains("fn new() -> Lib"),
+        "signature from the other file's Foo::new must not leak: {}",
+        out.body
+    );
+}
+
+/// `ref_count` must reflect the parent the user asked about. Without
+/// scoping, the legacy code counts every ref to ident `new` across
+/// the project — including `Bar::new` callers — so `--parent Foo`
+/// inflates by an order of magnitude. The fix uses parent-aware
+/// impact analysis (column-aware path-call resolution) to count only
+/// refs that pertain to `Foo::new`.
+///
+/// `filter_impacted_by_parent` resolves path calls by reading the
+/// caller's source at the recorded line/col, so the caller file has
+/// to physically exist under `project_root`. We use a tempdir for
+/// that and pass its path through.
+#[test]
+fn ref_count_with_parent_excludes_other_parents_calls() {
+    let db = make_db_with_two_news();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let caller_rel = "src/caller.rs";
+    let caller_src = "fn use_news() {\n    Foo::new();\n    Bar::new();\n    new();\n}\n";
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::write(tmp.path().join(caller_rel), caller_src).unwrap();
+
+    let caller_file = FileRecord::new(caller_rel.into(), "h3".into(), "rust".into(), 50);
+    let caller_id = db.upsert_file(&caller_file).unwrap();
+    let caller_chunk_id = db
+        .insert_chunk(&Chunk {
+            id: 0,
+            file_id: caller_id,
+            start_line: 1,
+            end_line: 5,
+            start_byte: 0,
+            end_byte: caller_src.len() as u32,
+            kind: ChunkKind::Function,
+            ident: "use_news".into(),
+            parent: None,
+            signature: Some("fn use_news()".into()),
+            visibility: None,
+            ui_ctx: None,
+            doc_comment: None,
+            attributes: None,
+            content: caller_src.into(),
+        })
+        .unwrap();
+
+    // Columns are 0-indexed (tree-sitter convention) and point at the
+    // ident itself — for `    Foo::new()` that's column 9, the start
+    // of `new`. Same for `Bar::new()`. For bare `    new()` it's 4.
+    for (line, col) in [(2, 9), (3, 9), (4, 4)] {
+        db.insert_ref(&Reference {
+            id: 0,
+            chunk_id: caller_chunk_id,
+            target_ident: "new".into(),
+            ref_kind: RefKind::Call,
+            line,
+            col,
+        })
+        .unwrap();
+    }
+
+    let out = read_symbol(
+        &db,
+        tmp.path(),
+        &ReadSymbolInput {
+            path: "src/lib.rs",
+            symbol: "new",
+            parent: Some("Foo"),
+            metadata: true,
+        },
+    )
+    .unwrap();
+
+    // The unscoped count would be 3. The parent-aware count for Foo
+    // is 1 (only `Foo::new()` survives the path-call filter — bare
+    // `new()` and `Bar::new()` are dropped).
+    assert!(
+        out.body.contains("\"ref_count\":1"),
+        "ref_count must be parent-scoped to 1 (only Foo::new()), got body: {}",
+        out.body
+    );
+    assert!(
+        !out.body.contains("\"ref_count\":3"),
+        "ref_count must not include Bar::new() or bare new() calls: {}",
+        out.body
+    );
+}
+
 /// Existing behaviour preserved: without `--parent`, a wrong path still
 /// falls back to every match for the ident — the "maybe you typed the
 /// path wrong" affordance.
@@ -105,6 +298,7 @@ fn read_symbol_wrong_path_without_parent_returns_all_matches() {
     let db = make_db_with_two_news();
     let out = read_symbol(
         &db,
+        Path::new(TEST_PROJECT_ROOT),
         &ReadSymbolInput {
             path: "src/does_not_exist.rs",
             symbol: "new",
