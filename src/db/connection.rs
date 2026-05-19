@@ -7,6 +7,16 @@ use crate::db::parser_version;
 use crate::error::Result;
 
 /// Database wrapper for the rlm index.
+///
+/// Storage facade for the SQLite index — single `conn` field with
+/// ~30 query methods distributed across `db::queries::{chunks, files,
+/// refs, savings, search, stats}` plus the `batched` helper. LCOM4
+/// naturally rises because the methods cluster by query domain
+/// (chunks vs files vs refs vs …) rather than by the single shared
+/// field. The structurally correct fix is per-domain Repository
+/// types (ChunkRepo, FileRepo, …) — tracked as a future architecture
+/// slice, not blocking 0.6.0.
+// qual:allow(srp) reason: "Storage facade by design — ~30 methods distributed across db::queries::{chunks,files,refs,savings,search,stats}. Single conn field; LCOM4 rises because methods cluster by query domain, not shared field. Repo split (ChunkRepo/FileRepo/…) is a future arch slice, not 0.6.0 scope."
 pub struct Database {
     conn: Connection,
 }

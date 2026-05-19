@@ -390,6 +390,26 @@ allowed_in = [
 ]
 reason = "rusqlite is an adapter detail; it must not leak into application or interface code."
 
+# Dynamic `IN (?,?,…)` queries hit `SQLITE_MAX_VARIABLE_NUMBER`
+# (historically 999, ≥3.32: 32766) when the placeholder count
+# outgrows the host-parameter ceiling. `rusqlite::params_from_iter`
+# is the unambiguous marker for that pattern — every call site
+# threads a runtime-sized list into a query. Funnel all such calls
+# through `Database::query_batched_in`, which loops in
+# `SQLITE_VAR_LIMIT`-sized batches and concatenates results, so the
+# failure mode never reaches users on large projects.
+[[architecture.pattern]]
+name = "no_unbatched_in_lists"
+forbid_function_call = ["params_from_iter"]
+allowed_in = [
+    # The chunking helper itself uses params_from_iter once per batch.
+    "src/db/batched.rs",
+    # Tests construct edge-case fixtures with raw rusqlite — including
+    # IN-lists to verify the helper's behaviour at boundaries.
+    "src/**/*_tests.rs",
+]
+reason = "Use Database::query_batched_in for IN-list queries — raw params_from_iter risks SQLITE_RANGE on large inputs."
+
 # tree-sitter primitives belong to the parser adapter. Application /
 # domain / interface code talks to the parser via `CodeParser` +
 # `ParseResult` abstractions.

@@ -47,19 +47,17 @@ impl Database {
     }
 
     /// Batched variant of [`get_file_by_path`] keyed by id. Returns the
-    /// file records for every id in `ids` in a single query so callers
-    /// like `collect_target_candidates` avoid the
-    /// `get_all_files`-and-discard pattern. Order is `(id)` so callers
-    /// can group with a sequential scan.
+    /// file records for every id in `ids`, in batches under the SQLite
+    /// host-parameter ceiling — see [`Database::query_batched_in`].
+    /// Result order is per-batch `(id)`; callers that need a stable
+    /// total order should sort after.
     pub fn get_files_by_ids(&self, ids: &[i64]) -> Result<Vec<FileRecord>> {
-        let sql = build_files_in_ids_query(ids.len());
-        let mut stmt = self.conn().prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), file_record_from_row)?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
-        }
-        Ok(out)
+        crate::db::batched::query_batched_in(
+            self,
+            ids,
+            build_files_in_ids_query,
+            file_record_from_row,
+        )
     }
 
     /// Get per-file metadata needed by staleness detection: id, path, hash,

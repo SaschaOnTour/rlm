@@ -56,15 +56,19 @@ impl Database {
         Self::map_chunks(&mut stmt, params![ident])
     }
 
-    /// Batched variant of [`get_chunks_by_ident`]. Returns chunks matching
-    /// any of the given identifiers in a single query so callers like
-    /// `collect_callees_with_parents` avoid the round-trip-per-ident
-    /// overhead. Order is `(ident, file_id, start_line)` so consumers can
-    /// group with a sequential scan.
+    /// Batched variant of [`get_chunks_by_ident`]. Returns chunks
+    /// matching any of the given identifiers, in batches under the
+    /// SQLite host-parameter ceiling — see
+    /// [`Database::query_batched_in`]. Per-batch order is
+    /// `(ident, file_id, start_line)`; callers that need a stable
+    /// total order should sort after.
     pub fn get_chunks_by_idents(&self, idents: &[&str]) -> Result<Vec<Chunk>> {
-        let sql = build_chunks_in_idents_query(idents.len());
-        let mut stmt = self.conn().prepare(&sql)?;
-        Self::map_chunks(&mut stmt, rusqlite::params_from_iter(idents.iter()))
+        crate::db::batched::query_batched_in(
+            self,
+            idents,
+            build_chunks_in_idents_query,
+            chunk_from_row,
+        )
     }
 
     /// Get a chunk by ID.
@@ -90,31 +94,39 @@ impl Database {
         stmt: &mut rusqlite::Statement,
         params: impl rusqlite::Params,
     ) -> Result<Vec<Chunk>> {
-        let rows = stmt.query_map(params, |row| {
-            Ok(Chunk {
-                id: row.get(0)?,
-                file_id: row.get(1)?,
-                start_line: row.get(2)?,
-                end_line: row.get(3)?,
-                start_byte: row.get(4)?,
-                end_byte: row.get(5)?,
-                kind: ChunkKind::parse(row.get::<_, String>(6)?.as_str()),
-                ident: row.get(7)?,
-                parent: row.get(8)?,
-                signature: row.get(9)?,
-                visibility: row.get(10)?,
-                ui_ctx: row.get(11)?,
-                doc_comment: row.get(12)?,
-                attributes: row.get(13)?,
-                content: row.get(14)?,
-            })
-        })?;
+        let rows = stmt.query_map(params, chunk_from_row)?;
         let mut chunks = Vec::new();
         for r in rows {
             chunks.push(r?);
         }
         Ok(chunks)
     }
+}
+
+/// Row → `Chunk` projection. Standalone so both the iterator-based
+/// `map_chunks` and the closure-based `query_batched_in` can share
+/// it without one needing to wrap the other. Uses named column
+/// access (`row.get("file_id")`) instead of positional indices so
+/// the mapper is robust against SELECT-column reordering — and the
+/// magic-number swarm 0..14 vanishes from the file.
+pub(crate) fn chunk_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Chunk> {
+    Ok(Chunk {
+        id: row.get("id")?,
+        file_id: row.get("file_id")?,
+        start_line: row.get("start_line")?,
+        end_line: row.get("end_line")?,
+        start_byte: row.get("start_byte")?,
+        end_byte: row.get("end_byte")?,
+        kind: ChunkKind::parse(row.get::<_, String>("kind")?.as_str()),
+        ident: row.get("ident")?,
+        parent: row.get("parent")?,
+        signature: row.get("signature")?,
+        visibility: row.get("visibility")?,
+        ui_ctx: row.get("ui_ctx")?,
+        doc_comment: row.get("doc_comment")?,
+        attributes: row.get("attributes")?,
+        content: row.get("content")?,
+    })
 }
 
 /// Build the SELECT-with-`IN(?,?,…)` SQL for a `get_chunks_by_idents`

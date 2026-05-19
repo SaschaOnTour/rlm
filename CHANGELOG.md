@@ -286,6 +286,24 @@ work that briefly carried that version number is folded here.
   writes at all". A new `tests/concurrent_reads_tests.rs` spawns five
   parallel `rlm read` processes against one project and asserts none
   surface `database is locked`.
+- **`get_chunks_by_idents` / `get_files_by_ids` no longer crash on
+  large inputs**: both built single `IN (?, ?, …)` queries with one
+  host parameter per item. SQLite's `SQLITE_MAX_VARIABLE_NUMBER`
+  ceiling (historically 999, ≥ 3.32: 32766) made these abort with
+  `SQLITE_RANGE` ("too many SQL variables") on projects where a
+  popular symbol like `Result` is referenced across tens of
+  thousands of files. The new `db::batched::query_batched_in` helper
+  funnels every dynamic IN-list through a chunking loop (default
+  batch size 999, parameterised for tests), and a new rustqual
+  pattern rule `no_unbatched_in_lists` forbids raw
+  `rusqlite::params_from_iter` outside that helper so the failure
+  mode can't return via a new caller. Row-mapping for chunks now
+  uses named column access (`row.get("file_id")`), incidentally
+  hardening against SELECT-column reorder.
+- **`src/cli/helpers.rs` module doc no longer claims project-root
+  upward-walk** that doesn't exist; `cwd_project_root()` is just
+  `std::env::current_dir()`. Doc clarifies the assumption and flags
+  the function as the extension point if discovery ever lands.
 
 After this release, `rustqual --fail-on-warnings` reports
 **0 findings, score 100.0%** under rustqual 1.2.5 (the maintainer

@@ -2,10 +2,18 @@
 //!
 //! Post-0.5.0 the CLI adapter only does three things that need shared
 //! plumbing: translating application errors into the CLI's
-//! `CmdResult` box, walking up to the project root, and resolving the
-//! `--code` / `--code-stdin` / `--code-file` family for write
-//! commands. Everything else — config/DB open, savings recording,
-//! query pipelines — moved into [`RlmSession`](crate::application::session::RlmSession).
+//! `CmdResult` box, handing the cwd to facades as the project root,
+//! and resolving the `--code` / `--code-stdin` / `--code-file` family
+//! for write commands. Everything else — config/DB open, savings
+//! recording, query pipelines — moved into
+//! [`RlmSession`](crate::application::session::RlmSession).
+//!
+//! Note: `cwd_project_root` does **not** walk up the directory tree
+//! to find a `.rlm/` or `.git/` anchor — it just returns
+//! `std::env::current_dir()`. Project-root discovery is a feature
+//! we don't have yet; the assumption is "run rlm from the project
+//! root". If that ever becomes a sharp edge in practice, this is
+//! the function to extend.
 
 use crate::cli::commands::CodeSource;
 
