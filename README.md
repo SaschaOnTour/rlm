@@ -158,7 +158,7 @@ cost. rlm packages the follow-up into the first response:
 | Edit a function, verify it compiles | 4 (Grep → Read → Edit → `cargo check`) | 1 (`rlm replace` — response includes `build: { passed, errors }`) | 9–24 s |
 | Look up a method's signature to call it | 2–4 (Grep → Read, repeat on wrong match) | 1 (`rlm read --metadata`) | 3–24 s |
 | Find callers of a symbol (unique name) | 1–5 (Grep → Read each match) | 1 (`rlm refs`) | 3–32 s |
-| Find callers of a common method (`.open()`, `.new()`, `.parse()`) | 5–15+ (each grep hit needs a Read to identify the receiver type before the list is useful) | 1 (`rlm refs Database::open` — AST-filtered to the specific symbol) | 15–120 s |
+| Find callers of a common method (`.open()`, `.new()`, `.parse()`) | 5–15+ (each grep hit needs a Read to identify the receiver type before the list is useful) | 1 (`rlm refs open --parent Database` — AST-filtered to the specific symbol) | 15–120 s |
 | See a symbol's body + callers + callees + type info | 4+ (Read + Grep + Read + type-lookup) | 1 (`rlm context --graph`) | 9–32 s |
 
 The ambiguity multiplier matters most on common method names. A
@@ -241,6 +241,38 @@ cargo build --release
 export PATH="$PWD/target/release:$PATH"
 ```
 
+**Or use the Nix flake (NixOS / nix-darwin / any system with Nix + flakes):**
+
+```bash
+# One-off run without installing
+nix run github:SaschaOnTour/rlm -- --help
+
+# Build into ./result/bin/rlm
+nix build github:SaschaOnTour/rlm
+
+# Drop into a dev shell with rustc, cargo, clippy, nextest, rust-analyzer
+nix develop github:SaschaOnTour/rlm
+```
+
+To add rlm to a NixOS configuration, wire the overlay in:
+
+```nix
+{
+  inputs.rlm.url = "github:SaschaOnTour/rlm";
+
+  outputs = { self, nixpkgs, rlm, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        ({ pkgs, ... }: {
+          nixpkgs.overlays = [ rlm.overlays.default ];
+          environment.systemPackages = [ pkgs.rlm ];
+        })
+      ];
+    };
+  };
+}
+```
+
 ### Index Your Project
 
 ```bash
@@ -250,6 +282,20 @@ rlm index .
 
 > **Note:** Indexing respects `.gitignore` — files and directories listed there are automatically skipped.
 > Hidden files (starting with `.`) and common build directories (`node_modules/`, `target/`, etc.) are also excluded.
+
+> **⚠️ rlm writes `.rlm/` into your project on first use.**
+> The very first read command (CLI *or* MCP — `rlm refs`, `rlm search`,
+> `rlm context`, …) auto-creates `.rlm/index.db` if it isn't there yet.
+> Your source files stay untouched, but rlm does add a new sibling
+> directory (the index database, ~5–30 MB depending on project size).
+>
+> **Want strict read-only behaviour?** Set
+> `[indexing] auto_create_index = false` in `.rlm/config.toml` (you
+> need to `rlm index .` once to create the config). When the setting
+> is `false`, any read on a project without an existing index returns
+> a structured error instead of writing anything. Especially relevant
+> for MCP server scenarios where an agent might land on workspaces
+> the user didn't intend to index.
 
 ### Explore
 

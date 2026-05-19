@@ -1,6 +1,6 @@
 //! Tests for `extractor.rs` (task #122).
 
-use super::{extract_symbols, ExtractOutcome};
+use super::{extract_symbols, ExtractInput, ExtractOutcome};
 use crate::db::Database;
 use crate::domain::chunk::{Chunk, ChunkKind};
 use crate::domain::file::FileRecord;
@@ -52,10 +52,12 @@ fn extract_moves_single_symbol_to_new_file() {
 
     let outcome: ExtractOutcome = extract_symbols(
         &db,
-        "src.rs",
-        &["hello".to_string()],
-        "extracted.rs",
-        None,
+        &ExtractInput {
+            path: "src.rs",
+            symbols: &["hello".to_string()],
+            to: "extracted.rs",
+            parent: None,
+        },
         dir.path(),
     )
     .expect("extract should succeed");
@@ -100,10 +102,12 @@ fn extract_moves_multiple_symbols_in_one_call() {
 
     let outcome = extract_symbols(
         &db,
-        "src.rs",
-        &["alpha".to_string(), "beta".to_string()],
-        "moved.rs",
-        None,
+        &ExtractInput {
+            path: "src.rs",
+            symbols: &["alpha".to_string(), "beta".to_string()],
+            to: "moved.rs",
+            parent: None,
+        },
         dir.path(),
     )
     .unwrap();
@@ -128,10 +132,12 @@ fn extract_includes_doc_comment_by_default() {
 
     extract_symbols(
         &db,
-        "src.rs",
-        &["stub".to_string()],
-        "docs_moved.rs",
-        None,
+        &ExtractInput {
+            path: "src.rs",
+            symbols: &["stub".to_string()],
+            to: "docs_moved.rs",
+            parent: None,
+        },
         dir.path(),
     )
     .unwrap();
@@ -161,10 +167,12 @@ fn extract_appends_to_existing_dest() {
 
     let outcome = extract_symbols(
         &db,
-        "src.rs",
-        &["newcomer".to_string()],
-        "shared.rs",
-        None,
+        &ExtractInput {
+            path: "src.rs",
+            symbols: &["newcomer".to_string()],
+            to: "shared.rs",
+            parent: None,
+        },
         dir.path(),
     )
     .unwrap();
@@ -193,10 +201,12 @@ fn extract_rejects_unknown_symbol() {
 
     let result = extract_symbols(
         &db,
-        "src.rs",
-        &["ghost".to_string()],
-        "never_created.rs",
-        None,
+        &ExtractInput {
+            path: "src.rs",
+            symbols: &["ghost".to_string()],
+            to: "never_created.rs",
+            parent: None,
+        },
         dir.path(),
     );
     assert!(result.is_err(), "unknown symbol must error");
@@ -210,7 +220,16 @@ fn extract_rejects_unknown_symbol() {
 fn extract_rejects_empty_symbols_list() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::open_in_memory().unwrap();
-    let result = extract_symbols(&db, "src.rs", &[], "dest.rs", None, dir.path());
+    let result = extract_symbols(
+        &db,
+        &ExtractInput {
+            path: "src.rs",
+            symbols: &[],
+            to: "dest.rs",
+            parent: None,
+        },
+        dir.path(),
+    );
     assert!(result.is_err(), "empty symbol list must error");
 }
 
@@ -232,10 +251,12 @@ fn extract_reports_to_lines_for_single_symbol_on_fresh_dest() {
 
     let outcome = extract_symbols(
         &db,
-        "src.rs",
-        &["hello".to_string()],
-        "extracted.rs",
-        None,
+        &ExtractInput {
+            path: "src.rs",
+            symbols: &["hello".to_string()],
+            to: "extracted.rs",
+            parent: None,
+        },
         dir.path(),
     )
     .expect("extract succeeds");
@@ -270,10 +291,12 @@ fn extract_reports_to_lines_for_append_to_existing_dest() {
 
     let outcome = extract_symbols(
         &db,
-        "src.rs",
-        &["newcomer".to_string()],
-        "shared.rs",
-        None,
+        &ExtractInput {
+            path: "src.rs",
+            symbols: &["newcomer".to_string()],
+            to: "shared.rs",
+            parent: None,
+        },
         dir.path(),
     )
     .unwrap();
@@ -318,10 +341,12 @@ fn extract_reports_to_lines_for_multiple_symbols_fresh_dest() {
 
     let outcome = extract_symbols(
         &db,
-        "src.rs",
-        &["alpha".to_string(), "beta".to_string()],
-        "moved.rs",
-        None,
+        &ExtractInput {
+            path: "src.rs",
+            symbols: &["alpha".to_string(), "beta".to_string()],
+            to: "moved.rs",
+            parent: None,
+        },
         dir.path(),
     )
     .unwrap();

@@ -39,9 +39,8 @@ use crate::application::content::{
     partition::{self, PartitionQuery},
     summarize::SummarizeQuery,
 };
-use crate::application::edit::replacer::ReplaceDiff;
 use crate::application::edit::write_dispatch::{
-    self, DeleteInput, ExtractInput, InsertInput, ReplaceInput,
+    self, DeleteInput, ExtractInput, InsertInput, ReplaceInput, ReplaceMode, ReplaceOutput,
 };
 use crate::application::index;
 use crate::application::middleware::{
@@ -49,14 +48,13 @@ use crate::application::middleware::{
     OperationResponse,
 };
 use crate::application::query::{
-    files::{self, FilesFilter, FilesResult},
     peek, read as read_query, search as search_query, stats as stats_query, supported, tree,
     verify, DetailLevel,
 };
-use crate::application::symbol::{ContextQuery, ContextWithGraphQuery, RefsQuery, ScopeQuery};
+use crate::application::symbol::{ContextQuery, ContextWithGraphQuery, ScopeQuery};
 use crate::config::Config;
 use crate::db::Database;
-use crate::error::{Result, RlmError};
+use crate::error::Result;
 
 use serde::Serialize;
 
@@ -71,39 +69,16 @@ pub struct RlmSession {
 }
 
 impl RlmSession {
-    /// Open a session rooted at the current working directory. Used by
-    /// the CLI. Runs `ensure_index` + staleness-refresh so the caller
-    /// gets a session whose index is current.
-    pub fn open_cwd() -> Result<Self> {
-        let config = Config::from_cwd()?;
-        Self::open_with_config(config)
-    }
-
-    /// Open a session rooted at `project_root`. Used by the MCP server
-    /// where the project root is fixed at startup. Runs `ensure_index`
-    /// so the index exists (creates on demand) and refreshes
-    /// staleness before returning.
+    /// Open a session rooted at `project_root`. The single entry point
+    /// for both adapters: MCP passes the project root captured at
+    /// server startup; CLI passes the cwd-discovered root via
+    /// `cli::helpers::cwd_project_root`. Runs `ensure_index`
+    /// (auto-creates if missing) and the staleness-refresh seam in
+    /// `from_db`, so the caller always sees a current index.
     pub fn open(project_root: &Path) -> Result<Self> {
-        Self::open_with_config(Config::new(project_root))
-    }
-
-    fn open_with_config(config: Config) -> Result<Self> {
+        let config = Config::new(project_root);
         let db = index::ensure_index(&config)?;
         Self::from_db(db, config)
-    }
-
-    /// Open a session only if an index already exists, returning
-    /// `None` when the project has not been indexed yet. Used by the
-    /// MCP server for every tool call — MCP must not auto-index, but
-    /// it honours the same self-healing staleness contract as
-    /// [`Self::open`] so every tool sees a current index.
-    pub fn try_open_existing(project_root: &Path) -> Result<Option<Self>> {
-        let config = Config::new(project_root);
-        match Database::open_required(&config.db_path) {
-            Ok(db) => Ok(Some(Self::from_db(db, config)?)),
-            Err(RlmError::IndexNotFound) => Ok(None),
-            Err(e) => Err(e),
-        }
     }
 
     /// Wrap a freshly-opened DB + config in a session and refresh
@@ -116,17 +91,6 @@ impl RlmSession {
         // `RLM_SKIP_REFRESH=1` to skip.
         index::staleness::ensure_index_fresh(&db, &config)?;
         Ok(Self { db, config })
-    }
-
-    /// Read-only accessor for the project [`Config`]. Composition-root
-    /// type — exposing it does not re-introduce an infrastructure leak.
-    pub fn config(&self) -> &Config {
-        &self.config
-    }
-
-    /// Shorthand for `session.config().project_root.as_path()`.
-    pub fn project_root(&self) -> &Path {
-        &self.config.project_root
     }
 }
 
@@ -175,25 +139,26 @@ impl RlmSession {
         Ok(record_operation(&self.db, &meta, &result))
     }
 
-    /// Read a symbol — returns the pre-serialised body plus token
-    /// count (symmetric to [`OperationResponse`]). Adapters emit
-    /// `body` through their own formatter.
-    pub fn read_symbol(
-        &self,
-        input: &read_query::ReadSymbolInput<'_>,
-    ) -> Result<read_query::ReadSymbolOutput> {
-        read_query::read_symbol(&self.db, input)
-    }
-
-    /// Read a Markdown section by heading.
-    pub fn read_section(&self, path: &str, heading: &str) -> Result<read_query::ReadSectionResult> {
-        read_query::read_section(&self.db, path, heading)
+    /// Unified `read` entry point: dispatches on
+    /// [`read_query::ReadRequest`] to `read_symbol` or `read_section`.
+    /// Both branches return a [`read_query::ReadOutput`] with the
+    /// pre-serialised body and its token count; not-found cases
+    /// bubble up as typed [`RlmError`](crate::error::RlmError)
+    /// variants (`SymbolNotFound`, `SectionNotFound`,
+    /// `FileNotFound`).
+    pub fn read(&self, request: &read_query::ReadRequest<'_>) -> Result<read_query::ReadOutput> {
+        match request {
+            read_query::ReadRequest::Symbol(input) => read_query::read_symbol(&self.db, input),
+            read_query::ReadRequest::Section { path, heading } => {
+                read_query::read_section(&self.db, path, heading)
+            }
+        }
     }
 
     /// Project-structure overview at one of three detail levels.
     /// Adapters parse the user input into `DetailLevel` at the edge
-    /// (clap `ValueEnum` / MCP `from_optional`), so the session
-    /// itself never sees invalid tokens.
+    /// (clap `ValueEnum` for CLI, `parse_detail_level` for MCP), so
+    /// the session itself never sees invalid tokens.
     pub fn overview(
         &self,
         detail: DetailLevel,
@@ -223,8 +188,30 @@ impl RlmSession {
     }
 
     /// Find all usages of a symbol (impact analysis).
-    pub fn refs(&self, symbol: &str) -> Result<OperationResponse> {
-        record_symbol_query::<RefsQuery>(&self.db, symbol)
+    ///
+    /// `parent` disambiguates polysemous idents — `rlm refs new` is
+    /// noise across an entire codebase, `rlm refs new --parent
+    /// OperationResponse` returns just the calls that are
+    /// path-qualified to that type. Unfiltered (`parent = None`),
+    /// the response always carries the full `target_candidates`
+    /// list so the caller can see the polysemy at a glance.
+    pub fn refs(&self, symbol: &str, parent: Option<&str>) -> Result<OperationResponse> {
+        let mut output = crate::application::symbol::impact::analyze_impact(&self.db, symbol)?;
+        if let Some(p) = parent {
+            crate::application::symbol::impact::filter_impacted_by_parent(
+                &mut output,
+                p,
+                &self.config.project_root,
+            )?;
+        }
+        let meta = OperationMeta {
+            command: "refs",
+            files_touched: output.file_count(),
+            alternative: AlternativeCost::SymbolFiles {
+                symbol: symbol.to_string(),
+            },
+        };
+        Ok(record_operation(&self.db, &meta, &output))
     }
 
     /// Symbol context: body + callers + callees, optionally full
@@ -284,11 +271,6 @@ impl RlmSession {
         }
     }
 
-    /// List indexed + skipped files. Filter lives on [`FilesFilter`].
-    pub fn files(&self, filter: FilesFilter) -> Result<FilesResult> {
-        files::list_files(&self.config.project_root, filter)
-    }
-
     /// Verify index integrity, optionally auto-fixing recoverable
     /// issues. The untagged return payload reflects whichever path
     /// was taken.
@@ -321,14 +303,13 @@ impl RlmSession {
 // ─── Write-side dispatchers ──────────────────────────────────────────
 
 impl RlmSession {
-    /// Preview a replace without touching disk.
-    pub fn replace_preview(&self, input: &ReplaceInput<'_>) -> Result<ReplaceDiff> {
-        write_dispatch::dispatch_replace_preview(&self.db, input)
-    }
-
-    /// Apply a replace + reindex + record savings.
-    pub fn replace_apply(&self, input: &ReplaceInput<'_>) -> Result<String> {
-        write_dispatch::dispatch_replace_apply(&self.db, &self.config, input)
+    /// Unified `replace` entry point: branches on [`ReplaceMode`] so
+    /// adapters reach exactly one application function. `Preview`
+    /// returns the typed [`ReplaceOutput::Preview`] for adapter-side
+    /// serialisation; `Apply` returns the pre-serialised envelope
+    /// in [`ReplaceOutput::Applied`].
+    pub fn replace(&self, input: &ReplaceInput<'_>, mode: ReplaceMode) -> Result<ReplaceOutput> {
+        write_dispatch::dispatch_replace(&self.db, &self.config, input, mode)
     }
 
     /// Delete a symbol (+ sidecar) + reindex + record savings.
@@ -338,19 +319,12 @@ impl RlmSession {
 
     /// Insert code + reindex + record savings.
     pub fn insert(&self, input: &InsertInput<'_>) -> Result<String> {
-        write_dispatch::dispatch_insert(Some(&self.db), &self.config.project_root, input)
+        write_dispatch::dispatch_insert(&self.db, &self.config.project_root, input)
     }
 
     /// Extract symbols to another file + reindex both + record savings.
     pub fn extract(&self, input: &ExtractInput<'_>) -> Result<String> {
         write_dispatch::dispatch_extract(&self.db, &self.config, input)
-    }
-
-    /// Insert without a live session. Used by the MCP `insert` tool
-    /// when no index exists yet — the insert still succeeds, the
-    /// response advertises `reindexed: false` with a helpful hint.
-    pub fn insert_without_index(project_root: &Path, input: &InsertInput<'_>) -> Result<String> {
-        write_dispatch::dispatch_insert(None, project_root, input)
     }
 }
 

@@ -11,7 +11,6 @@ use rmcp::model::{CallToolResult, Content};
 use rmcp::{ErrorData as McpError, ServiceExt};
 use serde::Serialize;
 
-use crate::application::session::RlmSession;
 use crate::output::Formatter;
 
 use super::server::RlmServer;
@@ -19,67 +18,60 @@ use super::server::RlmServer;
 /// MCP output byte limit (~25K tokens at 2 bytes/token for JSON).
 const MAX_MCP_OUTPUT_BYTES: usize = 50_000;
 
-// -- Session factories -------------------------------------------------------
+// -- Output helpers ----------------------------------------------------------
 
 impl RlmServer {
-    /// Open a session for the current project. Required for every
-    /// read-side and write-side tool: the session refreshes staleness
-    /// automatically so every call sees a current index. Unlike the
-    /// CLI, MCP does NOT auto-index — if no index exists, the tool
-    /// returns an `invalid_request` error so the client can call the
-    /// `index` tool first.
-    pub(crate) fn ensure_session(&self) -> Result<RlmSession, McpError> {
-        match RlmSession::try_open_existing(self.project_root()) {
-            Ok(Some(session)) => Ok(session),
-            Ok(None) => Err(McpError::invalid_request(
-                "Index not found. Call the 'index' tool first.",
-                None,
-            )),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
-    }
-
-    /// Open a session only if the index already exists. Used by the
-    /// `insert` tool — insert can still write to disk without an
-    /// index; the response just advertises `reindexed: false`.
-    pub(crate) fn try_open_session(&self) -> Option<RlmSession> {
-        RlmSession::try_open_existing(self.project_root())
-            .ok()
-            .flatten()
-    }
-
     pub(crate) fn to_json<T: Serialize>(val: &T) -> String {
         crate::output::to_json(val)
     }
 
     pub(crate) fn success_text(formatter: Formatter, text: String) -> CallToolResult {
-        // Guard first (on raw JSON), then reformat. This keeps guard_output
-        // format-agnostic and lets the caller-configured format apply uniformly
-        // to both the payload and any truncation notice.
-        let guarded = guard_output(text);
-        let cow = formatter.reformat_str(&guarded);
-        let formatted = if matches!(cow, std::borrow::Cow::Borrowed(_)) {
-            guarded
-        } else {
-            cow.into_owned()
-        };
-        CallToolResult::success(vec![Content::text(formatted)])
+        CallToolResult::success(vec![Content::text(finalize(formatter, text))])
     }
 
     pub(crate) fn error_text(formatter: Formatter, msg: String) -> CallToolResult {
-        // Build raw JSON first, then guard it, then reformat. This matches
-        // success_text: guard_output stays format-agnostic, while the
-        // caller-configured formatter applies uniformly to the payload and
-        // any truncation notice.
         let json = crate::output::to_json(&serde_json::json!({"error": msg}));
-        let guarded = guard_output(json);
-        let cow = formatter.reformat_str(&guarded);
-        let formatted = if matches!(cow, std::borrow::Cow::Borrowed(_)) {
-            guarded
-        } else {
-            cow.into_owned()
-        };
-        CallToolResult::error(vec![Content::text(formatted)])
+        CallToolResult::error(vec![Content::text(finalize(formatter, json))])
+    }
+
+    /// Map a `Result<String, E>` into the success/error `CallToolResult`
+    /// shape every MCP handler emits. Callers that get a typed body
+    /// (`OperationResponse`, `ReadOutput`, …) pre-extract the `.body`
+    /// field with `.map(|r| r.body)` before handing off.
+    pub(crate) fn respond_string<E: std::fmt::Display>(
+        formatter: Formatter,
+        result: Result<String, E>,
+    ) -> Result<CallToolResult, McpError> {
+        match result {
+            Ok(s) => Ok(Self::success_text(formatter, s)),
+            Err(e) => Ok(Self::error_text(formatter, e.to_string())),
+        }
+    }
+
+    /// Like `respond_string`, but serialises the success payload first.
+    /// Use for facades that return typed structs instead of pre-built
+    /// JSON envelopes.
+    pub(crate) fn respond_json<T: Serialize, E: std::fmt::Display>(
+        formatter: Formatter,
+        result: Result<T, E>,
+    ) -> Result<CallToolResult, McpError> {
+        match result {
+            Ok(val) => Ok(Self::success_text(formatter, Self::to_json(&val))),
+            Err(e) => Ok(Self::error_text(formatter, e.to_string())),
+        }
+    }
+}
+
+/// Guard the raw JSON, then apply the caller-configured formatter. Run in
+/// this order so `guard_output` stays format-agnostic and any truncation
+/// notice is reformatted alongside the payload.
+fn finalize(formatter: Formatter, raw: String) -> String {
+    let guarded = guard_output(raw);
+    let cow = formatter.reformat_str(&guarded);
+    if matches!(cow, std::borrow::Cow::Borrowed(_)) {
+        guarded
+    } else {
+        cow.into_owned()
     }
 }
 
@@ -104,7 +96,6 @@ pub(crate) fn guard_output(text: String) -> String {
 // -- Server startup ----------------------------------------------------------
 
 /// Start the MCP server on stdio transport.
-// qual:api
 pub async fn start_mcp_server() -> crate::error::Result<()> {
     // Initialize tracing to stderr (stdout is the MCP transport)
     tracing_subscriber::fmt()

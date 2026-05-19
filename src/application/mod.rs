@@ -30,6 +30,7 @@
 pub mod content;
 pub mod dto;
 pub mod edit;
+pub mod facades;
 pub mod file_query;
 pub mod index;
 pub mod middleware;

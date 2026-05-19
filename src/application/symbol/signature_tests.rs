@@ -67,8 +67,82 @@ fn get_signature_basic() {
 
     let result = get_signature(&db, "foo").unwrap();
     assert_eq!(result.symbol, "foo");
-    assert_eq!(result.signatures, vec!["fn foo(x: i32) -> String"]);
+    assert_eq!(result.signatures.len(), 1);
+    assert_eq!(result.signatures[0].signature, "fn foo(x: i32) -> String");
+    assert!(result.signatures[0].parent.is_none());
     assert_eq!(result.ref_count, 1);
+}
+
+// ─── Slice 0.8: parent in signatures ──────────────────────────────────
+
+fn insert_method_with_sig(db: &Database, file_id: i64, ident: &str, parent: &str, sig: &str) {
+    let chunk = Chunk {
+        kind: ChunkKind::Method,
+        ident: ident.into(),
+        parent: Some(parent.into()),
+        signature: Some(sig.into()),
+        ..Chunk::stub(file_id)
+    };
+    db.insert_chunk(&chunk).unwrap();
+}
+
+#[test]
+fn get_signature_includes_parent_for_method() {
+    let db = test_db();
+    let file = FileRecord::new("src/x.rs".into(), "h".into(), "rust".into(), 1);
+    let file_id = db.upsert_file(&file).unwrap();
+    insert_method_with_sig(&db, file_id, "make", "Foo", "fn make() -> Self");
+
+    let result = get_signature(&db, "make").unwrap();
+
+    assert_eq!(result.signatures.len(), 1);
+    assert_eq!(result.signatures[0].parent.as_deref(), Some("Foo"));
+    assert_eq!(result.signatures[0].signature, "fn make() -> Self");
+}
+
+#[test]
+fn get_signature_lists_each_polysemic_definition_with_its_parent() {
+    let db = test_db();
+    let file = FileRecord::new("src/x.rs".into(), "h".into(), "rust".into(), 1);
+    let file_id = db.upsert_file(&file).unwrap();
+    insert_method_with_sig(&db, file_id, "new", "Foo", "fn new() -> Self");
+    insert_method_with_sig(&db, file_id, "new", "Bar", "fn new(seed: u32) -> Self");
+
+    let result = get_signature(&db, "new").unwrap();
+
+    assert_eq!(result.signatures.len(), 2);
+    let mut parents: Vec<&str> = result
+        .signatures
+        .iter()
+        .filter_map(|s| s.parent.as_deref())
+        .collect();
+    parents.sort_unstable();
+    assert_eq!(parents, vec!["Bar", "Foo"]);
+}
+
+#[test]
+fn get_signature_omits_parent_field_for_free_function() {
+    let db = test_db();
+    let file = FileRecord::new("src/x.rs".into(), "h".into(), "rust".into(), 1);
+    let file_id = db.upsert_file(&file).unwrap();
+    let chunk = Chunk {
+        kind: ChunkKind::Function,
+        ident: "helper".into(),
+        parent: None,
+        signature: Some("fn helper()".into()),
+        ..Chunk::stub(file_id)
+    };
+    db.insert_chunk(&chunk).unwrap();
+
+    let result = get_signature(&db, "helper").unwrap();
+
+    assert_eq!(result.signatures.len(), 1);
+    assert!(result.signatures[0].parent.is_none());
+    let json = serde_json::to_string(&result).unwrap();
+    assert!(
+        !json.contains("\"parent\""),
+        "free-fn signatures must not serialise the parent key, got {json}",
+    );
 }
 
 #[test]

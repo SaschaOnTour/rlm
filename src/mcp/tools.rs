@@ -83,6 +83,13 @@ pub struct RefsParams {
     /// Symbol name to find references for.
     #[schemars(description = "Symbol name to find all usages and impact analysis for")]
     pub symbol: String,
+    /// Optional parent type to disambiguate polysemous idents (e.g.
+    /// `OperationResponse` to filter `new` to that type).
+    #[serde(default)]
+    #[schemars(
+        description = "Optional parent type — disambiguates polysemous idents like `new` or `as_str` by filtering to refs path-qualified to this type"
+    )]
+    pub parent: Option<String>,
 }
 
 // ── Replace ─────────────────────────────────────────────────────

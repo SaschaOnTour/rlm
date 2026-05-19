@@ -56,6 +56,17 @@ impl Database {
         Self::map_chunks(&mut stmt, params![ident])
     }
 
+    /// Batched variant of [`get_chunks_by_ident`]. Returns chunks matching
+    /// any of the given identifiers in a single query so callers like
+    /// `collect_callees_with_parents` avoid the round-trip-per-ident
+    /// overhead. Order is `(ident, file_id, start_line)` so consumers can
+    /// group with a sequential scan.
+    pub fn get_chunks_by_idents(&self, idents: &[&str]) -> Result<Vec<Chunk>> {
+        let sql = build_chunks_in_idents_query(idents.len());
+        let mut stmt = self.conn().prepare(&sql)?;
+        Self::map_chunks(&mut stmt, rusqlite::params_from_iter(idents.iter()))
+    }
+
     /// Get a chunk by ID.
     pub fn get_chunk_by_id(&self, id: i64) -> Result<Option<Chunk>> {
         let mut stmt = self.conn().prepare(
@@ -104,4 +115,22 @@ impl Database {
         }
         Ok(chunks)
     }
+}
+
+/// Build the SELECT-with-`IN(?,?,…)` SQL for a `get_chunks_by_idents`
+/// call. When `n == 0` we emit a never-matching predicate because
+/// SQLite rejects the literal `IN ()` shape; the caller then gets an
+/// empty result without a separate empty-input branch in
+/// `Database::get_chunks_by_idents`.
+fn build_chunks_in_idents_query(n: usize) -> String {
+    if n == 0 {
+        return "SELECT id, file_id, start_line, end_line, start_byte, end_byte, kind, ident, parent, signature, visibility, ui_ctx, doc_comment, attributes, content
+             FROM chunks WHERE 0 = 1".to_string();
+    }
+    let placeholders = std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",");
+    format!(
+        "SELECT id, file_id, start_line, end_line, start_byte, end_byte, kind, ident, parent, signature, visibility, ui_ctx, doc_comment, attributes, content
+         FROM chunks WHERE ident IN ({placeholders})
+         ORDER BY ident, file_id, start_line"
+    )
 }

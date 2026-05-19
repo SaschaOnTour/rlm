@@ -5,7 +5,7 @@
 //! across the whole codebase. Wired back in via
 //! `#[cfg(test)] #[path = "tree_tests.rs"] mod tests;`.
 
-use super::{build_tree, format_tree, Database};
+use super::{build_tree, Database};
 use crate::domain::chunk::{Chunk, ChunkKind};
 use crate::domain::file::FileRecord;
 
@@ -47,10 +47,6 @@ fn build_tree_from_db() {
 
     let tree = build_tree(&db, None).unwrap();
     assert!(!tree.results.is_empty());
-    let formatted = format_tree(&tree.results, 0);
-    assert!(formatted.contains("src/"));
-    assert!(formatted.contains("main.rs"));
-    assert!(formatted.contains("fn:main"));
 
     // Verify structured JSON serialization
     let json = serde_json::to_string(&tree).unwrap();
@@ -63,10 +59,4 @@ fn build_tree_from_db() {
         "should have key 'kind' for symbol kind"
     );
     assert!(json.contains("\"line\":"), "should have key 'line'");
-}
-
-#[test]
-fn format_tree_empty() {
-    let formatted = format_tree(&[], 0);
-    assert!(formatted.is_empty());
 }

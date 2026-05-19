@@ -5,7 +5,7 @@
 //! added here as specific edge cases surface (parent disambiguation,
 //! section-not-found hints, …).
 
-use super::{read_symbol, ReadSymbolInput};
+use super::{read_symbol, ReadInputs, ReadRequest, ReadSymbolInput};
 use crate::db::Database;
 use crate::domain::chunk::{Chunk, ChunkKind};
 use crate::domain::file::FileRecord;
@@ -119,4 +119,65 @@ fn read_symbol_wrong_path_without_parent_returns_all_matches() {
         "both matches should be returned when no parent is given: {}",
         out.body
     );
+}
+
+#[test]
+fn from_optional_inputs_with_only_symbol_builds_symbol_variant() {
+    let inputs = ReadInputs {
+        path: "p.rs",
+        symbol: Some("sym"),
+        section: None,
+        parent: None,
+        metadata: false,
+    };
+    let req = ReadRequest::from_optional_inputs(&inputs).unwrap();
+    assert!(matches!(req, ReadRequest::Symbol(_)));
+}
+
+#[test]
+fn from_optional_inputs_with_only_section_builds_section_variant() {
+    let inputs = ReadInputs {
+        path: "p.md",
+        symbol: None,
+        section: Some("Heading"),
+        parent: None,
+        metadata: false,
+    };
+    let req = ReadRequest::from_optional_inputs(&inputs).unwrap();
+    assert!(matches!(req, ReadRequest::Section { .. }));
+}
+
+#[test]
+fn from_optional_inputs_with_both_errors() {
+    let inputs = ReadInputs {
+        path: "p.rs",
+        symbol: Some("sym"),
+        section: Some("Head"),
+        parent: None,
+        metadata: false,
+    };
+    let err = ReadRequest::from_optional_inputs(&inputs)
+        .err()
+        .expect("both symbol+section should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("exactly one of 'symbol' or 'section'"),
+        "got: {msg}"
+    );
+}
+
+#[test]
+fn from_optional_inputs_with_neither_errors() {
+    let inputs = ReadInputs {
+        path: "p.rs",
+        symbol: None,
+        section: None,
+        parent: None,
+        metadata: false,
+    };
+    let err = ReadRequest::from_optional_inputs(&inputs)
+        .err()
+        .expect("neither symbol nor section should be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("requires 'symbol' or 'section'"), "got: {msg}");
 }

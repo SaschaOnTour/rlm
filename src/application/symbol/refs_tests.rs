@@ -18,17 +18,22 @@ fn refs_query_command_is_stable() {
 fn refs_query_delegates_file_count_to_impact_result() {
     let result = ImpactResult {
         symbol: "foo".into(),
+        target_candidates: Vec::new(),
         impacted: vec![
             ImpactEntry {
+                in_parent: None,
                 file: "src/a.rs".into(),
                 in_symbol: "caller".into(),
                 line: 10,
+                col: 0,
                 ref_kind: "call".into(),
             },
             ImpactEntry {
+                in_parent: None,
                 file: "src/a.rs".into(),
                 in_symbol: "other".into(),
                 line: 20,
+                col: 0,
                 ref_kind: "call".into(),
             },
         ],

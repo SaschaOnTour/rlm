@@ -8,13 +8,29 @@ use crate::db::Database;
 use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
 
+/// One concrete signature for the queried symbol, tagged with its
+/// parent type. Polysemic idents (e.g. `new` defined on every type
+/// in the codebase) need this to disambiguate which signature
+/// belongs to which `impl Type` block.
+#[derive(Debug, Clone, Serialize)]
+pub struct SignatureEntry {
+    /// `Some(Type)` for `impl Type { fn ident }`, `None` for free
+    /// functions / module-level items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// The signature text, exactly as the parser captured it.
+    pub signature: String,
+}
+
 /// Result of getting a symbol's signature.
 #[derive(Debug, Clone, Serialize)]
 pub struct SignatureResult {
     /// The symbol name.
     pub symbol: String,
-    /// The signatures (may have multiple if symbol is defined in multiple places).
-    pub signatures: Vec<String>,
+    /// The signatures (may have multiple if symbol is defined in
+    /// multiple places). Each entry tags its parent so polysemy is
+    /// machine-readable.
+    pub signatures: Vec<SignatureEntry>,
     /// The count of all call sites.
     pub ref_count: usize,
     /// Token estimate for this response.
@@ -26,7 +42,15 @@ pub fn get_signature(db: &Database, symbol: &str) -> Result<SignatureResult> {
     let chunks = db.get_chunks_by_ident(symbol)?;
     let refs = db.get_refs_to(symbol)?;
 
-    let sigs: Vec<String> = chunks.iter().filter_map(|c| c.signature.clone()).collect();
+    let sigs: Vec<SignatureEntry> = chunks
+        .iter()
+        .filter_map(|c| {
+            c.signature.as_ref().map(|s| SignatureEntry {
+                parent: c.parent.clone(),
+                signature: s.clone(),
+            })
+        })
+        .collect();
 
     let mut result = SignatureResult {
         symbol: symbol.to_string(),

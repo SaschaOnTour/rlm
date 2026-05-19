@@ -16,18 +16,16 @@ fn insert_with_relative_path_resolves_to_project_root() {
     let file_path = dir.path().join("test.rs");
     std::fs::write(&file_path, "fn main() {}\n").unwrap();
 
-    // Index once so the session can open an existing DB.
+    // Index once so the facade can open the existing DB.
     RlmSession::index_project(dir.path(), None).unwrap();
-    let session = RlmSession::open(dir.path()).unwrap();
 
     let result = handle_insert(
-        Some(&session),
-        &crate::mcp::tool_handlers::InsertInput {
-            path: "test.rs",
-            position: &InsertPosition::Top,
-            code: "// header\n",
-        },
         dir.path(),
+        &crate::mcp::tools::InsertParams {
+            path: "test.rs".to_string(),
+            position: InsertPosition::Top,
+            code: "// header\n".to_string(),
+        },
         Formatter::default(),
     );
     assert!(
@@ -45,18 +43,16 @@ fn insert_with_relative_path_resolves_to_project_root() {
 #[test]
 fn insert_with_nonexistent_relative_path_returns_error() {
     let dir = tempfile::tempdir().unwrap();
-    // Build an empty index so try_open_existing yields a session.
+    // Build an empty index so the facade can open the session.
     RlmSession::index_project(dir.path(), None).unwrap();
-    let session = RlmSession::open(dir.path()).unwrap();
 
     let result = handle_insert(
-        Some(&session),
-        &crate::mcp::tool_handlers::InsertInput {
-            path: "nonexistent.rs",
-            position: &InsertPosition::Top,
-            code: "// hi\n",
-        },
         dir.path(),
+        &crate::mcp::tools::InsertParams {
+            path: "nonexistent.rs".to_string(),
+            position: InsertPosition::Top,
+            code: "// hi\n".to_string(),
+        },
         Formatter::default(),
     );
     let call_result = result.unwrap();

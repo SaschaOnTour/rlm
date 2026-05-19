@@ -42,6 +42,37 @@ fn upsert_file_updates_existing() {
 }
 
 #[test]
+fn get_files_by_ids_returns_all_matches() {
+    let db = test_db();
+    let f1 = sample_file();
+    let id1 = db.upsert_file(&f1).unwrap();
+    let f2 = FileRecord::new(
+        "src/lib.rs".into(),
+        "xyz789".into(),
+        "rust".into(),
+        UPDATED_FILE_SIZE,
+    );
+    let id2 = db.upsert_file(&f2).unwrap();
+    let files = db.get_files_by_ids(&[id1, id2]).unwrap();
+    assert_eq!(files.len(), 2);
+    let mut paths: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
+    paths.sort();
+    assert_eq!(paths, vec!["src/lib.rs", "src/main.rs"]);
+}
+
+#[test]
+fn get_files_by_ids_empty_input_returns_empty() {
+    let db = test_db();
+    assert!(db.get_files_by_ids(&[]).unwrap().is_empty());
+}
+
+#[test]
+fn get_files_by_ids_unknown_ids_returns_empty() {
+    let db = test_db();
+    assert!(db.get_files_by_ids(&[9_999]).unwrap().is_empty());
+}
+
+#[test]
 fn insert_ref_and_find() {
     let db = test_db();
     let f = sample_file();

@@ -45,7 +45,6 @@ pub enum Runner {
 /// * Go: `go.mod` → `GoTest`.
 /// * C#: any `*.csproj` or `*.sln` under root → `DotnetTest`.
 /// * PHP: `phpunit.xml` or `phpunit.xml.dist` → `Phpunit`.
-// qual:api
 #[must_use]
 pub fn detect_runner(lang: &str, project_root: &Path) -> Option<Runner> {
     match lang {
@@ -65,7 +64,6 @@ pub fn detect_runner(lang: &str, project_root: &Path) -> Option<Runner> {
 ///
 /// Returns `None` for an empty match list — callers should surface
 /// `no_tests_warning` instead of an empty-filter command.
-// qual:api
 #[must_use]
 pub fn generate_test_command(runner: Runner, matches: &[TestMatch]) -> Option<String> {
     if matches.is_empty() {

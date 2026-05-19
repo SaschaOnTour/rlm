@@ -66,10 +66,51 @@ fn get_scope_basic() {
     let result = get_scope(&db, "src/lib.rs", QUERY_LINE).unwrap();
     assert_eq!(result.file, "src/lib.rs");
     assert_eq!(result.line, QUERY_LINE);
-    assert_eq!(result.containing, vec!["bar"]);
+    assert_eq!(result.containing.len(), 1);
+    assert_eq!(result.containing[0].ident, "bar");
+    assert!(result.containing[0].parent.is_none());
     // Both foo and bar are visible (defined before line 10)
-    assert!(result.visible.contains(&"fn:foo".to_string()));
-    assert!(result.visible.contains(&"fn:bar".to_string()));
+    let visible_idents: Vec<&str> = result.visible.iter().map(|s| s.ident.as_str()).collect();
+    assert!(visible_idents.contains(&"foo"));
+    assert!(visible_idents.contains(&"bar"));
+    let foo_entry = result
+        .visible
+        .iter()
+        .find(|s| s.ident == "foo")
+        .expect("foo must be in visible");
+    assert_eq!(foo_entry.kind, "fn");
+}
+
+#[test]
+fn get_scope_carries_parent_for_methods() {
+    let db = test_db();
+    let file = FileRecord::new("src/x.rs".into(), "h".into(), "rust".into(), 1);
+    let file_id = db.upsert_file(&file).unwrap();
+
+    let method = Chunk {
+        start_line: 5,
+        end_line: 15,
+        kind: ChunkKind::Method,
+        ident: "render".into(),
+        parent: Some("Widget".into()),
+        ..Chunk::stub(file_id)
+    };
+    db.insert_chunk(&method).unwrap();
+
+    let result = get_scope(&db, "src/x.rs", 10).unwrap();
+    assert_eq!(result.containing.len(), 1);
+    assert_eq!(result.containing[0].ident, "render");
+    assert_eq!(result.containing[0].parent.as_deref(), Some("Widget"));
+    let visible = &result.visible[0];
+    assert_eq!(visible.ident, "render");
+    assert_eq!(visible.parent.as_deref(), Some("Widget"));
+    assert_eq!(visible.kind, "method");
+
+    let json = serde_json::to_string(&result).unwrap();
+    assert!(
+        json.contains("\"parent\":\"Widget\""),
+        "method scope entries must serialise their parent, got {json}",
+    );
 }
 
 #[test]

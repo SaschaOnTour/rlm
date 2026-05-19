@@ -127,33 +127,6 @@ fn insert_into_tree(
     }
 }
 
-/// Format a tree as a string with indentation and symbol annotations.
-// qual:recursive
-#[must_use]
-pub fn format_tree(nodes: &[TreeNode], indent: usize) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    for node in nodes {
-        let prefix = "  ".repeat(indent);
-        if node.is_dir {
-            let _ = writeln!(out, "{prefix}{}/", node.name);
-            out.push_str(&format_tree(&node.children, indent + 1));
-        } else {
-            let _ = write!(out, "{prefix}{}", node.name);
-            if !node.symbols.is_empty() {
-                let sym_list: Vec<String> = node
-                    .symbols
-                    .iter()
-                    .map(|s| format!("{}:{}", s.kind, s.name))
-                    .collect();
-                let _ = write!(out, "  [{}]", sym_list.join(", "));
-            }
-            out.push('\n');
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 #[path = "tree_tests.rs"]
 mod tests;

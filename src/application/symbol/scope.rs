@@ -9,6 +9,21 @@ use crate::db::Database;
 use crate::domain::token_budget::{estimate_output_tokens, TokenEstimate};
 use crate::error::Result;
 
+/// One symbol referenced from a `ScopeResult` — `containing` and
+/// `visible` both use this shape so the parent is carried through
+/// alongside the ident, with the kind tagged for downstream display.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScopeSymbol {
+    /// `Some(Type)` when the chunk is a method on a concrete type,
+    /// `None` for free items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Symbol identifier.
+    pub ident: String,
+    /// Chunk kind (`fn`, `method`, `struct`, …).
+    pub kind: String,
+}
+
 /// Result of getting scope information.
 #[derive(Debug, Clone, Serialize)]
 pub struct ScopeResult {
@@ -17,9 +32,9 @@ pub struct ScopeResult {
     /// The line number.
     pub line: u32,
     /// Symbols that contain this line (scopes we're inside of).
-    pub containing: Vec<String>,
+    pub containing: Vec<ScopeSymbol>,
     /// Symbols visible at this location.
-    pub visible: Vec<String>,
+    pub visible: Vec<ScopeSymbol>,
     /// Token estimate for this response.
     pub tokens: TokenEstimate,
 }
@@ -34,18 +49,24 @@ pub fn get_scope(db: &Database, path: &str, line: u32) -> Result<ScopeResult> {
 
     let chunks = db.get_chunks_for_file(file.id)?;
 
+    let to_symbol = |c: &crate::domain::chunk::Chunk| ScopeSymbol {
+        parent: c.parent.clone(),
+        ident: c.ident.clone(),
+        kind: c.kind.as_str().to_string(),
+    };
+
     // Find chunks that contain this line
-    let containing: Vec<String> = chunks
+    let containing: Vec<ScopeSymbol> = chunks
         .iter()
         .filter(|c| line >= c.start_line && line <= c.end_line)
-        .map(|c| c.ident.clone())
+        .map(&to_symbol)
         .collect();
 
     // Find visible symbols: all items defined before this line
-    let visible: Vec<String> = chunks
+    let visible: Vec<ScopeSymbol> = chunks
         .iter()
         .filter(|c| c.start_line <= line)
-        .map(|c| format!("{}:{}", c.kind.as_str(), c.ident))
+        .map(&to_symbol)
         .collect();
 
     let mut result = ScopeResult {

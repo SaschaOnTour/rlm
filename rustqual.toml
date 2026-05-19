@@ -132,24 +132,26 @@ enabled = true
 enabled = true
 
 [architecture.layers]
-order = ["domain", "infrastructure", "application", "interface"]
+# Controllers/Helpers split: only command-handler files are in `cli`/`mcp`
+# (call_parity-checked). Adapter-internal infra sits in `cli_helpers`/`mcp_helpers`.
+order = [
+    "domain", "infrastructure", "application", "interface",
+    "cli_helpers", "mcp_helpers",
+    "cli", "mcp",
+]
 unmatched_behavior = "composition_root"
 
 [architecture.layers.domain]
+# `src/models/**` carries legacy domain-shape value objects not yet folded into `src/domain/`.
 paths = [
     "src/domain/**",
-    # models/* still carries the legacy Chunk / FileRecord / RefKind
-    # structs the indexer writes; they're domain-shape value objects
-    # even though they haven't been fully folded into src/domain/ yet.
     "src/models/**",
 ]
 
 [architecture.layers.infrastructure]
+# `src/db/**` is the rusqlite façade; `src/ingest/**` owns the parsers.
 paths = [
     "src/infrastructure/**",
-    # db/ is a rusqlite façade; ingest/ owns the per-language tree-sitter
-    # parsers and text parsers. Both are adapter-shaped and sit in the
-    # infrastructure tier.
     "src/db/**",
     "src/ingest/**",
 ]
@@ -159,12 +161,50 @@ paths = [
     "src/application/**",
 ]
 
-[architecture.layers.interface]
+[architecture.layers.cli]
+# CLI command-handler endpoints (call_parity-checked).
 paths = [
-    "src/interface/**",
-    "src/cli/**",
-    "src/mcp/**",
+    "src/cli/handlers.rs",
+    "src/cli/handlers_util.rs",
+]
+
+[architecture.layers.mcp]
+# MCP tool-handler endpoints (call_parity-checked); `server.rs` holds the
+# rmcp tool router plus the `#[tool]`-decorated method bodies.
+paths = [
+    "src/mcp/server.rs",
+    "src/mcp/tool_handlers.rs",
+    "src/mcp/tool_handlers_edit.rs",
+    "src/mcp/tool_handlers_index.rs",
+    "src/mcp/tool_handlers_query.rs",
+    "src/mcp/tool_handlers_read.rs",
+    "src/mcp/tool_handlers_util.rs",
+]
+
+[architecture.layers.cli_helpers]
+# Adapter-internal CLI helpers (formatters, clap structs, `rlm setup` glue).
+# Not endpoints — not in [architecture.call_parity].adapters.
+paths = [
+    "src/cli/helpers.rs",
+    "src/cli/commands.rs",
+    "src/cli/lifecycle_handlers.rs",
+    "src/cli/mod.rs",
+    "src/interface/cli/**",
+]
+
+[architecture.layers.mcp_helpers]
+# Adapter-internal MCP helpers (server lifecycle, response formatters).
+paths = [
+    "src/mcp/server_helpers.rs",
+    "src/mcp/server_lifecycle.rs",
+    "src/mcp/mod.rs",
+]
+
+[architecture.layers.interface]
+# Shared output rendering used by both adapters.
+paths = [
     "src/output.rs",
+    "src/interface/mod.rs",
 ]
 
 # ── Re-Export Points ───────────────────────────────────────────────────
@@ -494,6 +534,25 @@ allowed_in = [
     "src/**/tests.rs",
 ]
 reason = "Boxed trait objects are fine at the composition root and parser registry; elsewhere prefer generics or enums."
+
+# ── Adapter Call Parity (1.1.0) ────────────────────────────────────────
+#
+# Every `pub fn` in an adapter layer must transitively call into the
+# target layer within `call_depth` hops. Complements the structural
+# `adapters_no_direct_infrastructure` pattern above: that one says
+# "don't import these layers"; call_parity says "don't just import
+# them, actually delegate to them". Catches handlers that silently
+# reimplement business logic instead of forwarding to RlmSession /
+# application::*.
+#
+# Also a drift check between peer adapters (CLI and MCP) — both sides
+# of the same command must end up in the same application function,
+# so they stay semantically in sync.
+
+[architecture.call_parity]
+adapters = ["cli", "mcp"]
+target = "application"
+call_depth = 3
 
 # ── Trait Contracts ────────────────────────────────────────────────────
 

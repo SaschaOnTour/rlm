@@ -10,6 +10,7 @@ pub trait FileRepo {
     fn upsert_file(&self, file: &FileRecord) -> Result<i64>;
     fn get_file_by_path(&self, path: &str) -> Result<Option<FileRecord>>;
     fn get_all_files(&self) -> Result<Vec<FileRecord>>;
+    fn get_files_by_ids(&self, ids: &[i64]) -> Result<Vec<FileRecord>>;
     fn get_all_file_paths(&self) -> Result<Vec<String>>;
     fn get_indexed_files_meta(&self) -> Result<Vec<IndexedFileMeta>>;
     fn update_file_mtime(&self, file_id: i64, mtime_nanos: i64) -> Result<()>;
@@ -30,6 +31,10 @@ impl FileRepo for Database {
 
     fn get_all_files(&self) -> Result<Vec<FileRecord>> {
         Database::get_all_files(self)
+    }
+
+    fn get_files_by_ids(&self, ids: &[i64]) -> Result<Vec<FileRecord>> {
+        Database::get_files_by_ids(self, ids)
     }
 
     fn get_all_file_paths(&self) -> Result<Vec<String>> {

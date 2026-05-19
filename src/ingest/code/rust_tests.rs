@@ -71,6 +71,94 @@ impl Config {
 }
 
 #[test]
+fn parse_generic_impl_captures_parent_for_methods() {
+    let source = r#"
+impl<T> Container<T> {
+    pub fn new() -> Self {
+        unimplemented!()
+    }
+}
+"#;
+    let chunks = parser().parse_chunks(source, 1).unwrap();
+    let new_method = chunks
+        .iter()
+        .find(|c| c.ident == "new" && c.kind == ChunkKind::Method)
+        .expect("`new` method must be chunked");
+    assert_eq!(
+        new_method.parent.as_deref(),
+        Some("Container"),
+        "generic `impl<T> Container<T>` must surface bare type name as parent",
+    );
+}
+
+#[test]
+fn parse_generic_trait_impl_captures_parent_for_methods() {
+    let source = r#"
+impl<T> Make for Container<T> {
+    fn make() -> Self {
+        unimplemented!()
+    }
+}
+"#;
+    let chunks = parser().parse_chunks(source, 1).unwrap();
+    let make_method = chunks
+        .iter()
+        .find(|c| c.ident == "make" && c.kind == ChunkKind::Method)
+        .expect("`make` method must be chunked");
+    assert_eq!(
+        make_method.parent.as_deref(),
+        Some("Container"),
+        "generic trait-impl `impl<T> Make for Container<T>` must record the type, not the trait",
+    );
+}
+
+#[test]
+fn parse_scoped_impl_captures_parent_for_methods() {
+    let source = r#"
+impl outer::Container {
+    pub fn new() -> Self {
+        unimplemented!()
+    }
+}
+"#;
+    let chunks = parser().parse_chunks(source, 1).unwrap();
+    let new_method = chunks
+        .iter()
+        .find(|c| c.ident == "new" && c.kind == ChunkKind::Method)
+        .expect("`new` method must be chunked");
+    assert_eq!(
+        new_method.parent.as_deref(),
+        Some("Container"),
+        "scoped `impl outer::Container` must surface the inner type name as parent",
+    );
+}
+
+#[test]
+fn parse_generic_scoped_trait_impl_captures_parent_for_methods() {
+    // `impl<T> Make for outer::Container<T>` exercises BOTH axes the
+    // chunk.scm query has to handle: generic_type wrapping a
+    // scoped_type_identifier. Prior to this pattern the impl block
+    // chunked as an anonymous impl and `new` came out as a free fn.
+    let source = r#"
+impl<T> Make for outer::Container<T> {
+    fn make() -> Self {
+        unimplemented!()
+    }
+}
+"#;
+    let chunks = parser().parse_chunks(source, 1).unwrap();
+    let make_method = chunks
+        .iter()
+        .find(|c| c.ident == "make" && c.kind == ChunkKind::Method)
+        .expect("`make` method must be chunked");
+    assert_eq!(
+        make_method.parent.as_deref(),
+        Some("Container"),
+        "generic-scoped trait-impl must surface the bare type name as parent",
+    );
+}
+
+#[test]
 fn parse_enum() {
     let source = r#"
 pub enum Color {

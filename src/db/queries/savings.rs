@@ -1,5 +1,6 @@
 use rusqlite::params;
 
+use crate::domain::savings::SavingsEntry;
 use crate::error::Result;
 
 use super::super::Database;
@@ -21,7 +22,6 @@ pub struct SavingsQueryRow {
 
 impl Database {
     /// Record a savings entry (best-effort, legacy — new code should use `record_savings_v2`).
-    // qual:api
     pub fn record_savings(
         &self,
         command: &str,
@@ -36,33 +36,24 @@ impl Database {
         Ok(())
     }
 
-    /// Record a full V2 savings entry with input tokens and call counts.
-    #[allow(clippy::too_many_arguments)]
-    // qual:allow(srp_params) reason: "maps directly to the 8 savings table columns"
-    pub fn record_savings_v2(
-        &self,
-        command: &str,
-        output_tokens: u64,
-        alternative_tokens: u64,
-        files_touched: u64,
-        rlm_input_tokens: u64,
-        alt_input_tokens: u64,
-        rlm_calls: u64,
-        alt_calls: u64,
-    ) -> Result<()> {
+    /// Record a full V2 savings entry. Maps the `SavingsEntry` fields
+    /// directly to the eight `savings` table columns; the struct shape
+    /// is the canonical representation of one round-trip and is built
+    /// by every higher-level helper before reaching this method.
+    pub fn record_savings_v2(&self, entry: &SavingsEntry) -> Result<()> {
         self.conn().execute(
             "INSERT INTO savings (command, output_tokens, alternative_tokens, files_touched, \
              rlm_input_tokens, alt_input_tokens, rlm_calls, alt_calls) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                command,
-                output_tokens as i64,
-                alternative_tokens as i64,
-                files_touched as i64,
-                rlm_input_tokens as i64,
-                alt_input_tokens as i64,
-                rlm_calls as i64,
-                alt_calls as i64
+                &entry.command,
+                entry.rlm_output as i64,
+                entry.alt_output as i64,
+                entry.files_touched as i64,
+                entry.rlm_input as i64,
+                entry.alt_input as i64,
+                entry.rlm_calls as i64,
+                entry.alt_calls as i64,
             ],
         )?;
         Ok(())

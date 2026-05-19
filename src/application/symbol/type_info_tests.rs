@@ -119,3 +119,50 @@ fn get_type_info_symbol_not_found() {
     let result = get_type_info(&db, "NonExistent");
     assert!(result.is_err());
 }
+
+// ─── Slice 0.8: parent on TypeInfoResult ──────────────────────────────
+
+#[test]
+fn get_type_info_carries_parent_for_methods() {
+    let db = test_db();
+    let file = FileRecord::new("src/x.rs".into(), "h".into(), "rust".into(), 1);
+    let file_id = db.upsert_file(&file).unwrap();
+    let chunk = Chunk {
+        kind: ChunkKind::Method,
+        ident: "render".into(),
+        parent: Some("Widget".into()),
+        signature: Some("fn render(&self)".into()),
+        content: "fn render(&self) { /* ... */ }".into(),
+        ..Chunk::stub(file_id)
+    };
+    db.insert_chunk(&chunk).unwrap();
+
+    let result = get_type_info(&db, "render").unwrap();
+
+    assert_eq!(result.parent.as_deref(), Some("Widget"));
+    assert_eq!(result.symbol, "render");
+}
+
+#[test]
+fn get_type_info_omits_parent_field_for_free_functions() {
+    let db = test_db();
+    let file = FileRecord::new("src/x.rs".into(), "h".into(), "rust".into(), 1);
+    let file_id = db.upsert_file(&file).unwrap();
+    let chunk = Chunk {
+        kind: ChunkKind::Function,
+        ident: "helper".into(),
+        parent: None,
+        signature: Some("fn helper()".into()),
+        ..Chunk::stub(file_id)
+    };
+    db.insert_chunk(&chunk).unwrap();
+
+    let result = get_type_info(&db, "helper").unwrap();
+
+    assert!(result.parent.is_none());
+    let json = serde_json::to_string(&result).unwrap();
+    assert!(
+        !json.contains("\"parent\""),
+        "free-fn type info must not serialise the parent key, got {json}",
+    );
+}

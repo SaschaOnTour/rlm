@@ -5,7 +5,7 @@
 //! delete-cascade tests stay in `mod_tests.rs`; this file covers the
 //! chunk-level query surface (insert, lookup by id / ident, FTS).
 
-use super::test_fixtures::{sample_chunk, sample_file, test_db};
+use super::test_fixtures::{sample_chunk, sample_file, test_db, SAMPLE_END_BYTE, SAMPLE_END_LINE};
 
 const FTS_SEARCH_LIMIT: usize = 10;
 
@@ -43,6 +43,45 @@ fn get_chunks_by_ident_works() {
     db.insert_chunk(&c).unwrap();
     let chunks = db.get_chunks_by_ident("main").unwrap();
     assert_eq!(chunks.len(), 1);
+}
+
+#[test]
+fn get_chunks_by_idents_returns_all_matches() {
+    let db = test_db();
+    let f = sample_file();
+    let fid = db.upsert_file(&f).unwrap();
+    db.insert_chunk(&sample_chunk(fid)).unwrap();
+
+    let mut foo = sample_chunk(fid);
+    foo.ident = "foo".into();
+    foo.start_line = SAMPLE_END_LINE + 1;
+    foo.end_line = SAMPLE_END_LINE + SAMPLE_END_LINE;
+    foo.start_byte = SAMPLE_END_BYTE + 1;
+    foo.end_byte = SAMPLE_END_BYTE + SAMPLE_END_BYTE;
+    db.insert_chunk(&foo).unwrap();
+
+    let chunks = db.get_chunks_by_idents(&["main", "foo"]).unwrap();
+    let mut idents: Vec<_> = chunks.iter().map(|c| c.ident.clone()).collect();
+    idents.sort();
+    assert_eq!(idents, vec!["foo", "main"]);
+}
+
+#[test]
+fn get_chunks_by_idents_empty_input_returns_empty() {
+    let db = test_db();
+    assert!(db.get_chunks_by_idents(&[]).unwrap().is_empty());
+}
+
+#[test]
+fn get_chunks_by_idents_unknown_idents_returns_empty() {
+    let db = test_db();
+    let f = sample_file();
+    let fid = db.upsert_file(&f).unwrap();
+    db.insert_chunk(&sample_chunk(fid)).unwrap();
+    assert!(db
+        .get_chunks_by_idents(&["nonexistent"])
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

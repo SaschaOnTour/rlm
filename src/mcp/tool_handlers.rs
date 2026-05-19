@@ -9,7 +9,7 @@
 //! - `tool_handlers_query` — `handle_search` / `handle_overview` / `handle_refs` / `handle_files`
 //! - `tool_handlers_read`  — `handle_read` (symbol + section dispatch)
 //! - `tool_handlers_edit`  — `handle_replace` / `handle_delete` / `handle_insert`
-//!   / `handle_extract` + `InsertInput`
+//!   / `handle_extract`
 //! - `tool_handlers_util`  — `handle_stats` (incl. savings flag),
 //!   `handle_quality`, `handle_partition`, `handle_summarize`, `handle_diff`,
 //!   `handle_context`, `handle_deps`, `handle_scope`, `handle_verify`,
@@ -19,9 +19,7 @@
 //! `stats(savings=true, since=…)` in 0.5.0 — there is no
 //! `handle_savings` anymore.
 
-pub use super::tool_handlers_edit::{
-    handle_delete, handle_extract, handle_insert, handle_replace, InsertInput,
-};
+pub use super::tool_handlers_edit::{handle_delete, handle_extract, handle_insert, handle_replace};
 pub use super::tool_handlers_index::handle_index_with_progress;
 pub use super::tool_handlers_query::{handle_files, handle_overview, handle_refs, handle_search};
 pub use super::tool_handlers_read::handle_read;

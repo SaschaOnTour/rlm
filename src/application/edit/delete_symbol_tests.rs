@@ -5,7 +5,7 @@
 //! collapse, stale-chunk rejection, unknown-symbol error, and Syntax
 //! Guard rejection when the remaining file would not parse.
 
-use super::{delete_symbol, Database};
+use super::{delete_symbol, Database, DeleteInput};
 use crate::domain::chunk::{Chunk, ChunkKind};
 use crate::domain::file::FileRecord;
 
@@ -55,7 +55,17 @@ fn delete_symbol_removes_function_body_and_trailing_newline() {
     let end = greet.len() as u32;
     let (_dir, db, path, root) = setup_with(content, "greet", start, end, greet);
 
-    delete_symbol(&db, &path, "greet", None, false, &root).expect("delete should succeed");
+    delete_symbol(
+        &db,
+        &DeleteInput {
+            path: &path,
+            symbol: "greet",
+            parent: None,
+            keep_docs: false,
+        },
+        &root,
+    )
+    .expect("delete should succeed");
 
     let after = std::fs::read_to_string(root.join(&path)).unwrap();
     // Remaining file is just the second function (trailing newline from
@@ -68,7 +78,16 @@ fn delete_symbol_rejects_unknown_symbol() {
     let content = "fn greet() {}\n";
     let (_dir, db, path, root) = setup_with(content, "greet", 0, 13, "fn greet() {}");
 
-    let result = delete_symbol(&db, &path, "nonexistent", None, false, &root);
+    let result = delete_symbol(
+        &db,
+        &DeleteInput {
+            path: &path,
+            symbol: "nonexistent",
+            parent: None,
+            keep_docs: false,
+        },
+        &root,
+    );
     assert!(result.is_err(), "unknown symbol should error");
     let msg = format!("{}", result.unwrap_err());
     assert!(
@@ -90,7 +109,16 @@ fn delete_symbol_rejects_stale_chunk() {
     )
     .unwrap();
 
-    let result = delete_symbol(&db, &path, "greet", None, false, &root);
+    let result = delete_symbol(
+        &db,
+        &DeleteInput {
+            path: &path,
+            symbol: "greet",
+            parent: None,
+            keep_docs: false,
+        },
+        &root,
+    );
     assert!(result.is_err(), "stale chunk should be rejected");
     let msg = format!("{}", result.unwrap_err());
     assert!(
@@ -107,7 +135,17 @@ fn delete_symbol_removes_last_symbol_leaving_minimal_whitespace() {
     let content = "fn greet() {}\n";
     let (_dir, db, path, root) = setup_with(content, "greet", 0, 13, "fn greet() {}");
 
-    delete_symbol(&db, &path, "greet", None, false, &root).expect("delete should succeed");
+    delete_symbol(
+        &db,
+        &DeleteInput {
+            path: &path,
+            symbol: "greet",
+            parent: None,
+            keep_docs: false,
+        },
+        &root,
+    )
+    .expect("delete should succeed");
 
     let after = std::fs::read_to_string(root.join(&path)).unwrap();
     // Either entirely empty or just a leftover newline — both acceptable.
@@ -126,7 +164,16 @@ fn delete_symbol_syntax_guard_rejects_if_remaining_file_invalid() {
     let content = "fn greet() {}\n}\n";
     let (_dir, db, path, root) = setup_with(content, "greet", 0, 13, "fn greet() {}");
 
-    let result = delete_symbol(&db, &path, "greet", None, false, &root);
+    let result = delete_symbol(
+        &db,
+        &DeleteInput {
+            path: &path,
+            symbol: "greet",
+            parent: None,
+            keep_docs: false,
+        },
+        &root,
+    );
     assert!(
         result.is_err(),
         "Syntax Guard should reject post-delete invalid file"
@@ -158,8 +205,17 @@ fn delete_removes_doc_comment_by_default() {
         body,
     );
 
-    let outcome = delete_symbol(&db, &path, "stub", None, false, &root)
-        .expect("default delete should succeed");
+    let outcome = delete_symbol(
+        &db,
+        &DeleteInput {
+            path: &path,
+            symbol: "stub",
+            parent: None,
+            keep_docs: false,
+        },
+        &root,
+    )
+    .expect("default delete should succeed");
 
     let after = std::fs::read_to_string(root.join(&path)).unwrap();
     assert!(
@@ -189,7 +245,17 @@ fn delete_removes_attribute_by_default() {
         body,
     );
 
-    delete_symbol(&db, &path, "old", None, false, &root).expect("delete");
+    delete_symbol(
+        &db,
+        &DeleteInput {
+            path: &path,
+            symbol: "old",
+            parent: None,
+            keep_docs: false,
+        },
+        &root,
+    )
+    .expect("delete");
 
     let after = std::fs::read_to_string(root.join(&path)).unwrap();
     assert!(
@@ -211,7 +277,17 @@ fn delete_removes_doc_and_attr_together() {
         body,
     );
 
-    delete_symbol(&db, &path, "combo", None, false, &root).expect("delete");
+    delete_symbol(
+        &db,
+        &DeleteInput {
+            path: &path,
+            symbol: "combo",
+            parent: None,
+            keep_docs: false,
+        },
+        &root,
+    )
+    .expect("delete");
 
     let after = std::fs::read_to_string(root.join(&path)).unwrap();
     assert!(
@@ -233,7 +309,17 @@ fn delete_keep_docs_preserves_sidecar() {
         body,
     );
 
-    let outcome = delete_symbol(&db, &path, "replaceable", None, true, &root).expect("delete");
+    let outcome = delete_symbol(
+        &db,
+        &DeleteInput {
+            path: &path,
+            symbol: "replaceable",
+            parent: None,
+            keep_docs: true,
+        },
+        &root,
+    )
+    .expect("delete");
 
     let after = std::fs::read_to_string(root.join(&path)).unwrap();
     assert!(
@@ -266,7 +352,17 @@ fn delete_stops_sidecar_extension_at_blank_line() {
         body,
     );
 
-    delete_symbol(&db, &path, "lonely", None, false, &root).expect("delete");
+    delete_symbol(
+        &db,
+        &DeleteInput {
+            path: &path,
+            symbol: "lonely",
+            parent: None,
+            keep_docs: false,
+        },
+        &root,
+    )
+    .expect("delete");
 
     let after = std::fs::read_to_string(root.join(&path)).unwrap();
     assert!(

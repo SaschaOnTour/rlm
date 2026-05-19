@@ -2,48 +2,72 @@
 //!
 //! Post-0.5.0 the CLI adapter only does three things that need shared
 //! plumbing: translating application errors into the CLI's
-//! `CmdResult` box, printing pre-serialised bodies, and resolving the
+//! `CmdResult` box, walking up to the project root, and resolving the
 //! `--code` / `--code-stdin` / `--code-file` family for write
 //! commands. Everything else — config/DB open, savings recording,
 //! query pipelines — moved into [`RlmSession`](crate::application::session::RlmSession).
 
-use crate::output::{self, Formatter};
+use crate::cli::commands::CodeSource;
 
 pub type CmdResult = Result<(), Box<dyn std::fmt::Display>>;
 
-pub fn print_str(formatter: Formatter, s: &str) {
-    output::print_str(formatter, s);
-}
-
-pub fn map_err(e: impl std::fmt::Display + 'static) -> Box<dyn std::fmt::Display> {
+pub(crate) fn map_err(e: impl std::fmt::Display + 'static) -> Box<dyn std::fmt::Display> {
     Box::new(e.to_string())
 }
 
-/// Resolve the code body for `rlm replace` / `rlm insert` from its three
-/// possible sources: `--code <inline>`, `--code-stdin`, or
-/// `--code-file <path>`. Clap enforces mutual exclusivity via the `group`
-/// attribute; this helper enforces "exactly one" by rejecting the
-/// none-specified case and by reading the chosen source.
+/// CLI-side wrapper around `std::env::current_dir()` so adapters can
+/// pass the cwd into an `application::facades::*_project` call (the
+/// single application entry point per command) without going through
+/// a `Config` round-trip — `Config::new` then runs once inside
+/// `RlmSession::open` instead of twice. MCP doesn't use this; the
+/// MCP server is constructed with an explicit project root.
+pub(crate) fn cwd_project_root() -> Result<std::path::PathBuf, Box<dyn std::fmt::Display>> {
+    std::env::current_dir().map_err(map_err)
+}
+
+/// Run a facade call against the cwd-discovered project root, then
+/// print its already-serialised JSON body via the active formatter.
+/// Collapses the `let root = cwd_project_root()?; let body =
+/// facades::X(&root, ..).map_err(map_err)?; print_str(formatter,
+/// &body); Ok(())` pattern repeated across every read-side cmd
+/// handler.
+///
+/// For facades returning `OperationResponse`, callers pre-extract
+/// the body with `.map(|r| r.body)`; for facades returning a raw
+/// JSON `String`, they pass the result through directly.
+pub(crate) fn run_facade(
+    formatter: crate::output::Formatter,
+    f: impl FnOnce(&std::path::Path) -> crate::error::Result<String>,
+) -> CmdResult {
+    let root = cwd_project_root()?;
+    let body = f(&root).map_err(map_err)?;
+    crate::output::print_str(formatter, &body);
+    Ok(())
+}
+
+/// Resolve the code body for `rlm replace` / `rlm insert` from its
+/// `CodeSource` bundle. Clap's `group(required = true, multiple = false)`
+/// already enforces "exactly one of `--code` / `--code-stdin` /
+/// `--code-file`" at parse time, so this helper only handles the
+/// I/O — read stdin or read the file path.
 ///
 /// Error cases:
-/// * None of the three specified → "no code source provided".
 /// * `--code-stdin` on an interactive TTY → refuse (agents should pipe).
 /// * `--code-file` on a missing or non-file path → "not a readable file".
 /// * `--code-stdin` with non-UTF-8 bytes → bubbled from `read_to_string`.
-pub fn resolve_code(
-    code: Option<&str>,
-    code_stdin: bool,
-    code_file: Option<&str>,
-) -> Result<String, Box<dyn std::fmt::Display>> {
-    match (code, code_stdin, code_file) {
+pub(crate) fn resolve_code(src: &CodeSource) -> Result<String, Box<dyn std::fmt::Display>> {
+    match (
+        src.code.as_deref(),
+        src.code_stdin,
+        src.code_file.as_deref(),
+    ) {
         (Some(s), false, None) => Ok(s.to_string()),
         (None, true, None) => read_stdin_code(),
         (None, false, Some(path)) => read_file_code(path),
-        (None, false, None) => Err(map_err(
-            "one of --code, --code-stdin, or --code-file is required",
-        )),
+        // Other shapes are unreachable: clap rejects them at parse time
+        // via the `code_src` group constraints.
         _ => Err(map_err(
-            "--code, --code-stdin, and --code-file are mutually exclusive",
+            "internal: clap's CodeSource group should make this unreachable",
         )),
     }
 }

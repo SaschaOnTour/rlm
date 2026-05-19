@@ -117,3 +117,49 @@ fn index_result_categorizes_skips() {
     assert_eq!(result.skipped_non_utf8, 1);
     assert_eq!(result.files_skipped, 1);
 }
+
+#[test]
+fn ensure_index_creates_db_when_auto_create_index_is_true() {
+    let tmp = TempDir::new().unwrap();
+    let src_dir = tmp.path().join("src");
+    fs::create_dir(&src_dir).unwrap();
+    fs::write(src_dir.join("main.rs"), "fn main() {}\n").unwrap();
+
+    let mut config = Config::new(tmp.path());
+    assert!(config.settings.indexing.auto_create_index);
+    assert!(!config.index_exists());
+
+    // Just be explicit about the default for the test contract.
+    config.settings.indexing.auto_create_index = true;
+    if let Err(e) = super::ensure_index(&config) {
+        panic!("ensure_index should succeed under default settings: {e}");
+    }
+
+    assert!(
+        config.index_exists(),
+        "ensure_index must auto-create .rlm/index.db under the default setting",
+    );
+}
+
+#[test]
+fn ensure_index_errors_when_auto_create_index_is_false_and_missing() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = Config::new(tmp.path());
+    config.settings.indexing.auto_create_index = false;
+    assert!(!config.index_exists());
+
+    let err = match super::ensure_index(&config) {
+        Err(e) => e,
+        Ok(_) => {
+            panic!("ensure_index must reject auto-creation when auto_create_index is disabled",)
+        }
+    };
+    assert!(
+        matches!(err, crate::error::RlmError::IndexAutoCreateDisabled(_)),
+        "expected IndexAutoCreateDisabled, got: {err:?}",
+    );
+    assert!(
+        !config.index_exists(),
+        "no .rlm/ should be created when auto_create_index is off",
+    );
+}

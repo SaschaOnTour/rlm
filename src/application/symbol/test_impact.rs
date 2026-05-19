@@ -54,7 +54,6 @@ pub struct TestMatch {
 ///
 /// Pattern matching is done on the project-relative, forward-slash path
 /// (rlm normalises separators at index time).
-// qual:api
 #[must_use]
 pub fn is_test_file(path: &str, lang: &str) -> bool {
     match lang {
@@ -77,7 +76,6 @@ pub fn is_test_file(path: &str, lang: &str) -> bool {
 /// `describe(...)` as annotated functions, so chunk-level detection is not
 /// meaningful. For those languages the caller should fall back on
 /// [`is_test_file`].
-// qual:api
 #[must_use]
 pub fn is_test_chunk(chunk: &Chunk, lang: &str) -> bool {
     match lang {
@@ -180,7 +178,6 @@ fn is_js_ts_test_filename(name: &str) -> bool {
 /// Walks `get_refs_with_context` for the symbol, filters to hits whose
 /// file matches `changed_file`, and returns the callers that pass
 /// [`is_test_chunk`].
-// qual:api
 pub fn find_direct_tests(
     db: &Database,
     symbol: &str,
@@ -218,7 +215,6 @@ pub fn find_direct_tests(
 ///
 /// Non-test callers at depth 1..N are traversed but not recorded;
 /// their own callers are enqueued for the next level.
-// qual:api
 pub fn find_transitive_tests(db: &Database, symbol: &str) -> Result<Vec<TestMatch>> {
     let mut matches = Vec::new();
     let mut seen_targets: HashSet<String> = HashSet::new();
@@ -265,7 +261,6 @@ pub fn find_transitive_tests(db: &Database, symbol: &str) -> Result<Vec<TestMatc
 /// files is returned, regardless of whether it references the changed
 /// symbol — the heuristic is "this test file is named after the source,
 /// so its tests probably exercise it".
-// qual:api
 pub fn find_tests_by_naming(db: &Database, changed_file: &str) -> Result<Vec<TestMatch>> {
     let Some(source_file) = db.get_file_by_path(changed_file)? else {
         return Ok(Vec::new());

@@ -1,4 +1,5 @@
 use super::validator::{validate_and_write, SyntaxGuard};
+use super::{DeleteInput, ReplaceInput};
 use crate::db::Database;
 use crate::domain::chunk::Chunk;
 use crate::error::{Result, RlmError};
@@ -63,30 +64,37 @@ pub(super) fn find_symbol_in_file(
     }
 }
 
+/// Locator for an AST-level edit: which symbol, in which file,
+/// optionally disambiguated by parent. Bundled because the three
+/// fields always travel together — staleness check, syntax guard,
+/// and splice closure all need the same triple.
+pub(super) struct EditTarget<'a> {
+    pub file_path: &'a str,
+    pub symbol: &'a str,
+    pub parent: Option<&'a str>,
+}
+
 /// Resolve, load, verify chunk-staleness, splice, validate and write — the
 /// shared spine of `replace_symbol` / `delete_symbol`. The caller's closure
 /// receives `(source, start_byte, end_byte)` and returns the post-edit file
 /// content; the helper takes care of everything before (path validation,
 /// staleness check) and after (Syntax Guard + atomic write). Returns the
 /// resolved `Chunk` so callers can surface metadata like `old_code_len`.
-// qual:allow(srp_params) reason: "db, path, ident, parent, splice, root are 6 orthogonal concerns; grouping 2 into a struct would hide call-site clarity"
 fn apply_edit<F>(
     db: &Database,
-    file_path: &str,
-    symbol: &str,
-    parent: Option<&str>,
+    target: &EditTarget<'_>,
     project_root: &std::path::Path,
     splice: F,
 ) -> Result<Chunk>
 where
     F: FnOnce(&str, usize, usize) -> Result<String>,
 {
-    let full_path = crate::error::validate_relative_path(file_path, project_root)?;
-    let chunk = find_symbol_in_file(db, file_path, symbol, parent)?;
+    let full_path = crate::error::validate_relative_path(target.file_path, project_root)?;
+    let chunk = find_symbol_in_file(db, target.file_path, target.symbol, target.parent)?;
     let source = std::fs::read_to_string(&full_path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             RlmError::FileNotFound {
-                path: file_path.into(),
+                path: target.file_path.into(),
             }
         } else {
             RlmError::from(e)
@@ -121,22 +129,21 @@ pub struct ReplaceOutcome {
 
 /// Replace an AST node (function, struct, etc.) by identifier.
 ///
-/// `file_path` is the project-relative path (as stored in the DB).
+/// `input.path` is the project-relative path (as stored in the DB).
 /// `project_root` is used to resolve the absolute path for disk I/O.
-// qual:allow(srp_params) reason: "db, path, ident, parent, code, root are 6 orthogonal concerns"
 pub fn replace_symbol(
     db: &Database,
-    file_path: &str,
-    symbol: &str,
-    parent: Option<&str>,
-    new_code: &str,
+    input: &ReplaceInput<'_>,
     project_root: &std::path::Path,
 ) -> Result<ReplaceOutcome> {
+    let new_code = input.code;
     let chunk = apply_edit(
         db,
-        file_path,
-        symbol,
-        parent,
+        &EditTarget {
+            file_path: input.path,
+            symbol: input.symbol,
+            parent: input.parent,
+        },
         project_root,
         |source, start, end| {
             let mut modified = String::with_capacity(source.len() - (end - start) + new_code.len());
@@ -154,21 +161,20 @@ pub fn replace_symbol(
 /// Delete a symbol by identifier, collapsing the trailing newline so the
 /// symbol's empty line does not linger. Reuses `replace_symbol`'s staleness
 /// checks and Syntax Guard.
-// qual:allow(srp_params) reason: "db, path, ident, parent, keep_docs, root are 6 orthogonal concerns"
 pub fn delete_symbol(
     db: &Database,
-    file_path: &str,
-    symbol: &str,
-    parent: Option<&str>,
-    keep_docs: bool,
+    input: &DeleteInput<'_>,
     project_root: &std::path::Path,
 ) -> Result<DeleteOutcome> {
     let mut sidecar: Option<(u32, u32)> = None;
+    let keep_docs = input.keep_docs;
     let chunk = apply_edit(
         db,
-        file_path,
-        symbol,
-        parent,
+        &EditTarget {
+            file_path: input.path,
+            symbol: input.symbol,
+            parent: input.parent,
+        },
         project_root,
         |source, start, end| {
             // Expand `start` backward over contiguous doc comments / attributes
