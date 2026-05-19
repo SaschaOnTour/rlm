@@ -4,6 +4,13 @@
 //! [`application::facades`](crate::application::facades) call — one
 //! application-touchpoint per handler, which is what call_parity
 //! enforces.
+//!
+//! One documented exception: `handle_supported` calls
+//! [`RlmSession::supported`] directly because the list of supported
+//! languages is a pure function — no project root, no index, no
+//! session state. Wrapping it in a facade would add indirection
+//! without buying anything; the CLI's `cmd_supported` does the
+//! same on the other adapter side.
 
 use std::path::Path;
 

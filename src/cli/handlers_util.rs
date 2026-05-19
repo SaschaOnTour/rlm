@@ -3,8 +3,19 @@
 //! Code-exploration commands live in `cli::handlers`.
 //! Shared helpers live in `cli::helpers`.
 //!
-//! Every handler is a thin adapter over [`RlmSession`]: parse CLI
-//! flags, call one session method, emit through the formatter.
+//! Each handler parses its CLI flags, makes a single
+//! [`application::facades`](crate::application::facades) call against
+//! the cwd-discovered project root, and emits the result through the
+//! formatter — that's the call_parity contract both adapters honour.
+//!
+//! Two documented exceptions deliberately skip the facade seam:
+//! - `cmd_files` calls [`application::query::files::list_files`]
+//!   directly. `files` is filesystem-backed and must not trigger
+//!   `ensure_index`; a session would auto-index on first read.
+//!   `handle_files` on the MCP side uses the same direct path.
+//! - `cmd_supported` calls [`RlmSession::supported`] directly. The
+//!   list of supported languages is a pure function — no project
+//!   root, no session state. `handle_supported` on MCP mirrors this.
 
 use crate::application::facades;
 use crate::application::query::files::FilesFilter;

@@ -357,6 +357,15 @@ work that briefly carried that version number is folded here.
   the dedup refactor (it now guarantees only per-batch SQL order
   with batches concatenated in input-chunk order). The test header
   was left over from the prior promise.
+- **Adapter-util module headers re-synced with code**:
+  `mcp::tool_handlers_util` and `cli::handlers_util` both claimed
+  every handler funnels through a single `facades::*_project` call
+  / single `RlmSession` method. In practice each module has
+  intentional exceptions (`*_supported` is a pure function with no
+  project state; CLI `cmd_files` skips the session to avoid
+  triggering `ensure_index`). The headers now name those exceptions
+  explicitly so future readers don't trip over the apparent
+  inconsistency.
 - **`src/cli/helpers.rs` module doc no longer claims project-root
   upward-walk** that doesn't exist; `cwd_project_root()` is just
   `std::env::current_dir()`. Doc clarifies the assumption and flags
