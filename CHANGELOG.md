@@ -39,9 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays **parent-wide, not definition-scoped** — refs in the index
   carry only `target_ident`, so attributing a `Foo::new()` call to
   one specific `Foo::new` definition needs flow analysis rlm
-  intentionally doesn't do. `SignatureResult::ref_count`'s doc string
-  and a contract-pin test (`ref_count_is_parent_wide_not_definition_
-  scoped`) make the limit explicit.
+  intentionally doesn't do. The `SignatureResult::ref_count` doc
+  string and the `ref_count_is_parent_wide_not_definition_scoped`
+  contract-pin test make the limit explicit.
 - **MCP `ServerInfo.instructions` re-synced with the tool surface**:
   the leading sentence now reads "21 tools" (it had stayed at 20
   after the `quality_clear` split), names `quality_clear` in the
