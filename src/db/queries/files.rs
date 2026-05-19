@@ -48,7 +48,7 @@ impl Database {
 
     /// Batched variant of [`get_file_by_path`] keyed by id. Returns the
     /// file records for every id in `ids`, in batches under the SQLite
-    /// host-parameter ceiling — see [`Database::query_batched_in`].
+    /// host-parameter ceiling — see [`crate::db::batched::query_batched_in`].
     /// Result order is per-batch `(id)`; callers that need a stable
     /// total order should sort after.
     pub fn get_files_by_ids(&self, ids: &[i64]) -> Result<Vec<FileRecord>> {

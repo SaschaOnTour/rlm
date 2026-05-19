@@ -290,12 +290,14 @@ rlm index .
 > directory (the index database, ~5–30 MB depending on project size).
 >
 > **Want strict read-only behaviour?** Set
-> `[indexing] auto_create_index = false` in `.rlm/config.toml` (you
-> need to `rlm index .` once to create the config). When the setting
-> is `false`, any read on a project without an existing index returns
-> a structured error instead of writing anything. Especially relevant
-> for MCP server scenarios where an agent might land on workspaces
-> the user didn't intend to index.
+> `[indexing] auto_create_index = false` in `.rlm/config.toml`. The
+> config file isn't auto-created — generate it with `rlm setup`, or
+> drop in the two-line snippet by hand (`rlm index .` only writes
+> `.rlm/index.db`, not the config). When the setting is `false`, any
+> read on a project without an existing index returns a structured
+> error instead of writing anything. Especially relevant for MCP
+> server scenarios where an agent might land on workspaces the user
+> didn't intend to index.
 
 > **What `read_only_hint = true` means on MCP tools.** rlm annotates
 > every query tool (`read`, `search`, `refs`, `context`, …) as

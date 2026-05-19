@@ -22,6 +22,9 @@
 //! idiomatic in Rust (cf. `std::slice` adapters) and keeps the
 //! struct's cohesion budget for storage concerns.
 
+use std::collections::HashSet;
+use std::hash::Hash;
+
 use rusqlite::{params_from_iter, ToSql};
 
 use crate::db::Database;
@@ -45,8 +48,20 @@ pub(crate) const SQLITE_VAR_LIMIT: usize = 999;
 /// * `row_mapper(row)` maps one result row to the caller's output
 ///   type. Called once per result row.
 ///
-/// Concatenates per-batch results in input order. The chunk size is
-/// fixed at [`SQLITE_VAR_LIMIT`]; tests use
+/// **Set semantics**: input items are deduplicated before batching
+/// so cross-batch duplicates can't double-return the same row. A
+/// single-query `IN (?, ?)` with the same id twice returns one row
+/// (SQL set semantics); the batched form preserves that. The
+/// `Eq + Hash` bound makes the dedup `O(n)` rather than `O(n²)`.
+///
+/// **Result order**: rows arrive in the order SQLite emits per
+/// batch, with per-batch result sets concatenated in the order the
+/// helper iterates its input chunks. Callers that need a stable
+/// total order should `sort` (or build a `HashMap` keyed by id) on
+/// the returned `Vec`; nothing in this helper rearranges per-batch
+/// output.
+///
+/// The chunk size is fixed at [`SQLITE_VAR_LIMIT`]; tests use
 /// [`query_batched_in_with_limit`] to drive smaller boundaries.
 pub(crate) fn query_batched_in<P, R, S, M>(
     db: &Database,
@@ -55,7 +70,7 @@ pub(crate) fn query_batched_in<P, R, S, M>(
     row_mapper: M,
 ) -> Result<Vec<R>>
 where
-    P: ToSql,
+    P: ToSql + Eq + Hash + Clone,
     S: Fn(usize) -> String,
     M: Fn(&rusqlite::Row<'_>) -> rusqlite::Result<R>,
 {
@@ -74,13 +89,25 @@ pub(crate) fn query_batched_in_with_limit<P, R, S, M>(
     row_mapper: M,
 ) -> Result<Vec<R>>
 where
-    P: ToSql,
+    P: ToSql + Eq + Hash + Clone,
     S: Fn(usize) -> String,
     M: Fn(&rusqlite::Row<'_>) -> rusqlite::Result<R>,
 {
     debug_assert!(limit > 0, "batch limit must be positive");
+    // Dedup before batching so cross-batch duplicates can't
+    // double-return — see the doc on `query_batched_in` for why
+    // this matches single-query `IN(...)` set semantics. Input
+    // order isn't promised (we say so in the docs), so a HashSet
+    // round-trip is the simplest correct dedup.
+    let mut seen: HashSet<P> = HashSet::with_capacity(items.len());
+    let mut unique: Vec<P> = Vec::with_capacity(items.len());
+    for item in items {
+        if seen.insert(item.clone()) {
+            unique.push(item.clone());
+        }
+    }
     let mut out = Vec::new();
-    for batch in items.chunks(limit) {
+    for batch in unique.chunks(limit) {
         let sql = sql_for(batch.len());
         let mut stmt = db.conn().prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(batch), &row_mapper)?;

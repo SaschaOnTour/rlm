@@ -193,8 +193,25 @@ fn retain_path_call_entries(
     let indices_by_file = group_entry_indices_by_file(&entries);
     let mut keep = vec![false; entries.len()];
     for (file, indices) in indices_by_file {
-        let Ok(source) = std::fs::read_to_string(project_root.join(&file)) else {
-            continue;
+        let source = match std::fs::read_to_string(project_root.join(&file)) {
+            Ok(s) => s,
+            Err(e) => {
+                // File was indexed but isn't readable now (deleted,
+                // moved, permissions). Hard-failing would break
+                // `rlm refs --parent` for every caller as soon as
+                // one source file goes missing — far worse UX than
+                // a partial result. Warn loudly on stderr (rlm
+                // convention; matches staleness.rs) and skip just
+                // this file's entries; the remaining `keep` bits
+                // stay `false` so those refs drop out of the
+                // filtered output rather than slipping through
+                // un-vetted.
+                eprintln!(
+                    "rlm: refs --parent skipped {file}: {e} \
+                     (indexed file no longer readable; re-run `rlm index .` to refresh)"
+                );
+                continue;
+            }
         };
         let matcher = PathCallMatcher {
             source: &source,

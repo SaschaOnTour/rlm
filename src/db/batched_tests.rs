@@ -117,3 +117,29 @@ fn public_wrapper_returns_all_matching_rows() {
     let out: Vec<i64> = query_batched_in(&db, &ids, id_only_sql, id_from_row).unwrap();
     assert_eq!(out.len(), 50);
 }
+
+/// Set-semantics contract: a single `WHERE id IN (?, ?)` query
+/// deduplicates rows naturally — passing `[42, 42]` returns one
+/// row, not two. The batched helper must preserve that contract
+/// even when the duplicate spans batch boundaries (each batch
+/// would otherwise re-fetch the same row independently and the
+/// concatenated output would double-count it).
+#[test]
+fn duplicate_input_across_batch_boundaries_yields_each_row_once() {
+    let db = Database::open_in_memory().unwrap();
+    let ids = seed_files(&db, 3); // ids: [1, 2, 3]
+                                  // Construct an input that places the same id in two different
+                                  // batches under limit=2: [1, 2, 1] → batches [1, 2] and [1].
+                                  // A naive concat would yield row 1 twice.
+    let dup_input = vec![ids[0], ids[1], ids[0]];
+    let out: Vec<i64> =
+        query_batched_in_with_limit(&db, &dup_input, 2, id_only_sql, id_from_row).unwrap();
+    let mut sorted = out.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        vec![ids[0], ids[1]],
+        "ids 1 and 2 must appear once each — single-query IN-semantics \
+         would dedup row 1; the batched helper must too. Got: {out:?}"
+    );
+}

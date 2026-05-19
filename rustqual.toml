@@ -395,7 +395,7 @@ reason = "rusqlite is an adapter detail; it must not leak into application or in
 # outgrows the host-parameter ceiling. `rusqlite::params_from_iter`
 # is the unambiguous marker for that pattern — every call site
 # threads a runtime-sized list into a query. Funnel all such calls
-# through `Database::query_batched_in`, which loops in
+# through `db::batched::query_batched_in`, which loops in
 # `SQLITE_VAR_LIMIT`-sized batches and concatenates results, so the
 # failure mode never reaches users on large projects.
 [[architecture.pattern]]
@@ -408,7 +408,7 @@ allowed_in = [
     # IN-lists to verify the helper's behaviour at boundaries.
     "src/**/*_tests.rs",
 ]
-reason = "Use Database::query_batched_in for IN-list queries — raw params_from_iter risks SQLITE_RANGE on large inputs."
+reason = "Use db::batched::query_batched_in for IN-list queries — raw params_from_iter risks SQLITE_RANGE on large inputs."
 
 # tree-sitter primitives belong to the parser adapter. Application /
 # domain / interface code talks to the parser via `CodeParser` +
@@ -470,6 +470,10 @@ except = [
     # drifts ("rlm: staleness hash failed for X"). These are CLI/MCP UX
     # messages; rlm is a one-shot tool with no tracing subscriber.
     "src/application/index/staleness.rs",
+    # `filter_impacted_by_parent` warns on stderr when an indexed
+    # file isn't readable any more — partial-result UX, same channel
+    # rationale as staleness.
+    "src/application/symbol/impact.rs",
     # Test fixtures may print setup diagnostics.
     "src/**/*_tests.rs",
     "src/**/tests.rs",

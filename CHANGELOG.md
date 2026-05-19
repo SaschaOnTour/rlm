@@ -294,12 +294,28 @@ work that briefly carried that version number is folded here.
   popular symbol like `Result` is referenced across tens of
   thousands of files. The new `db::batched::query_batched_in` helper
   funnels every dynamic IN-list through a chunking loop (default
-  batch size 999, parameterised for tests), and a new rustqual
+  batch size 999, parameterised for tests). The helper also
+  deduplicates input before batching so cross-batch duplicates
+  can't double-return the same row — preserves the single-query
+  `IN(...)` set semantics that callers depended on. A new rustqual
   pattern rule `no_unbatched_in_lists` forbids raw
-  `rusqlite::params_from_iter` outside that helper so the failure
+  `rusqlite::params_from_iter` outside the helper so the failure
   mode can't return via a new caller. Row-mapping for chunks now
   uses named column access (`row.get("file_id")`), incidentally
   hardening against SELECT-column reorder.
+- **`rlm refs --parent` no longer silently drops entries when a
+  source file is unreadable**: `retain_path_call_entries` used to
+  swallow `read_to_string` errors with no signal to the caller. The
+  ref counter would silently under-report after a `git pull` deleted
+  a file out from under the index. Now warns on stderr ("rlm: refs
+  --parent skipped X: <err>; re-run `rlm index .` to refresh") and
+  drops just that file's entries from the parent-filtered result.
+  Matches the existing `staleness.rs` convention for partial-state
+  diagnostics.
+- **README: `auto_create_index = false` instructions corrected**:
+  README claimed `rlm index .` creates `.rlm/config.toml`. It only
+  writes `.rlm/index.db`. Updated to point users at `rlm setup` or
+  the manual two-line snippet for creating the config file.
 - **`src/cli/helpers.rs` module doc no longer claims project-root
   upward-walk** that doesn't exist; `cwd_project_root()` is just
   `std::env::current_dir()`. Doc clarifies the assumption and flags

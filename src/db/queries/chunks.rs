@@ -59,7 +59,7 @@ impl Database {
     /// Batched variant of [`get_chunks_by_ident`]. Returns chunks
     /// matching any of the given identifiers, in batches under the
     /// SQLite host-parameter ceiling — see
-    /// [`Database::query_batched_in`]. Per-batch order is
+    /// [`crate::db::batched::query_batched_in`]. Per-batch order is
     /// `(ident, file_id, start_line)`; callers that need a stable
     /// total order should sort after.
     pub fn get_chunks_by_idents(&self, idents: &[&str]) -> Result<Vec<Chunk>> {
