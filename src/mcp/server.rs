@@ -413,7 +413,7 @@ impl ServerHandler for RlmServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "rlm: Context Broker for semantic code exploration. 21 tools in 4 tiers:\n\
+                "rlm: Context Broker for semantic code exploration. 21 tools in 5 tiers:\n\
                  ORIENT: overview(detail='minimal'|'standard'|'tree', path?) — project structure at 3 zoom levels.\n\
                  SEARCH: search(query) — full-text across symbols. read(path, symbol|section, metadata?) — symbol body + optional type/signature enrichment.\n\
                  ANALYZE: refs(symbol) — all usages + impact analysis. context(symbol, graph?) — body + callers + callees. deps(path), scope(path, line).\n\

@@ -312,8 +312,8 @@ rlm index .
 ### Explore
 
 ```bash
-# Get oriented (~200 tokens)
-rlm map
+# Get oriented (~200 tokens, file map with symbols)
+rlm overview
 
 # Find where something is used
 rlm refs MyStruct
@@ -354,7 +354,7 @@ claude mcp list
 
 That's it. The agent now has direct access to all rlm commands as native tools.
 
-**What the agent sees:** 21 MCP tools organized in 4 tiers:
+**What the agent sees:** 21 MCP tools organized in 5 tiers:
 
 | Tier | Tools | Purpose |
 |------|-------|---------|

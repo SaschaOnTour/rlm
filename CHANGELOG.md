@@ -340,6 +340,23 @@ work that briefly carried that version number is folded here.
   legacy SQLite ceiling itself, so adding any extra placeholder
   would exceed it. The new doc states the helper's contract
   exactly: one IN-clause per batch, no headroom reserved.
+- **README Quick Start `rlm map` → `rlm overview`**: the
+  consolidated `map`/`peek`/`tree` → `overview` rename from 0.6.0
+  hadn't reached the Quick Start snippet, so users following it
+  hit "unknown command map" right out of the gate.
+- **"21 tools in 4 tiers" → "in 5 tiers"** in README + MCP
+  `ServerInfo.instructions`: the body lists five tiers
+  (Orient/Search/Analyze/Edit/Utility); the count claim hadn't
+  caught up when the Edit tier moved its tools out of Search. The
+  `test_server_info_instructions_match_actual_tool_surface` parity
+  test was extended to count `TIER: tool(…)` labels (filtering out
+  prose `IMPORTANT:` etc.) and assert the claim matches, so future
+  drift fails CI rather than ships.
+- **`batched_tests.rs` module doc no longer claims "input-order
+  preservation"**: the helper deliberately dropped that promise in
+  the dedup refactor (it now guarantees only per-batch SQL order
+  with batches concatenated in input-chunk order). The test header
+  was left over from the prior promise.
 - **`src/cli/helpers.rs` module doc no longer claims project-root
   upward-walk** that doesn't exist; `cwd_project_root()` is just
   `std::env::current_dir()`. Doc clarifies the assumption and flags

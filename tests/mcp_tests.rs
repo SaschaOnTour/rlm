@@ -162,6 +162,48 @@ fn test_server_info_instructions_match_actual_tool_surface() {
         "`quality(... clear? ...)` was removed; the field no longer exists \
          on the read-only `quality` tool and listing it misleads agents.\n\n{instructions}"
     );
+
+    // Tier count claim must match the actual number of `TIER:` labels
+    // in the body. Drift here used to slip past the tool-count check
+    // (e.g. "21 tools in 4 tiers" while the body listed 5 tier
+    // labels — Orient/Search/Analyze/Edit/Utility).
+    //
+    // Tier-labels are ALL-CAPS followed by `:` AND a lowercase tool
+    // identifier (the first tool in the tier). Other ALL-CAPS labels
+    // in the prose — `IMPORTANT:` / `NOTE:` / similar — get followed
+    // by quoted strings or other non-ident text and don't count.
+    let tier_label_count = instructions
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            let head: String = trimmed.chars().take_while(|c| *c != ':').collect();
+            if head.is_empty() || !head.chars().all(|c| c.is_ascii_uppercase()) {
+                return false;
+            }
+            let after_colon = trimmed
+                .get(head.len() + 1..)
+                .map(str::trim_start)
+                .unwrap_or("");
+            // First non-space char after `:` is an ASCII lowercase
+            // letter — i.e. a tool ident like `overview` / `search`,
+            // not a quoted directive like `'read'`.
+            after_colon
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase())
+        })
+        .count();
+    assert!(
+        tier_label_count > 0,
+        "no tier labels detected in instructions — has the formatting changed? \n\n{instructions}"
+    );
+    let claim = format!("{tier_label_count} tiers");
+    assert!(
+        instructions.contains(&claim),
+        "instructions claim a different tier count than the body lists \
+         ({tier_label_count} `TIER: tool(…)` labels found). Update the \
+         leading sentence to say `{claim}`.\n\n{instructions}"
+    );
 }
 
 // =============================================================================

@@ -1,10 +1,15 @@
 //! Tests for [`query_batched_in`].
 //!
 //! Verifies chunking behavior at the boundary (`limit < input` vs
-//! `limit >= input`), input-order preservation across batches, and
-//! the empty-input fast path. Driven via the
-//! `query_batched_in_with_limit` test seam so we don't need 33k-row
-//! fixtures to exercise the chunk-crossing path.
+//! `limit >= input`), set-semantics dedup across batch boundaries,
+//! and the empty-input fast path. Result order is deliberately *not*
+//! pinned end-to-end — the helper promises only "per-batch SQL
+//! order, batches concatenated in input-chunk order" (see the
+//! module doc); tests that compare against sorted inputs are pinning
+//! row presence, not order. Driven via the
+//! `query_batched_in_with_limit` test seam so we don't need
+//! `SQLITE_VAR_LIMIT + 1` fixtures to exercise the chunk-crossing
+//! path.
 
 use super::{query_batched_in, query_batched_in_with_limit, SQLITE_VAR_LIMIT};
 use crate::db::Database;
