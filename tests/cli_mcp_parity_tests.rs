@@ -81,7 +81,11 @@ const TOOL_PARITY: &[(&str, &[&str])] = &[
     (
         "quality",
         &[
-            // MCP `quality` mirrors the CLI flag set 1:1.
+            // MCP `quality` mirrors the CLI inspect flag set 1:1
+            // (unknown_only/all/summary). The destructive truncate path
+            // lives in the dedicated `quality_clear` tool on MCP and
+            // the `rlm quality clear` subcommand on CLI — covered by
+            // the MCP_ONLY_TOOLS whitelist above.
         ],
     ),
 ];
@@ -180,9 +184,12 @@ const CLI_ONLY_COMMANDS: &[&str] = &["mcp", "setup"];
 /// MCP tools that intentionally have no same-named CLI counterpart.
 ///
 /// Post-0.5.0 consolidation: savings report is now served by
-/// `stats(savings=true, since=...)` on both surfaces. No MCP-only
-/// tools remain.
-const MCP_ONLY_TOOLS: &[&str] = &[];
+/// `stats(savings=true, since=...)` on both surfaces. The
+/// `quality_clear` entry below names a CLI subcommand
+/// (`rlm quality clear`) rather than a top-level command, so the
+/// command-set parity check — which only enumerates top-level CLI
+/// subcommands — won't see the match without this whitelist.
+const MCP_ONLY_TOOLS: &[&str] = &["quality_clear"];
 
 #[test]
 fn cli_mcp_command_set_parity() {

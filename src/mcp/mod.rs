@@ -1,5 +1,6 @@
 pub mod server;
 mod server_helpers;
+mod server_lifecycle;
 pub mod tool_handlers;
 pub mod tool_handlers_edit;
 pub mod tool_handlers_index;

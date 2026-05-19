@@ -1,13 +1,24 @@
 //! Utility tool handlers for the MCP server.
 //!
-//! Contains handlers for utility/diagnostic tools: stats, quality,
-//! partition, summarize, diff, context, deps, scope, verify, supported.
-//! Every handler is a thin wrapper over one [`RlmSession`] method.
+//! Each handler is a thin wrapper over a single
+//! [`application::facades`](crate::application::facades) call — one
+//! application-touchpoint per handler, which is what call_parity
+//! enforces.
+//!
+//! One documented exception: `handle_supported` calls
+//! [`RlmSession::supported`] directly because the list of supported
+//! languages is a pure function — no project root, no index, no
+//! session state. Wrapping it in a facade would add indirection
+//! without buying anything; the CLI's `cmd_supported` does the
+//! same on the other adapter side.
+
+use std::path::Path;
 
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 
 use crate::application::content::partition;
+use crate::application::facades;
 use crate::application::query::stats::QualityFlags;
 use crate::application::session::RlmSession;
 use crate::output::Formatter;
@@ -15,42 +26,40 @@ use crate::output::Formatter;
 use super::server::RlmServer;
 
 /// Handle the `stats` tool: indexing summary or token-savings report.
-// qual:api
 pub fn handle_stats(
-    session: &RlmSession,
+    project_root: &Path,
     savings_flag: bool,
     since: Option<&str>,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match session.stats(savings_flag, since) {
-        Ok(out) => Ok(RlmServer::success_text(
-            formatter,
-            RlmServer::to_json(&out.body),
-        )),
-        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-    }
+    RlmServer::respond_json(
+        formatter,
+        facades::stats_project(project_root, savings_flag, since).map(|out| out.body),
+    )
 }
 
 /// Handle the `quality` tool: inspect parse-quality issues.
-// qual:api
 pub fn handle_quality(
-    session: &RlmSession,
+    project_root: &Path,
     flags: QualityFlags,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match session.quality(flags) {
-        Ok(body) => Ok(RlmServer::success_text(
-            formatter,
-            RlmServer::to_json(&body),
-        )),
-        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-    }
+    RlmServer::respond_json(formatter, facades::quality_project(project_root, flags))
+}
+
+/// Handle the `quality_clear` tool: truncate the parse-quality log.
+/// Companion to [`handle_quality`] — surfaced as a separate MCP tool
+/// without the `read_only_hint` annotation since this *is* a write.
+pub fn handle_quality_clear(
+    project_root: &Path,
+    formatter: Formatter,
+) -> Result<CallToolResult, McpError> {
+    RlmServer::respond_json(formatter, facades::quality_clear_project(project_root))
 }
 
 /// Handle the `partition` tool: split a file into chunks.
-// qual:api
 pub fn handle_partition(
-    session: &RlmSession,
+    project_root: &Path,
     path: &str,
     strategy_str: &str,
     formatter: Formatter,
@@ -59,98 +68,85 @@ pub fn handle_partition(
         Ok(s) => s,
         Err(e) => return Ok(RlmServer::error_text(formatter, e.to_string())),
     };
-    match session.partition(path, strategy) {
-        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
-        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-    }
+    RlmServer::respond_string(
+        formatter,
+        facades::partition_project(project_root, path, strategy).map(|r| r.body),
+    )
 }
 
 /// Handle the `summarize` tool: generate a condensed file summary.
-// qual:api
 pub fn handle_summarize(
-    session: &RlmSession,
+    project_root: &Path,
     path: &str,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match session.summarize(path) {
-        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
-        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-    }
+    RlmServer::respond_string(
+        formatter,
+        facades::summarize_project(project_root, path).map(|r| r.body),
+    )
 }
 
 /// Handle the `diff` tool: compare indexed vs disk version.
-// qual:api
 pub fn handle_diff(
-    session: &RlmSession,
+    project_root: &Path,
     path: &str,
     symbol: Option<&str>,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match session.diff(path, symbol) {
-        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
-        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-    }
+    RlmServer::respond_string(
+        formatter,
+        facades::diff_project(project_root, path, symbol).map(|r| r.body),
+    )
 }
 
 /// Handle the `context` tool: complete understanding of a symbol.
-// qual:api
 pub fn handle_context(
-    session: &RlmSession,
+    project_root: &Path,
     symbol: &str,
     include_graph: bool,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match session.context(symbol, include_graph) {
-        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
-        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-    }
+    RlmServer::respond_string(
+        formatter,
+        facades::context_project(project_root, symbol, include_graph).map(|r| r.body),
+    )
 }
 
 /// Handle the `deps` tool: file dependency analysis.
-// qual:api
 pub fn handle_deps(
-    session: &RlmSession,
+    project_root: &Path,
     path: &str,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match session.deps(path) {
-        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
-        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-    }
+    RlmServer::respond_string(
+        formatter,
+        facades::deps_project(project_root, path).map(|r| r.body),
+    )
 }
 
 /// Handle the `scope` tool: symbols visible at a specific line.
-// qual:api
 pub fn handle_scope(
-    session: &RlmSession,
+    project_root: &Path,
     path: &str,
     line: u32,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match session.scope(path, line) {
-        Ok(response) => Ok(RlmServer::success_text(formatter, response.body)),
-        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-    }
+    RlmServer::respond_string(
+        formatter,
+        facades::scope_project(project_root, path, line).map(|r| r.body),
+    )
 }
 
 /// Handle the `verify` tool: verify index integrity.
-// qual:api
 pub fn handle_verify(
-    session: &RlmSession,
+    project_root: &Path,
     fix: bool,
     formatter: Formatter,
 ) -> Result<CallToolResult, McpError> {
-    match session.verify(fix) {
-        Ok(result) => Ok(RlmServer::success_text(
-            formatter,
-            RlmServer::to_json(&result),
-        )),
-        Err(e) => Ok(RlmServer::error_text(formatter, e.to_string())),
-    }
+    RlmServer::respond_json(formatter, facades::verify_project(project_root, fix))
 }
 
 /// Handle the `supported` tool: list supported file extensions.
-// qual:api
 pub fn handle_supported(formatter: Formatter) -> Result<CallToolResult, McpError> {
     Ok(RlmServer::success_text(
         formatter,

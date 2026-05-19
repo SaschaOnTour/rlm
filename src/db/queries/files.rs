@@ -39,20 +39,25 @@ impl Database {
         let mut stmt = self.conn().prepare(
             "SELECT id, path, hash, lang, size_bytes, mtime_nanos FROM files WHERE path = ?1",
         )?;
-        let mut rows = stmt.query_map(params![path], |row| {
-            Ok(FileRecord {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                hash: row.get(2)?,
-                lang: row.get(3)?,
-                size_bytes: row.get::<_, i64>(4)? as u64,
-                mtime_nanos: row.get(5)?,
-            })
-        })?;
+        let mut rows = stmt.query_map(params![path], file_record_from_row)?;
         match rows.next() {
             Some(r) => Ok(Some(r?)),
             None => Ok(None),
         }
+    }
+
+    /// Batched variant of [`get_file_by_path`] keyed by id. Returns the
+    /// file records for every id in `ids`, in batches under the SQLite
+    /// host-parameter ceiling — see [`crate::db::batched::query_batched_in`].
+    /// Result order is per-batch `(id)`; callers that need a stable
+    /// total order should sort after.
+    pub fn get_files_by_ids(&self, ids: &[i64]) -> Result<Vec<FileRecord>> {
+        crate::db::batched::query_batched_in(
+            self,
+            ids,
+            build_files_in_ids_query,
+            file_record_from_row,
+        )
     }
 
     /// Get per-file metadata needed by staleness detection: id, path, hash,
@@ -84,16 +89,7 @@ impl Database {
         let mut stmt = self.conn().prepare(
             "SELECT id, path, hash, lang, size_bytes, mtime_nanos FROM files ORDER BY path",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(FileRecord {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                hash: row.get(2)?,
-                lang: row.get(3)?,
-                size_bytes: row.get::<_, i64>(4)? as u64,
-                mtime_nanos: row.get(5)?,
-            })
-        })?;
+        let rows = stmt.query_map([], file_record_from_row)?;
         let mut files = Vec::new();
         for r in rows {
             files.push(r?);
@@ -163,4 +159,37 @@ impl Database {
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
+}
+
+/// Build the SELECT-with-`IN(?,?,…)` SQL for a `get_files_by_ids`
+/// call. Mirrors `build_chunks_in_idents_query`: the `n == 0` case
+/// emits a never-matching predicate so SQLite doesn't choke on
+/// `IN ()`, and the integration-side `get_files_by_ids` stays pure
+/// calls.
+fn build_files_in_ids_query(n: usize) -> String {
+    if n == 0 {
+        return "SELECT id, path, hash, lang, size_bytes, mtime_nanos FROM files WHERE 0 = 1"
+            .to_string();
+    }
+    let placeholders = std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",");
+    format!(
+        "SELECT id, path, hash, lang, size_bytes, mtime_nanos
+         FROM files WHERE id IN ({placeholders})
+         ORDER BY id"
+    )
+}
+
+/// Project a single `SELECT id, path, hash, lang, size_bytes,
+/// mtime_nanos FROM files ...` row into a [`FileRecord`]. Shared by
+/// every read that returns the canonical column set so the column
+/// indices live in exactly one place.
+fn file_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRecord> {
+    Ok(FileRecord {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        hash: row.get(2)?,
+        lang: row.get(3)?,
+        size_bytes: row.get::<_, i64>(4)? as u64,
+        mtime_nanos: row.get(5)?,
+    })
 }

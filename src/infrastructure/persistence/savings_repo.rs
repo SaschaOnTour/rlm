@@ -2,6 +2,7 @@
 
 use crate::db::queries::SavingsQueryRow;
 use crate::db::Database;
+use crate::domain::savings::SavingsEntry;
 use crate::error::Result;
 
 /// Write and aggregate savings entries.
@@ -15,19 +16,8 @@ pub trait SavingsRepo {
         files_touched: u64,
     ) -> Result<()>;
 
-    /// Full V2 entry: input tokens and call counts in addition to outputs.
-    #[allow(clippy::too_many_arguments)]
-    fn record_savings_v2(
-        &self,
-        command: &str,
-        output_tokens: u64,
-        alternative_tokens: u64,
-        files_touched: u64,
-        rlm_input_tokens: u64,
-        alt_input_tokens: u64,
-        rlm_calls: u64,
-        alt_calls: u64,
-    ) -> Result<()>;
+    /// Full V2 entry: writes all eight columns from `entry`.
+    fn record_savings_v2(&self, entry: &SavingsEntry) -> Result<()>;
 
     fn get_savings_by_command(&self, since: Option<&str>) -> Result<Vec<SavingsQueryRow>>;
 
@@ -55,28 +45,8 @@ impl SavingsRepo for Database {
         )
     }
 
-    fn record_savings_v2(
-        &self,
-        command: &str,
-        output_tokens: u64,
-        alternative_tokens: u64,
-        files_touched: u64,
-        rlm_input_tokens: u64,
-        alt_input_tokens: u64,
-        rlm_calls: u64,
-        alt_calls: u64,
-    ) -> Result<()> {
-        Database::record_savings_v2(
-            self,
-            command,
-            output_tokens,
-            alternative_tokens,
-            files_touched,
-            rlm_input_tokens,
-            alt_input_tokens,
-            rlm_calls,
-            alt_calls,
-        )
+    fn record_savings_v2(&self, entry: &SavingsEntry) -> Result<()> {
+        Database::record_savings_v2(self, entry)
     }
 
     fn get_savings_by_command(&self, since: Option<&str>) -> Result<Vec<SavingsQueryRow>> {

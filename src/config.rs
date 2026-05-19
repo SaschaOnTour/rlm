@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Result, RlmError};
+use crate::error::Result;
 
 /// Default directory name for rlm index data.
 const RLM_DIR: &str = ".rlm";
@@ -83,6 +83,13 @@ pub struct IndexingSettings {
     pub max_file_size_mb: u32,
     /// Whether to use incremental indexing.
     pub incremental: bool,
+    /// When true (default), `ensure_index` auto-creates `.rlm/index.db`
+    /// on the first read against a fresh project. When false, the
+    /// first read errors with `IndexAutoCreateDisabled` and asks the
+    /// caller to run `rlm index` explicitly first. Applies to both CLI
+    /// and MCP — set to `false` for shared workspaces where you don't
+    /// want background MCP calls to silently create `.rlm/`.
+    pub auto_create_index: bool,
 }
 
 impl Default for IndexingSettings {
@@ -99,6 +106,7 @@ impl Default for IndexingSettings {
             ],
             max_file_size_mb: 10,
             incremental: true,
+            auto_create_index: true,
         }
     }
 }
@@ -159,13 +167,6 @@ impl Config {
         }
     }
 
-    /// Create config from the current working directory.
-    pub fn from_cwd() -> Result<Self> {
-        let cwd = std::env::current_dir()
-            .map_err(|e| RlmError::Config(format!("cannot get cwd: {e}")))?;
-        Ok(Self::new(cwd))
-    }
-
     /// Load settings from config.toml if it exists.
     fn load_settings(config_path: &Path) -> Option<UserSettings> {
         if !config_path.exists() {
@@ -220,8 +221,9 @@ const BYTES_PER_MB: u64 = 1024 * 1024;
 impl Config {
     fn save_settings(&self) -> Result<()> {
         self.ensure_rlm_dir()?;
-        let content = toml::to_string_pretty(&self.settings)
-            .map_err(|e| RlmError::Config(format!("failed to serialize settings: {e}")))?;
+        let content = toml::to_string_pretty(&self.settings).map_err(|e| {
+            crate::error::RlmError::Config(format!("failed to serialize settings: {e}"))
+        })?;
         std::fs::write(&self.config_path, content)?;
         Ok(())
     }

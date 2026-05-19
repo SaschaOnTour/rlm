@@ -10,6 +10,7 @@ pub trait ChunkRepo {
     fn delete_chunks_for_file(&self, file_id: i64) -> Result<()>;
     fn get_chunks_for_file(&self, file_id: i64) -> Result<Vec<Chunk>>;
     fn get_chunks_by_ident(&self, ident: &str) -> Result<Vec<Chunk>>;
+    fn get_chunks_by_idents(&self, idents: &[&str]) -> Result<Vec<Chunk>>;
     fn get_chunk_by_id(&self, id: i64) -> Result<Option<Chunk>>;
     fn get_all_chunks(&self) -> Result<Vec<Chunk>>;
 }
@@ -29,6 +30,10 @@ impl ChunkRepo for Database {
 
     fn get_chunks_by_ident(&self, ident: &str) -> Result<Vec<Chunk>> {
         Database::get_chunks_by_ident(self, ident)
+    }
+
+    fn get_chunks_by_idents(&self, idents: &[&str]) -> Result<Vec<Chunk>> {
+        Database::get_chunks_by_idents(self, idents)
     }
 
     fn get_chunk_by_id(&self, id: i64) -> Result<Option<Chunk>> {

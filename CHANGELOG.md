@@ -7,6 +7,375 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-18
+
+The combined **call-parity + polysemy + adapter-helper + perf** release.
+
+Three architectural threads land together as one breaking version:
+
+1. **Call parity** — every CLI and MCP tool dispatch now funnels
+   through a single application-layer touchpoint per command via the
+   new `application::facades::*_project` seam. Both adapters reach
+   exactly the same application function for every command, and
+   rustqual's `[architecture.call_parity]` rule passes everywhere.
+2. **Polysemy disambiguation** — symbols that share a name across
+   parents (`new`, `as_str`, `open`) now carry `parent` (and where
+   relevant `kind`) in every result shape, so clients can tell
+   `Foo::new` from `Bar::new` without re-reading source.
+3. **Adapter helper seam** — `cli::helpers::run_facade` and
+   `RlmServer::respond_string` / `respond_json` collapse the
+   per-command boilerplate to one line on each side. The `refs
+   --parent` filter is column-aware so multiple same-line calls
+   (`Foo::new(); Bar::new();`) disambiguate correctly.
+
+`Cargo.toml` jumps from `0.5.0` to `0.6.0` because several public
+JSON-result shapes change. There never was a released `0.5.1`; the
+work that briefly carried that version number is folded here.
+
+### Changed (breaking)
+
+- **`ContextResult` (`rlm context`)**: shape now reads
+  `{ symbol, definitions: Vec<DefinitionEntry>, caller_count: usize,
+  callees: Vec<SymbolRef>, file_count, tokens }`. Two breaking pieces:
+  - The old `body` + `signatures` top-level pair is gone; each
+    `DefinitionEntry { parent: Option<String>, signature:
+    Option<String>, body: String }` carries the disambiguation
+    polysemic queries need. Migration: walk `definitions[]` instead
+    of reading top-level `body` / `signatures`.
+  - The old `callee_names: Vec<String>` field is replaced by
+    `callees: Vec<SymbolRef>` (same `SymbolRef { parent:
+    Option<String>, ident: String }` as `CallgraphResult.callees`).
+    Migration: read `.ident` for the old string view; `.parent`
+    disambiguates `Foo::new` vs `Bar::new`.
+- **`CallgraphResult.callers` / `.callees` (`rlm context --graph`,
+  internal `callgraph`)**: `Vec<String>` → `Vec<SymbolRef>` where
+  `SymbolRef { parent: Option<String>, ident: String }`. Migration:
+  read `.ident` for the old string view; `.parent` disambiguates
+  `Foo::new` vs `Bar::new`.
+- **`ScopeResult.containing` / `.visible` (`rlm scope`)**:
+  `Vec<String>` → `Vec<ScopeSymbol>` where `ScopeSymbol { parent:
+  Option<String>, ident: String, kind: String }`. `.kind` newly
+  exposes whether each entry is a `fn`, `method`, `struct`, etc.
+- **`SignatureResult.signatures`**: `Vec<String>` →
+  `Vec<SignatureEntry>` where `SignatureEntry { parent:
+  Option<String>, signature: String }`.
+- **`ImpactEntry.col: u32`** added (`rlm refs`, `rlm context
+  --graph`). 0-indexed byte offset of the reference's ident on the
+  source line. Powers the position-accurate `--parent` filter
+  (multiple `Foo::new(); Bar::new();` on one line now disambiguate
+  correctly). Additive — clients that ignore unknown fields keep
+  working; clients pinning a strict schema must accept the extra
+  field.
+- **`ReadRequest::from_optional_inputs` (`rlm read`, MCP `read`)**:
+  the symbol/section XOR validation lives in one application-layer
+  constructor that both adapters call through. `read --symbol foo
+  --section Bar` now errors symmetrically across both adapters
+  (previously CLI clap-rejected it; MCP silently took symbol). The
+  facade takes a `ReadInputs` bundle instead of raw optionals.
+- **`RlmSession::read(ReadRequest)`** / **`RlmSession::replace(input,
+  mode)`**: unified read / replace entry points replace the prior
+  `read_symbol` / `read_section` and `replace_preview` /
+  `replace_apply` pairs. `ReplaceMode::{Preview, Apply}` selects the
+  branch; `ReplaceOutput::{Preview(ReplaceDiff), Applied(String)}`
+  tells the adapter which output shape it received.
+- **MCP input parsing moved adapter-side**: `FieldsMode::from_optional`
+  / `DetailLevel::from_optional` (and `FromStr for DetailLevel`)
+  removed. `tool_handlers_query.rs` now parses JSON strings into
+  typed enums inline at the boundary, matching the CLI's
+  `From<DetailArg>` pattern.
+- **`dispatch_insert` (internal)**: `Option<&Database>` parameter
+  dropped; takes `&Database` directly. The no-index branch
+  (`dispatch_insert(None, …)` returning `{"reindexed": false}`) was
+  unreachable since the facades-refactor — every adapter opens an
+  `RlmSession` which auto-indexes. Caller migration: pass `&db`
+  instead of `Some(&db)`.
+- **`rlm quality` split into read + write surfaces** on both CLI and
+  MCP for honest annotations:
+  - CLI: `rlm quality --clear` is removed. Use `rlm quality clear`
+    (subcommand) to truncate the parse-quality log. `rlm quality`
+    (no subcommand) remains read-only with `--unknown-only` / `--all`
+    / `--summary`.
+  - MCP: `quality` tool keeps `read_only_hint = true` and the
+    `clear` field is gone from `QualityParams`. New `quality_clear`
+    tool — no `read_only_hint` annotation — performs the truncate.
+  - Application layer mirrors the split: `quality_dispatch` /
+    `quality_project` are pure reads; new `clear_quality_log` /
+    `quality_clear_project` own the destructive side. Scripts that
+    relied on `--clear` will fail loudly (clap rejects the flag);
+    migration is a one-token rename to the subcommand.
+
+### Added
+
+- **`[indexing] auto_create_index` setting** in `.rlm/config.toml`.
+  Defaults to `true` (today's behavior: `ensure_index` auto-creates
+  `.rlm/index.db` on the first read against a fresh project). When
+  set to `false`, the first read errors with the typed
+  `RlmError::IndexAutoCreateDisabled` and asks the caller to run
+  `rlm index <project_root>` explicitly. Applies to **both CLI and
+  MCP** — adapter parity. Read-only MCP tools (which carry
+  `read_only_hint = true`) silently writing to a fresh workspace is
+  exactly the scenario this setting exists to disable. Implementation
+  is a single guard in `application::index::ensure_index`; CLI
+  surfaces it through the normal error channel, MCP renders it as a
+  tool-error JSON.
+- **`flake.nix`**: Nix flake exposing `packages.default`,
+  `apps.default`, `devShells.default`, and `overlays.default`. No
+  system libraries required (bundled SQLite, vendored tree-sitter
+  grammars). README's *Quick Start → Installation* section covers
+  `nix run` / `nix build` / overlay workflows.
+- **`application::facades` module** (`src/application/facades.rs`):
+  17 per-command facades named `<command>_project` (`search`,
+  `overview`, `refs`, `partition`, `summarize`, `diff`, `context`,
+  `deps`, `scope`, `delete`, `insert`, `extract`, `stats`, `quality`,
+  `verify`, `read`, `replace`). Each opens a fresh `RlmSession` and
+  dispatches one session method; adapters call exactly one facade
+  per handler.
+- **`ReadCliArgs`, `ReplaceCliArgs`** in `cli/handlers`: grouped
+  clap-parsed inputs. `cmd_read` and `cmd_replace` drop from 6
+  parameters to 2 — under the SRP ceiling without a `qual:allow`.
+- **`SectionNotFoundError`** in `error.rs`: dedicated error struct
+  carrying `heading + available + total` plus a `Display` impl that
+  renders the "available sections" hint. Follows the existing
+  `AmbiguousSymbolError` pattern (struct method, not free helper)
+  so the formatting logic stays visible to call-graph analysis.
+- **`cli_helpers` / `mcp_helpers` rustqual layers**: split out from
+  `cli` / `mcp` so adapter-internal helpers (formatters, error
+  mappers, MCP server lifecycle, clap data structs, the `rlm setup`
+  glue) sit outside the call-parity adapter list. The `cli` / `mcp`
+  layers now contain only command-handler endpoints.
+- **`src/cli/lifecycle_handlers.rs`** (`cmd_mcp`, `cmd_setup`) and
+  **`src/mcp/server_lifecycle.rs`** (`RlmServer::new` plus
+  accessors): lifted out of their respective adapter files —
+  they're pure runtime / Claude-Code-integration wiring, not
+  business-logic endpoints.
+- **`Database::get_chunks_by_idents(&[&str])`** and
+  **`Database::get_files_by_ids(&[i64])`** batched read paths
+  (`IN(?,?,…)` queries). Removes N+1 round-trips from
+  `callgraph::collect_callees_with_parents` and
+  `impact::collect_target_candidates` — both are now single-query
+  per `rlm refs` / `rlm context --graph` call. ChunkRepo and
+  FileRepo traits expose the new methods.
+- **`RlmServer::respond_string` / `respond_json`** MCP-side response
+  helpers. Collapses 18 `match facades::X { Ok(r) =>
+  success_text(formatter, r.body), Err(e) =>
+  error_text(formatter, e.to_string()) }` blocks in
+  `tool_handlers_*.rs` to one-liners.
+- **`cli::helpers::run_facade(formatter, |root| …)`** CLI-side
+  mirror of the MCP response helper. Collapses 13 cmd_X handlers
+  from the `cwd_project_root() → facades::X → print_str`
+  boilerplate to one-liners.
+- **`filter_impacted_by_parent` group-by-file refactor**: each
+  source file is now read at most once per `refs --parent` call
+  instead of once per matched ref. With the col-aware predicate
+  this replaces what used to be the dominant per-call cost on
+  high-fan-out symbols.
+
+### Changed
+
+- **rustqual 1.2.3 SRP cleanup**: with rustqual 1.2.3 fixing the
+  pre-existing `pub use` resolution gap, the visibility gap inside
+  `#[tool_router]`, and the over-broad `qual:allow` scope, six
+  functions whose 6/8-parameter signatures had been hidden behind
+  invalid `qual:allow(srp_params)` annotations now bundle their
+  inputs into typed structs:
+  - `Database::record_savings_v2` accepts `&SavingsEntry` (was 8
+    positional params).
+  - `serialize_and_record_entry` accepts `&SavingsProfile`
+    (alt_tokens / alt_calls / files_touched bundled).
+  - `extract_symbols` accepts `&ExtractInput` (source/symbols/to/
+    parent bundled; field rename `source_path → path`,
+    `idents → symbols`, `dest_path → to`).
+  - `apply_edit` accepts `&EditTarget<'_>` (file_path/symbol/parent
+    bundled).
+  - `replace_symbol` / `delete_symbol` accept `&ReplaceInput<'_>` /
+    `&DeleteInput<'_>` (the same DTOs `write_dispatch` already used,
+    promoted via `pub use` in `application::edit`).
+- **`dispatch_replace_preview` / `dispatch_replace_apply`** in
+  `write_dispatch` are now `pub(crate)`; `dispatch_replace(input,
+  mode)` is the single public dispatcher.
+- **`application::savings` split**: `get_savings_report` moved to a
+  new `application::savings::reporting` submodule. Recording-side
+  helpers stay in `application::savings`; `reporting.rs` owns the
+  aggregation math. Module-level SRP signal stays under threshold
+  without `qual:allow`.
+
+### Removed
+
+- **`application::query::tree::format_tree`** — unused free
+  function (only callers were itself recursively + two tests).
+  Tree responses are emitted via `TreeResult` JSON serialisation.
+- **Six stale `qual:allow(srp_params)` annotations** on
+  `Database::record_savings_v2`, `serialize_and_record_entry`,
+  `extract_symbols`, `apply_edit`, `replace_symbol`,
+  `delete_symbol`. `srp_params` was never a valid rustqual
+  dimension name (valid SRP dimensions are `srp`, `srp_struct`,
+  `srp_module`). Resolved structurally via the typed input structs
+  listed above.
+- **`RlmSession::read_symbol`, `RlmSession::read_section`** —
+  replaced by the unified `RlmSession::read(ReadRequest)`.
+- **`RlmSession::replace_preview`, `RlmSession::replace_apply`** —
+  replaced by `RlmSession::replace(input, mode)`.
+- **`ReadSectionResult` enum and `into_body_or_error`** — not-found
+  cases now bubble up as typed `RlmError::SectionNotFound(...)` /
+  `RlmError::FileNotFound` and ride the standard error channel.
+- **`ReadSymbolOutput`** — collapsed into the unified `ReadOutput`
+  (shared between symbol and section reads).
+- **`open_session_in_cwd` (CLI), `ensure_session` (MCP)** — both
+  dead code after the facade migration. Adapters pass the project
+  root to the facade, which opens the session internally.
+- **`qual:allow(srp_params)` on `cmd_read` / `cmd_replace`** —
+  rustqual 1.2.3 fixed the over-broad-suppression bug that hid
+  these; both functions are properly fixed by the facade refactor
+  and the `*CliArgs` grouping.
+- **`Config::from_cwd`**: replaced by `std::env::current_dir()`
+  directly inside `cli::helpers::cwd_project_root`. `Config::new`
+  no longer runs twice per CLI command; the `.rlm/config.toml`
+  load now happens exactly once.
+- **`cli::helpers::print_str` passthrough wrapper**: 1-line
+  wrapper around `output::print_str`. Call sites now use
+  `output::print_str` directly through a `use crate::output::print_str`
+  re-bind.
+- **`InsertHandlerInput` struct + `InsertInput` type alias** in
+  `mcp::tool_handlers_edit`: redundant with the application-layer
+  `write_dispatch::InsertInput`. `handle_insert` now takes
+  `&super::tools::InsertParams` directly, matching its
+  `handle_replace` / `handle_delete` / `handle_extract` siblings.
+- **`extractor::ExtractSymbolsInput`**: collapsed into
+  `write_dispatch::ExtractInput` (4-field hand-mapping at the
+  call site removed). Extractor takes the dispatcher-named struct
+  directly.
+- **33 of 54 `// qual:api` markers**: on `pub fn` items already
+  visible to rustqual's call_parity walk. 21 load-bearing markers
+  stay: 19 on `mcp/server.rs`'s `async fn` tool methods (the rmcp
+  `#[tool_router]` macro generates the public dispatcher around
+  them), 2 on serde `skip_serializing_if` callbacks, 2 on
+  testonly methods.
+
+### Fixed
+
+- **`rlm read --symbol X --parent Foo --metadata` no longer leaks
+  metadata across files or parents**: the `--metadata` envelope now
+  derives `type_info` and `signature.signatures` from the chunks the
+  read actually returns (file + parent scoped), not from a fresh
+  global `(symbol, parent)` lookup. Concretely: when two files both
+  define `Foo::new`, a read from one file no longer surfaces the
+  other file's signature, and `type_info.file` no longer jumps to
+  whichever priority-pick the global query made. `signature.ref_count`
+  is parent-aware (column-aware path-call resolution drops
+  `Bar::new()` and bare `new()` calls when `--parent Foo` is set) but
+  stays **parent-wide, not definition-scoped** — refs in the index
+  carry only `target_ident`, so attributing a `Foo::new()` call to
+  one specific `Foo::new` definition needs flow analysis rlm
+  intentionally doesn't do. The `SignatureResult::ref_count` doc
+  string and the `ref_count_is_parent_wide_not_definition_scoped`
+  contract-pin test make the limit explicit.
+- **MCP `ServerInfo.instructions` re-synced with the tool surface**:
+  the leading sentence now reads "21 tools" (it had stayed at 20
+  after the `quality_clear` split), names `quality_clear` in the
+  utility list, and drops the obsolete `clear?` flag from `quality`'s
+  parameter sketch. A new parity test fails if the count or the
+  `clear?` token ever drift again.
+- **Concurrent reads no longer race to `SQLITE_BUSY`**: the
+  `Database::open` PRAGMA bundle now sets `busy_timeout=5000` (also
+  the current rusqlite default; set explicitly so a future rusqlite
+  default change doesn't silently regress). MCP tools annotated
+  `read_only_hint = true` still write to the rlm-managed `.rlm/`
+  (savings counters + staleness-driven reindex), so multiple agents
+  reading the same project contend for the single SQLite writer; the
+  annotation means "no writes to your *source files*", not "no DB
+  writes at all". A new `tests/concurrent_reads_tests.rs` spawns five
+  parallel `rlm read` processes against one project and asserts none
+  surface `database is locked`.
+- **`get_chunks_by_idents` / `get_files_by_ids` no longer crash on
+  large inputs**: both built single `IN (?, ?, …)` queries with one
+  host parameter per item. SQLite's `SQLITE_MAX_VARIABLE_NUMBER`
+  ceiling (historically 999, ≥ 3.32: 32766) made these abort with
+  `SQLITE_RANGE` ("too many SQL variables") on projects where a
+  popular symbol like `Result` is referenced across tens of
+  thousands of files. The new `db::batched::query_batched_in` helper
+  funnels every dynamic IN-list through a chunking loop (default
+  batch size 999, parameterised for tests). The helper also
+  deduplicates input before batching so cross-batch duplicates
+  can't double-return the same row — preserves the single-query
+  `IN(...)` set semantics that callers depended on. A new rustqual
+  pattern rule `no_unbatched_in_lists` forbids raw
+  `rusqlite::params_from_iter` outside the helper so the failure
+  mode can't return via a new caller. Row-mapping for chunks now
+  uses named column access (`row.get("file_id")`), incidentally
+  hardening against SELECT-column reorder.
+- **`rlm refs --parent` no longer silently drops entries when a
+  source file is unreadable**: `retain_path_call_entries` used to
+  swallow `read_to_string` errors with no signal to the caller. The
+  ref counter would silently under-report after a `git pull` deleted
+  a file out from under the index. Now warns on stderr ("rlm: refs
+  --parent skipped X: <err>; re-run `rlm index .` to refresh") and
+  drops just that file's entries from the parent-filtered result.
+  Matches the existing `staleness.rs` convention for partial-state
+  diagnostics.
+- **README: `auto_create_index = false` instructions corrected**:
+  README claimed `rlm index .` creates `.rlm/config.toml`. It only
+  writes `.rlm/index.db`. Updated to point users at `rlm setup` or
+  the manual two-line snippet for creating the config file.
+- **README: MCP tool surface table re-synced** to 21 tools (was 18,
+  stale since 0.5.0). Now lists `delete` and `extract` under Edit,
+  `quality` + `quality_clear` under Utility, and clarifies that
+  `savings` lives inside `stats(savings=true)` rather than as a
+  standalone tool. The "savings MCP tool" prose elsewhere in the
+  README was likewise updated.
+- **`text_scan::find_matching_open` / `consume_balanced_brackets_at_start`
+  signature tightened** from `char` to `u8`: the bodies were already
+  byte-typed (matching tree-sitter's byte-offset convention) and
+  silently truncated any non-ASCII delimiter via `open as u8`. The
+  byte-typed API makes the ASCII-only contract honest at the type
+  level; callers pass `b'<'` / `b'>'` instead of `'<'` / `'>'`.
+- **`db::batched::query_batched_in_with_limit` rejects `limit == 0`
+  in release builds**: the previous `debug_assert!` would let a zero
+  batch limit slip past in `--release` and panic deeper inside
+  `chunks(0)` with a less obvious backtrace. Now a runtime `assert!`
+  catches the invariant at the helper boundary. (Production callers
+  use the no-limit wrapper, which hard-codes `SQLITE_VAR_LIMIT`; the
+  guard only matters for the test seam.)
+- **`SQLITE_VAR_LIMIT` doc corrected**: the comment claimed `999`
+  "leaves room" for extra placeholders like `LIMIT ?`. 999 is the
+  legacy SQLite ceiling itself, so adding any extra placeholder
+  would exceed it. The new doc states the helper's contract
+  exactly: one IN-clause per batch, no headroom reserved.
+- **README Quick Start `rlm map` → `rlm overview`**: the
+  consolidated `map`/`peek`/`tree` → `overview` rename from 0.6.0
+  hadn't reached the Quick Start snippet, so users following it
+  hit "unknown command map" right out of the gate.
+- **"21 tools in 4 tiers" → "in 5 tiers"** in README + MCP
+  `ServerInfo.instructions`: the body lists five tiers
+  (Orient/Search/Analyze/Edit/Utility); the count claim hadn't
+  caught up when the Edit tier moved its tools out of Search. The
+  `test_server_info_instructions_match_actual_tool_surface` parity
+  test was extended to count `TIER: tool(…)` labels (filtering out
+  prose `IMPORTANT:` etc.) and assert the claim matches, so future
+  drift fails CI rather than ships.
+- **`batched_tests.rs` module doc no longer claims "input-order
+  preservation"**: the helper deliberately dropped that promise in
+  the dedup refactor (it now guarantees only per-batch SQL order
+  with batches concatenated in input-chunk order). The test header
+  was left over from the prior promise.
+- **Adapter-util module headers re-synced with code**:
+  `mcp::tool_handlers_util` and `cli::handlers_util` both claimed
+  every handler funnels through a single `facades::*_project` call
+  / single `RlmSession` method. In practice each module has
+  intentional exceptions (`*_supported` is a pure function with no
+  project state; CLI `cmd_files` skips the session to avoid
+  triggering `ensure_index`). The headers now name those exceptions
+  explicitly so future readers don't trip over the apparent
+  inconsistency.
+- **`src/cli/helpers.rs` module doc no longer claims project-root
+  upward-walk** that doesn't exist; `cwd_project_root()` is just
+  `std::env::current_dir()`. Doc clarifies the assumption and flags
+  the function as the extension point if discovery ever lands.
+
+After this release, `rustqual --fail-on-warnings` reports
+**0 findings, score 100.0%** under rustqual 1.2.5 (the maintainer
+shipped fixes for the `pub use` / generic-dispatch gaps that this
+slice initially worked around).
+
 ## [0.5.0] - 2026-04-21
 
 The **Test Impact** release. Every `rlm replace / insert / delete /

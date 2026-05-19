@@ -33,10 +33,9 @@ fn test_context_empty_symbol() {
     let result = build_context(&db, "nonexistent").unwrap();
 
     assert_eq!(result.symbol, "nonexistent");
-    assert!(result.body.is_empty());
-    assert!(result.signatures.is_empty());
+    assert!(result.definitions.is_empty());
     assert_eq!(result.caller_count, 0);
-    assert!(result.callee_names.is_empty());
+    assert!(result.callees.is_empty());
 }
 
 #[test]
@@ -106,14 +105,18 @@ fn test_context_basic() {
     let result = build_context(&db, "process_data").unwrap();
 
     assert_eq!(result.symbol, "process_data");
-    assert_eq!(result.body.len(), 1);
-    assert!(result.body[0].contains("process_data"));
-    assert_eq!(result.signatures.len(), 1);
-    assert!(result.signatures[0].contains("Result<String>"));
+    assert_eq!(result.definitions.len(), 1);
+    assert!(result.definitions[0].body.contains("process_data"));
+    let sig = result.definitions[0]
+        .signature
+        .as_deref()
+        .expect("signature should be set");
+    assert!(sig.contains("Result<String>"));
     assert_eq!(result.caller_count, 1);
-    assert_eq!(result.callee_names.len(), 2);
-    assert!(result.callee_names.contains(&"validate".to_string()));
-    assert!(result.callee_names.contains(&"transform".to_string()));
+    let callee_idents: Vec<&str> = result.callees.iter().map(|c| c.ident.as_str()).collect();
+    assert_eq!(result.callees.len(), 2);
+    assert!(callee_idents.contains(&"validate"));
+    assert!(callee_idents.contains(&"transform"));
     assert!(
         result.tokens.output > 0,
         "token estimate should be non-zero for non-empty result"

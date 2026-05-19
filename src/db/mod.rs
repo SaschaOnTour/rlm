@@ -1,3 +1,4 @@
+pub mod batched;
 pub mod connection;
 pub mod migrations;
 pub mod parser_version;

@@ -37,27 +37,70 @@ pub struct ReplaceInput<'a> {
     pub code: &'a str,
 }
 
+/// Which `replace` flavour the caller wants. Adapters pass this to
+/// [`dispatch_replace`] alongside the [`ReplaceInput`], and get back
+/// a typed [`ReplaceOutput`] without branching at the call site.
+#[derive(Debug, Clone, Copy)]
+pub enum ReplaceMode {
+    /// Compute the diff in memory; do not touch disk.
+    Preview,
+    /// Apply the replacement: write the file, reindex, record savings,
+    /// return the envelope as a JSON string.
+    Apply,
+}
+
+/// Result of [`dispatch_replace`]. Two shapes because the preview and
+/// apply paths produce different outputs by design:
+///
+/// * preview is informational — adapters serialise the typed diff
+///   through their own formatter (CLI: `output::print`,
+///   MCP: `RlmServer::to_json`);
+/// * apply runs through the savings recorder, which already produces
+///   a complete JSON envelope (`{ tokens_out, savings, ... }`) the
+///   adapter emits verbatim.
+pub enum ReplaceOutput {
+    /// Preview path — `ReplaceDiff` is `Serialize` so adapters reach
+    /// for their formatter.
+    Preview(ReplaceDiff),
+    /// Apply path — pre-serialised JSON envelope, emit as-is.
+    Applied(String),
+}
+
+/// Single entry point for `replace`. Branches on [`ReplaceMode`] so
+/// adapters reach exactly one application function per command.
+pub fn dispatch_replace(
+    db: &Database,
+    config: &Config,
+    input: &ReplaceInput<'_>,
+    mode: ReplaceMode,
+) -> Result<ReplaceOutput> {
+    match mode {
+        ReplaceMode::Preview => Ok(ReplaceOutput::Preview(dispatch_replace_preview(db, input)?)),
+        ReplaceMode::Apply => Ok(ReplaceOutput::Applied(dispatch_replace_apply(
+            db, config, input,
+        )?)),
+    }
+}
+
 /// Preview a replace: returns the typed diff for the adapter to
-/// serialise through its own formatter.
-pub fn dispatch_replace_preview(db: &Database, input: &ReplaceInput<'_>) -> Result<ReplaceDiff> {
+/// serialise through its own formatter. Module-private — call
+/// [`dispatch_replace`] with [`ReplaceMode::Preview`] instead.
+pub(crate) fn dispatch_replace_preview(
+    db: &Database,
+    input: &ReplaceInput<'_>,
+) -> Result<ReplaceDiff> {
     preview_replace(db, input.path, input.symbol, input.parent, input.code)
 }
 
 /// Apply a replace: call the replacer, reindex, record savings, return
-/// the pre-serialised JSON envelope.
-pub fn dispatch_replace_apply(
+/// the pre-serialised JSON envelope. Module-private — call
+/// [`dispatch_replace`] with [`ReplaceMode::Apply`] instead.
+pub(crate) fn dispatch_replace_apply(
     db: &Database,
     config: &Config,
     input: &ReplaceInput<'_>,
 ) -> Result<String> {
-    let outcome = replace_symbol(
-        db,
-        input.path,
-        input.symbol,
-        input.parent,
-        input.code,
-        &config.project_root,
-    )?;
+    let outcome = replace_symbol(db, input, &config.project_root)?;
     let result_json =
         index::reindex_with_result(db, config, input.path, PreviewSource::Symbol(input.symbol));
     savings_hooks::record_replace(
@@ -83,14 +126,7 @@ pub struct DeleteInput<'a> {
 /// Delete a symbol, reindex, splice sidecar-line info if the adjacent
 /// doc/attr block was removed, record savings.
 pub fn dispatch_delete(db: &Database, config: &Config, input: &DeleteInput<'_>) -> Result<String> {
-    let outcome = delete_symbol(
-        db,
-        input.path,
-        input.symbol,
-        input.parent,
-        input.keep_docs,
-        &config.project_root,
-    )?;
+    let outcome = delete_symbol(db, input, &config.project_root)?;
 
     let base_json =
         index::reindex_with_result(db, config, input.path, PreviewSource::Symbol(input.symbol));
@@ -121,34 +157,25 @@ fn splice_delete_sidecar(base_json: &str, sidecar: Option<(u32, u32)>) -> Result
 
 // ─── Insert ──────────────────────────────────────────────────────────
 
-/// Arguments for `dispatch_insert`. `db` is optional because a fresh
-/// project without an index can still receive inserts — the response
-/// just advertises `reindexed: false` with a helpful hint.
+/// Arguments for `dispatch_insert`.
 pub struct InsertInput<'a> {
     pub path: &'a str,
     pub position: &'a InsertPosition,
     pub code: &'a str,
 }
 
-/// Insert code, then — if an index exists — reindex + record savings.
-/// Returns the pre-serialised JSON envelope both adapters emit.
+/// Insert code, reindex the touched file, and record savings. Returns
+/// the pre-serialised JSON envelope both adapters emit. Both the CLI
+/// and MCP entry points open an `RlmSession` (which `ensure_index`'s
+/// the project), so callers always pass a live `&Database` — the
+/// previous no-index branch was dead and got removed in 0.6.0.
 pub fn dispatch_insert(
-    db: Option<&Database>,
+    db: &Database,
     project_root: &Path,
     input: &InsertInput<'_>,
 ) -> Result<String> {
     let guard = SyntaxGuard::new();
     insert_code(project_root, input.path, input.position, input.code, &guard)?;
-
-    let Some(db) = db else {
-        return Ok(serde_json::json!({
-            "ok": true,
-            "reindexed": false,
-            "hint": "no index; call 'index' to enable auto-reindex",
-        })
-        .to_string());
-    };
-
     let config = Config::new(project_root);
     let result_json =
         index::reindex_with_result(db, &config, input.path, input.position.preview_source());
@@ -174,14 +201,7 @@ pub fn dispatch_extract(
     config: &Config,
     input: &ExtractInput<'_>,
 ) -> Result<String> {
-    let outcome = extract_symbols(
-        db,
-        input.path,
-        input.symbols,
-        input.to,
-        input.parent,
-        &config.project_root,
-    )?;
+    let outcome = extract_symbols(db, input, &config.project_root)?;
 
     let source_json = index::reindex_with_result(db, config, input.path, PreviewSource::None);
     let dest_json = index::reindex_with_result(db, config, input.to, PreviewSource::None);

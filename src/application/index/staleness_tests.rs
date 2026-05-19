@@ -13,11 +13,25 @@ use crate::db::Database;
 use std::fs;
 use tempfile::TempDir;
 
+/// Test-only convenience: assert that a `ChangeReport` reports no
+/// semantic change (reindexed / added / deleted are all zero;
+/// `elapsed_ms` is ignored). Lives here rather than as a method on
+/// `ChangeReport` because nothing in production needs to branch on
+/// "no change" — that would be a query-result-shaped feature, and
+/// production paths just consume the counter values directly.
+#[track_caller]
+fn assert_no_changes(report: &ChangeReport, context: &str) {
+    assert!(
+        report.reindexed == 0 && report.added == 0 && report.deleted == 0,
+        "{context}, got {report:?}",
+    );
+}
+
 #[test]
 fn ensure_fresh_is_clean_on_unchanged_project() {
     let (_tmp, config, db) = setup_indexed(&[("main.rs", "fn main() {}")]);
     let report = ensure_index_fresh(&db, &config).unwrap();
-    assert!(report.is_clean(), "no changes expected, got {report:?}");
+    assert_no_changes(&report, "no changes expected");
 }
 
 #[test]
@@ -34,14 +48,11 @@ fn ensure_fresh_does_not_rehash_file_indexed_in_same_second_as_edit() {
 
     // First call: should be clean (no changes since index).
     let report1 = ensure_index_fresh(&db, &config).unwrap();
-    assert!(report1.is_clean(), "first call clean, got {report1:?}");
+    assert_no_changes(&report1, "first call clean");
 
     // Second call back-to-back (within the same second): still clean.
     let report2 = ensure_index_fresh(&db, &config).unwrap();
-    assert!(
-        report2.is_clean(),
-        "same-second repeat call must stay clean, got {report2:?}"
-    );
+    assert_no_changes(&report2, "same-second repeat call must stay clean");
 }
 
 #[test]
@@ -81,10 +92,7 @@ fn ensure_fresh_refreshes_stored_mtime_after_touch_without_content_change() {
     );
     // Fast path should now be clean without re-hashing.
     let report2 = ensure_index_fresh(&db, &config).unwrap();
-    assert!(
-        report2.is_clean(),
-        "next call must trust the refreshed mtime, got {report2:?}"
-    );
+    assert_no_changes(&report2, "next call must trust the refreshed mtime");
 }
 
 #[test]
@@ -279,18 +287,3 @@ fn ensure_fresh_handles_mixed_changes() {
 // `RLM_SKIP_REFRESH` env var end-to-end behavior is exercised by the
 // integration test `cli_respects_skip_refresh_env` in tests/staleness_tests.rs,
 // which runs each test in its own process (no parallel env-var races).
-
-#[test]
-fn change_report_is_clean_when_all_zero() {
-    let report = ChangeReport::default();
-    assert!(report.is_clean());
-}
-
-#[test]
-fn change_report_not_clean_when_any_change() {
-    let report = ChangeReport {
-        reindexed: 1,
-        ..Default::default()
-    };
-    assert!(!report.is_clean());
-}

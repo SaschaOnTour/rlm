@@ -4,6 +4,31 @@
 //! Each `#[tool]` method is a two-liner: open a [`RlmSession`] for
 //! the current project (or bail with a nice error if no index), then
 //! call the matching handler in `tool_handlers*`.
+//!
+//! ## `read_only_hint = true` semantics
+//!
+//! Every query tool below carries `annotations(read_only_hint = true)`.
+//! In rlm that means: **no writes to the user's source files** — never
+//! to `*.rs`, `*.py`, `*.md`, or any indexed artifact. It does *not*
+//! mean "no writes at all": the rlm-managed `.rlm/` directory may
+//! still be written on the read path for
+//!
+//! 1. **Savings counters** — every successful query records a row in
+//!    `.rlm/index.db` so `rlm stats --savings` can report what rlm
+//!    saved versus a full-file read.
+//! 2. **Staleness-driven reindex** — `RlmSession::open` reconciles
+//!    `files.hash` against the filesystem; an external edit causes
+//!    the affected file to be re-parsed before the read returns.
+//!
+//! Both are part of the read contract: the index stays current, and
+//! the savings model stays honest. The single SQLite writer lock is
+//! held briefly per operation; `Database::open` sets
+//! `busy_timeout=5000` so concurrent agents reading the same project
+//! never surface `SQLITE_BUSY`.
+//!
+//! Tools that *do* mutate source files (`replace`, `insert`, `delete`,
+//! `extract`) and tools that mutate `.rlm/` outside the read contract
+//! (`index`, `quality_clear`) deliberately omit `read_only_hint`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -44,42 +69,33 @@ pub use super::server_helpers::start_mcp_server;
 ///
 /// Holds the project root path and the output formatter. A fresh
 /// [`RlmSession`](crate::application::session::RlmSession) is opened
-/// per tool call via [`Self::ensure_session`] so every request sees a
-/// current index and no global state is shared between requests.
+/// per tool call by the `application::facades::*_project` functions,
+/// so every request sees a current index and no global state is shared
+/// between requests.
 // qual:allow(srp) reason: "rmcp #[tool_router] requires all tools on single struct"
 #[derive(Clone)]
 pub struct RlmServer {
-    project_root: PathBuf,
-    formatter: Formatter,
-    tool_router: Arc<ToolRouter<Self>>,
+    // `pub(super)` so the sibling `server_lifecycle` module (accessors)
+    // can read these fields. Visibility stays inside `mcp`.
+    pub(super) project_root: PathBuf,
+    pub(super) formatter: Formatter,
+    pub(super) tool_router: Arc<ToolRouter<Self>>,
 }
 
-impl RlmServer {
-    /// Get the project root path.
-    pub(crate) fn project_root(&self) -> &PathBuf {
-        &self.project_root
-    }
-
-    /// Get access to the tool router for testing purposes.
-    // qual:api
-    pub fn get_tool_router(&self) -> &ToolRouter<Self> {
-        &self.tool_router
-    }
-}
+// Constructor, accessors, and tool-router exposure all live in
+// `server_lifecycle.rs` (mcp_helpers layer). The macro-generated
+// `Self::tool_router()` is exposed to the parent module via
+// `vis = "pub(super)"` so the sibling can call it.
 
 // -- Tool implementations (thin wrappers) ------------------------------------
 
-#[tool_router]
+// `vis = "pub(super)"` opens the macro-generated `Self::tool_router()`
+// associated function up to the parent module (`mcp`), so the
+// constructor in `server_lifecycle.rs` can call it. Default is private,
+// which would force the constructor to live in this file alongside
+// the macro impl block — landing it in the `mcp` adapter layer.
+#[tool_router(vis = "pub(super)")]
 impl RlmServer {
-    #[must_use]
-    pub fn new(project_root: PathBuf, formatter: Formatter) -> Self {
-        Self {
-            project_root,
-            formatter,
-            tool_router: Arc::new(Self::tool_router()),
-        }
-    }
-
     #[tool(
         description = "Scan and index the codebase into the .rlm/index.db database. Returns file/chunk/ref counts."
     )]
@@ -150,9 +166,8 @@ impl RlmServer {
     )]
     // qual:api
     async fn search(&self, params: Parameters<SearchParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
         tool_handlers::handle_search(
-            &session,
+            self.project_root(),
             &params.0.query,
             params.0.limit.unwrap_or(DEFAULT_SEARCH_LIMIT),
             params.0.fields.as_deref(),
@@ -166,8 +181,7 @@ impl RlmServer {
     )]
     // qual:api
     async fn read(&self, params: Parameters<ReadParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
-        tool_handlers::handle_read(&session, &params.0, self.formatter)
+        tool_handlers::handle_read(self.project_root(), &params.0, self.formatter)
     }
 
     #[tool(
@@ -179,9 +193,8 @@ impl RlmServer {
         &self,
         params: Parameters<OverviewParams>,
     ) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
         tool_handlers::handle_overview(
-            &session,
+            self.project_root(),
             params.0.detail.as_deref(),
             params.0.path.as_deref(),
             self.formatter,
@@ -194,8 +207,12 @@ impl RlmServer {
     )]
     // qual:api
     async fn refs(&self, params: Parameters<RefsParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
-        tool_handlers::handle_refs(&session, &params.0.symbol, self.formatter)
+        tool_handlers::handle_refs(
+            self.project_root(),
+            &params.0.symbol,
+            params.0.parent.as_deref(),
+            self.formatter,
+        )
     }
 
     #[tool(
@@ -203,8 +220,7 @@ impl RlmServer {
     )]
     // qual:api
     async fn replace(&self, params: Parameters<ReplaceParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
-        tool_handlers::handle_replace(&session, &params.0, self.formatter)
+        tool_handlers::handle_replace(self.project_root(), &params.0, self.formatter)
     }
 
     #[tool(
@@ -212,8 +228,7 @@ impl RlmServer {
     )]
     // qual:api
     async fn delete(&self, params: Parameters<DeleteParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
-        tool_handlers::handle_delete(&session, &params.0, self.formatter)
+        tool_handlers::handle_delete(self.project_root(), &params.0, self.formatter)
     }
 
     #[tool(
@@ -221,8 +236,7 @@ impl RlmServer {
     )]
     // qual:api
     async fn extract(&self, params: Parameters<ExtractParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
-        tool_handlers::handle_extract(&session, &params.0, self.formatter)
+        tool_handlers::handle_extract(self.project_root(), &params.0, self.formatter)
     }
 
     #[tool(
@@ -231,15 +245,7 @@ impl RlmServer {
     // qual:api
     // qual:allow(srp) reason: "rmcp #[tool_router] requires &self on all #[tool] methods"
     async fn insert(&self, params: Parameters<InsertParams>) -> Result<CallToolResult, McpError> {
-        // Insert uniquely allows "no index yet" — session may be None.
-        let session = self.try_open_session();
-        let p = &params.0;
-        let input = tool_handlers::InsertInput {
-            path: &p.path,
-            position: &p.position,
-            code: &p.code,
-        };
-        tool_handlers::handle_insert(session.as_ref(), &input, &self.project_root, self.formatter)
+        tool_handlers::handle_insert(self.project_root(), &params.0, self.formatter)
     }
 
     #[tool(
@@ -248,9 +254,8 @@ impl RlmServer {
     )]
     // qual:api
     async fn stats(&self, params: Parameters<StatsParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
         tool_handlers_util::handle_stats(
-            &session,
+            self.project_root(),
             params.0.savings.unwrap_or(false),
             params.0.since.as_deref(),
             self.formatter,
@@ -258,19 +263,25 @@ impl RlmServer {
     }
 
     #[tool(
-        description = "Inspect parse-quality issues logged during indexing. Flags: unknown_only (only issues without a regression test), all (known + unknown), clear (truncate the log), summary (counts by language / issue type).",
+        description = "Inspect parse-quality issues logged during indexing. Flags: unknown_only (only issues without a regression test), all (known + unknown), summary (counts by language / issue type). For truncating the log, use the separate `quality_clear` tool.",
         annotations(read_only_hint = true)
     )]
     // qual:api
     async fn quality(&self, params: Parameters<QualityParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
         let flags = QualityFlags {
             unknown_only: params.0.unknown_only.unwrap_or(false),
             all: params.0.all.unwrap_or(false),
-            clear: params.0.clear.unwrap_or(false),
             summary: params.0.summary.unwrap_or(false),
         };
-        tool_handlers_util::handle_quality(&session, flags, self.formatter)
+        tool_handlers_util::handle_quality(self.project_root(), flags, self.formatter)
+    }
+
+    #[tool(
+        description = "Truncate the parse-quality log. Destructive: replaces the log file's contents with an empty list. Returns `{\"cleared\": true}` on success."
+    )]
+    // qual:api
+    async fn quality_clear(&self) -> Result<CallToolResult, McpError> {
+        tool_handlers_util::handle_quality_clear(self.project_root(), self.formatter)
     }
 
     #[tool(
@@ -282,9 +293,8 @@ impl RlmServer {
         &self,
         params: Parameters<PartitionParams>,
     ) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
         tool_handlers_util::handle_partition(
-            &session,
+            self.project_root(),
             &params.0.path,
             &params.0.strategy,
             self.formatter,
@@ -300,8 +310,7 @@ impl RlmServer {
         &self,
         params: Parameters<SummarizeParams>,
     ) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
-        tool_handlers_util::handle_summarize(&session, &params.0.path, self.formatter)
+        tool_handlers_util::handle_summarize(self.project_root(), &params.0.path, self.formatter)
     }
 
     #[tool(
@@ -310,9 +319,8 @@ impl RlmServer {
     )]
     // qual:api
     async fn diff(&self, params: Parameters<DiffParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
         tool_handlers_util::handle_diff(
-            &session,
+            self.project_root(),
             &params.0.path,
             params.0.symbol.as_deref(),
             self.formatter,
@@ -325,9 +333,8 @@ impl RlmServer {
     )]
     // qual:api
     async fn context(&self, params: Parameters<ContextParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
         tool_handlers_util::handle_context(
-            &session,
+            self.project_root(),
             &params.0.symbol,
             params.0.graph.unwrap_or(false),
             self.formatter,
@@ -340,8 +347,7 @@ impl RlmServer {
     )]
     // qual:api
     async fn deps(&self, params: Parameters<DepsParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
-        tool_handlers_util::handle_deps(&session, &params.0.path, self.formatter)
+        tool_handlers_util::handle_deps(self.project_root(), &params.0.path, self.formatter)
     }
 
     #[tool(
@@ -350,8 +356,12 @@ impl RlmServer {
     )]
     // qual:api
     async fn scope(&self, params: Parameters<ScopeParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
-        tool_handlers_util::handle_scope(&session, &params.0.path, params.0.line, self.formatter)
+        tool_handlers_util::handle_scope(
+            self.project_root(),
+            &params.0.path,
+            params.0.line,
+            self.formatter,
+        )
     }
 
     #[tool(
@@ -378,8 +388,11 @@ impl RlmServer {
     )]
     // qual:api
     async fn verify(&self, params: Parameters<VerifyParams>) -> Result<CallToolResult, McpError> {
-        let session = self.ensure_session()?;
-        tool_handlers_util::handle_verify(&session, params.0.fix.unwrap_or(false), self.formatter)
+        tool_handlers_util::handle_verify(
+            self.project_root(),
+            params.0.fix.unwrap_or(false),
+            self.formatter,
+        )
     }
 
     #[tool(
@@ -400,12 +413,12 @@ impl ServerHandler for RlmServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "rlm: Context Broker for semantic code exploration. 20 tools in 4 tiers:\n\
+                "rlm: Context Broker for semantic code exploration. 21 tools in 5 tiers:\n\
                  ORIENT: overview(detail='minimal'|'standard'|'tree', path?) — project structure at 3 zoom levels.\n\
                  SEARCH: search(query) — full-text across symbols. read(path, symbol|section, metadata?) — symbol body + optional type/signature enrichment.\n\
                  ANALYZE: refs(symbol) — all usages + impact analysis. context(symbol, graph?) — body + callers + callees. deps(path), scope(path, line).\n\
                  EDIT: replace(path, symbol, code, preview?), delete(path, symbol, keep_docs?), insert(path, code, position), extract(path, symbols, to) — Syntax Guard validates all writes.\n\
-                 UTILITY: diff, partition, summarize, files, stats(savings?, since?), quality(unknown_only?, all?, clear?, summary?), verify, supported, index.\n\
+                 UTILITY: diff, partition, summarize, files, stats(savings?, since?), quality(unknown_only?, all?, summary?), quality_clear (destructive — truncates the parse-quality log; split off from `quality` so the read tool can keep read_only_hint=true), verify, supported, index.\n\
                  IMPORTANT: 'read' requires symbol or section. Use Claude Code's Read for full files/line ranges.\n\
                  Check 'q' field: if 'fallback_recommended' is true, prefer Claude Code's Read for affected lines."
                     .into(),

@@ -41,7 +41,6 @@ fn resolve_index_root(
 
 /// Handle the `index` tool: scan and index the codebase, optionally
 /// with a progress callback. Pass `progress = None` for a silent run.
-// qual:api
 pub fn handle_index_with_progress(
     path: Option<&str>,
     project_root: &std::path::Path,

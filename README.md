@@ -158,7 +158,7 @@ cost. rlm packages the follow-up into the first response:
 | Edit a function, verify it compiles | 4 (Grep → Read → Edit → `cargo check`) | 1 (`rlm replace` — response includes `build: { passed, errors }`) | 9–24 s |
 | Look up a method's signature to call it | 2–4 (Grep → Read, repeat on wrong match) | 1 (`rlm read --metadata`) | 3–24 s |
 | Find callers of a symbol (unique name) | 1–5 (Grep → Read each match) | 1 (`rlm refs`) | 3–32 s |
-| Find callers of a common method (`.open()`, `.new()`, `.parse()`) | 5–15+ (each grep hit needs a Read to identify the receiver type before the list is useful) | 1 (`rlm refs Database::open` — AST-filtered to the specific symbol) | 15–120 s |
+| Find callers of a common method (`.open()`, `.new()`, `.parse()`) | 5–15+ (each grep hit needs a Read to identify the receiver type before the list is useful) | 1 (`rlm refs open --parent Database` — AST-filtered to the specific symbol) | 15–120 s |
 | See a symbol's body + callers + callees + type info | 4+ (Read + Grep + Read + type-lookup) | 1 (`rlm context --graph`) | 9–32 s |
 
 The ambiguity multiplier matters most on common method names. A
@@ -241,6 +241,38 @@ cargo build --release
 export PATH="$PWD/target/release:$PATH"
 ```
 
+**Or use the Nix flake (NixOS / nix-darwin / any system with Nix + flakes):**
+
+```bash
+# One-off run without installing
+nix run github:SaschaOnTour/rlm -- --help
+
+# Build into ./result/bin/rlm
+nix build github:SaschaOnTour/rlm
+
+# Drop into a dev shell with rustc, cargo, clippy, nextest, rust-analyzer
+nix develop github:SaschaOnTour/rlm
+```
+
+To add rlm to a NixOS configuration, wire the overlay in:
+
+```nix
+{
+  inputs.rlm.url = "github:SaschaOnTour/rlm";
+
+  outputs = { self, nixpkgs, rlm, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        ({ pkgs, ... }: {
+          nixpkgs.overlays = [ rlm.overlays.default ];
+          environment.systemPackages = [ pkgs.rlm ];
+        })
+      ];
+    };
+  };
+}
+```
+
 ### Index Your Project
 
 ```bash
@@ -251,11 +283,37 @@ rlm index .
 > **Note:** Indexing respects `.gitignore` — files and directories listed there are automatically skipped.
 > Hidden files (starting with `.`) and common build directories (`node_modules/`, `target/`, etc.) are also excluded.
 
+> **⚠️ rlm writes `.rlm/` into your project on first use.**
+> The very first read command (CLI *or* MCP — `rlm refs`, `rlm search`,
+> `rlm context`, …) auto-creates `.rlm/index.db` if it isn't there yet.
+> Your source files stay untouched, but rlm does add a new sibling
+> directory (the index database, ~5–30 MB depending on project size).
+>
+> **Want strict read-only behaviour?** Set
+> `[indexing] auto_create_index = false` in `.rlm/config.toml`. The
+> config file isn't auto-created — generate it with `rlm setup`, or
+> drop in the two-line snippet by hand (`rlm index .` only writes
+> `.rlm/index.db`, not the config). When the setting is `false`, any
+> read on a project without an existing index returns a structured
+> error instead of writing anything. Especially relevant for MCP
+> server scenarios where an agent might land on workspaces the user
+> didn't intend to index.
+
+> **What `read_only_hint = true` means on MCP tools.** rlm annotates
+> every query tool (`read`, `search`, `refs`, `context`, …) as
+> read-only — meaning *your source files are never touched*. Reads
+> may still write to the rlm-managed `.rlm/`: a savings counter is
+> updated per call, and changes to your source files (an editor save,
+> a git pull, a Claude Code edit) trigger a staleness-driven reindex.
+> Multiple agents can read the same project concurrently — the SQLite
+> writer lock is held briefly per op and `busy_timeout=5000` absorbs
+> short contention windows.
+
 ### Explore
 
 ```bash
-# Get oriented (~200 tokens)
-rlm map
+# Get oriented (~200 tokens, file map with symbols)
+rlm overview
 
 # Find where something is used
 rlm refs MyStruct
@@ -296,17 +354,17 @@ claude mcp list
 
 That's it. The agent now has direct access to all rlm commands as native tools.
 
-**What the agent sees:** 18 MCP tools organized in 4 tiers:
+**What the agent sees:** 21 MCP tools organized in 5 tiers:
 
 | Tier | Tools | Purpose |
 |------|-------|---------|
 | **Orient** | `overview` (minimal/standard/tree) | Project structure at 3 zoom levels |
 | **Search** | `search`, `read` (symbol/section + metadata) | Find and read code |
 | **Analyze** | `refs` (with impact), `context` (with callgraph), `deps`, `scope` | Understand code |
-| **Edit** | `replace`, `insert` | Modify code with Syntax Guard |
-| **Utility** | `diff`, `partition`, `summarize`, `files`, `stats`, `savings`, `verify`, `supported`, `index` | Maintenance |
+| **Edit** | `replace`, `insert`, `delete`, `extract` | Modify code with Syntax Guard |
+| **Utility** | `diff`, `partition`, `summarize`, `files`, `stats` (with `savings=true` for token-savings report), `quality`, `quality_clear`, `verify`, `supported`, `index` | Maintenance |
 
-> **Note:** Both MCP and CLI offer the same 18-tool surface. Key consolidations: `peek`/`map`/`tree` → `overview`, `type_info`/`signature` → `read --metadata`, `callgraph` → `context --graph`, `impact` → `refs`.
+> **Note:** Both MCP and CLI offer the same 21-tool surface. Key consolidations: `peek`/`map`/`tree` → `overview`, `type_info`/`signature` → `read --metadata`, `callgraph` → `context --graph`, `impact` → `refs`, `savings` → `stats(savings=true)`. The 0.6.0 `rlm quality` split keeps the read tool annotated `read_only_hint=true` and moves the truncate path into the dedicated `quality_clear` tool.
 
 ### Option B: CLI via CLAUDE.md
 
@@ -519,7 +577,7 @@ Example output:
 {"ops":42,"output":3200,"alternative":48000,"saved":44800,"pct":93.3,"by_cmd":[{"cmd":"overview","ops":12,...}]}
 ```
 
-The `savings` MCP tool provides the same report for AI agents.
+The MCP `stats` tool with `savings: true` (and optional `since`) provides the same report for AI agents — the standalone `savings` tool was folded into `stats` in 0.6.0.
 
 ### Checking Quality via CLI
 

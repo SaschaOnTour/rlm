@@ -75,8 +75,9 @@ fn test_context_multiple_definitions() {
     let result = build_context(&db, "new").unwrap();
 
     assert_eq!(result.symbol, "new");
-    assert_eq!(result.body.len(), 2);
-    assert_eq!(result.signatures.len(), 2);
+    assert_eq!(result.definitions.len(), 2);
+    let bodies_have_content = result.definitions.iter().all(|d| !d.body.is_empty());
+    assert!(bodies_have_content);
     assert_eq!(result.file_count, 2); // defined in 2 distinct files
 }
 
@@ -125,7 +126,8 @@ fn test_context_filters_non_call_refs() {
 
     let result = build_context(&db, "handler").unwrap();
 
-    assert_eq!(result.callee_names.len(), 1);
-    assert!(result.callee_names.contains(&"process".to_string()));
-    assert!(!result.callee_names.contains(&"Request".to_string()));
+    let idents: Vec<&str> = result.callees.iter().map(|c| c.ident.as_str()).collect();
+    assert_eq!(result.callees.len(), 1);
+    assert!(idents.contains(&"process"));
+    assert!(!idents.contains(&"Request"));
 }

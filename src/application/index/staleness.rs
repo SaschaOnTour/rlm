@@ -35,16 +35,6 @@ pub struct ChangeReport {
     pub elapsed_ms: u64,
 }
 
-impl ChangeReport {
-    /// Returns true if no files were reindexed, added, or deleted.
-    /// Useful for callers that want to log or branch only on actual changes.
-    // qual:api
-    #[must_use]
-    pub fn is_clean(&self) -> bool {
-        self.reindexed == 0 && self.added == 0 && self.deleted == 0
-    }
-}
-
 /// Partition of on-disk / indexed file paths into the change categories.
 struct ChangeSet {
     /// Relative paths whose DB hash differs from the scanner's fresh hash.

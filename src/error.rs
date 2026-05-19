@@ -51,6 +51,9 @@ pub enum RlmError {
     #[error("index not found: project must be indexed first")]
     IndexNotFound,
 
+    #[error(transparent)]
+    IndexAutoCreateDisabled(IndexAutoCreateDisabledError),
+
     #[error("file not found: {path}")]
     FileNotFound { path: String },
 
@@ -60,8 +63,8 @@ pub enum RlmError {
     #[error(transparent)]
     AmbiguousSymbol(AmbiguousSymbolError),
 
-    #[error("section not found: {heading}")]
-    SectionNotFound { heading: String },
+    #[error(transparent)]
+    SectionNotFound(SectionNotFoundError),
 
     #[error("parse error in {path}: {detail}")]
     Parse { path: String, detail: String },
@@ -101,6 +104,49 @@ pub enum RlmError {
 }
 
 pub type Result<T> = std::result::Result<T, RlmError>;
+
+/// Maximum number of section headings surfaced in a [`SectionNotFoundError`] hint.
+pub const MAX_SECTION_HINT: usize = 10;
+
+/// Section-lookup failure with a hint for the agent. Wrapped by
+/// [`RlmError::SectionNotFound`]; the `Display` impl renders the
+/// "available sections" hint.
+#[derive(Debug, Clone)]
+pub struct SectionNotFoundError {
+    pub heading: String,
+    pub available: Vec<String>,
+    pub total: usize,
+}
+
+impl std::fmt::Display for SectionNotFoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.available.is_empty() {
+            return write!(
+                f,
+                "section not found: {}. File has no sections.",
+                self.heading
+            );
+        }
+        if self.total > self.available.len() {
+            write!(
+                f,
+                "section not found: {}. Available ({} total, first {MAX_SECTION_HINT}): {}",
+                self.heading,
+                self.total,
+                self.available.join(", ")
+            )
+        } else {
+            write!(
+                f,
+                "section not found: {}. Available: {}",
+                self.heading,
+                self.available.join(", ")
+            )
+        }
+    }
+}
+
+impl std::error::Error for SectionNotFoundError {}
 
 /// Validate that a relative path is safe to join with a project root.
 ///
@@ -223,3 +269,21 @@ impl std::fmt::Display for AmbiguousSymbolError {
 }
 
 impl std::error::Error for AmbiguousSymbolError {}
+
+/// Structured failure when `ensure_index` would create a new
+/// `.rlm/index.db` but the project's `[indexing] auto_create_index =
+/// false` setting forbids it. The `#[error(...)]` template renders
+/// the actionable hint adapters surface to the user.
+#[derive(Debug, Clone, Error)]
+#[error(
+    "no index at {db_path}: run `rlm index {project_root}` first \
+     (auto_create_index is disabled in .rlm/config.toml)",
+    db_path = .db_path.display(),
+    project_root = .project_root.display(),
+)]
+pub struct IndexAutoCreateDisabledError {
+    /// Absolute path the index would have been created at.
+    pub db_path: std::path::PathBuf,
+    /// Project root the user invoked the command from.
+    pub project_root: std::path::PathBuf,
+}

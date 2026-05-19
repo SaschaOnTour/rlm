@@ -63,7 +63,9 @@ fn test_callgraph_no_callers() {
 
     assert_eq!(result.symbol, "main");
     assert!(result.callers.is_empty());
-    assert_eq!(result.callees, vec!["println"]);
+    assert_eq!(result.callees.len(), 1);
+    assert_eq!(result.callees[0].ident, "println");
+    assert!(result.callees[0].parent.is_none());
 }
 
 #[test]
@@ -112,6 +114,7 @@ fn test_callgraph_filters_non_call_refs() {
     let result = build_callgraph(&db, "process").unwrap();
 
     assert_eq!(result.callees.len(), 1);
-    assert!(result.callees.contains(&"helper".to_string()));
-    assert!(!result.callees.contains(&"MyType".to_string()));
+    let idents: Vec<&str> = result.callees.iter().map(|c| c.ident.as_str()).collect();
+    assert!(idents.contains(&"helper"));
+    assert!(!idents.contains(&"MyType"));
 }

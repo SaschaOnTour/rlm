@@ -56,7 +56,6 @@ pub struct TestImpactResult {
 /// DB errors bubble up via `Result`. An *empty* analysis still
 /// returns `Ok` with `no_tests_warning` populated — callers need
 /// that signal.
-// qual:api
 pub fn analyze_test_impact(
     db: &Database,
     project_root: &std::path::Path,

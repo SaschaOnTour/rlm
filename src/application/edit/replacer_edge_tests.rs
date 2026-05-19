@@ -5,7 +5,7 @@
 //! stays in `replacer_tests.rs`; this file covers stale-content detection,
 //! same-length tampering, and path-traversal rejection.
 
-use super::{replace_symbol, Database};
+use super::{replace_symbol, Database, ReplaceInput};
 use crate::domain::chunk::{Chunk, ChunkKind};
 use crate::domain::file::FileRecord;
 
@@ -54,7 +54,16 @@ fn replace_stale_content_rejects() {
     )
     .unwrap();
 
-    let result = replace_symbol(&db, &path, "greet", None, "fn greet() {}", &root);
+    let result = replace_symbol(
+        &db,
+        &ReplaceInput {
+            path: &path,
+            symbol: "greet",
+            parent: None,
+            code: "fn greet() {}",
+        },
+        &root,
+    );
     assert!(result.is_err(), "should reject stale content");
     let msg = format!("{}", result.unwrap_err());
     assert!(
@@ -76,7 +85,16 @@ fn replace_same_length_different_content_rejects() {
     );
     std::fs::write(root.join(&path), tampered).unwrap();
 
-    let result = replace_symbol(&db, &path, "greet", None, "fn greet() {}", &root);
+    let result = replace_symbol(
+        &db,
+        &ReplaceInput {
+            path: &path,
+            symbol: "greet",
+            parent: None,
+            code: "fn greet() {}",
+        },
+        &root,
+    );
     assert!(
         result.is_err(),
         "should reject same-length different content"
@@ -87,7 +105,16 @@ fn replace_same_length_different_content_rejects() {
 fn replace_rejects_absolute_path() {
     let db = Database::open_in_memory().unwrap();
     let root = std::path::Path::new("/tmp");
-    let result = replace_symbol(&db, "/etc/passwd", "foo", None, "bar", root);
+    let result = replace_symbol(
+        &db,
+        &ReplaceInput {
+            path: "/etc/passwd",
+            symbol: "foo",
+            parent: None,
+            code: "bar",
+        },
+        root,
+    );
     assert!(result.is_err());
     assert!(
         format!("{}", result.unwrap_err()).contains("path traversal"),
@@ -99,7 +126,16 @@ fn replace_rejects_absolute_path() {
 fn replace_rejects_parent_traversal() {
     let db = Database::open_in_memory().unwrap();
     let root = std::path::Path::new("/tmp");
-    let result = replace_symbol(&db, "../etc/passwd", "foo", None, "bar", root);
+    let result = replace_symbol(
+        &db,
+        &ReplaceInput {
+            path: "../etc/passwd",
+            symbol: "foo",
+            parent: None,
+            code: "bar",
+        },
+        root,
+    );
     assert!(result.is_err());
     assert!(
         format!("{}", result.unwrap_err()).contains("path traversal"),
@@ -171,7 +207,16 @@ fn dir_to_root(file_path: &std::path::Path) -> std::path::PathBuf {
 #[test]
 fn replace_rejects_ambiguous_symbol_without_parent() {
     let (_dir, db, path, root) = setup_two_new_methods();
-    let result = super::replace_symbol(&db, &path, "new", None, "whatever", &root);
+    let result = super::replace_symbol(
+        &db,
+        &ReplaceInput {
+            path: &path,
+            symbol: "new",
+            parent: None,
+            code: "whatever",
+        },
+        &root,
+    );
     assert!(result.is_err(), "ambiguous replace should error");
     let msg = format!("{}", result.unwrap_err());
     assert!(
@@ -185,10 +230,12 @@ fn replace_picks_by_parent_when_ambiguous() {
     let (_dir, db, path, root) = setup_two_new_methods();
     super::replace_symbol(
         &db,
-        &path,
-        "new",
-        Some("Bar"),
-        "pub fn new() -> Self { Bar::default() }",
+        &ReplaceInput {
+            path: &path,
+            symbol: "new",
+            parent: Some("Bar"),
+            code: "pub fn new() -> Self { Bar::default() }",
+        },
         &root,
     )
     .expect("replace with --parent Bar should succeed");
@@ -207,7 +254,16 @@ fn replace_picks_by_parent_when_ambiguous() {
 #[test]
 fn replace_errors_on_unknown_parent() {
     let (_dir, db, path, root) = setup_two_new_methods();
-    let result = super::replace_symbol(&db, &path, "new", Some("Quux"), "x", &root);
+    let result = super::replace_symbol(
+        &db,
+        &ReplaceInput {
+            path: &path,
+            symbol: "new",
+            parent: Some("Quux"),
+            code: "x",
+        },
+        &root,
+    );
     assert!(result.is_err());
     let msg = format!("{}", result.unwrap_err());
     assert!(
@@ -223,6 +279,15 @@ fn replace_unique_symbol_still_works_with_none_parent() {
     // succeeds exactly like before.
     let original = "fn greet() {\n    println!(\"hi\");\n}";
     let (_dir, db, path, root) = setup_temp_project(original);
-    super::replace_symbol(&db, &path, "greet", None, "fn greet() {}", &root)
-        .expect("unambiguous replace should succeed");
+    super::replace_symbol(
+        &db,
+        &ReplaceInput {
+            path: &path,
+            symbol: "greet",
+            parent: None,
+            code: "fn greet() {}",
+        },
+        &root,
+    )
+    .expect("unambiguous replace should succeed");
 }

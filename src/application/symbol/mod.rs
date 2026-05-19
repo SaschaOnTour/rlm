@@ -20,6 +20,7 @@ use crate::error::Result;
 pub mod callgraph;
 pub mod context;
 pub mod impact;
+mod path_match;
 pub mod refs;
 pub mod scope;
 pub mod signature;
@@ -27,6 +28,7 @@ pub mod similar_symbols;
 pub mod test_impact;
 pub mod test_impact_analyze;
 pub mod test_runner;
+mod text_scan;
 pub mod type_info;
 
 pub use context::{ContextQuery, ContextWithGraphQuery};

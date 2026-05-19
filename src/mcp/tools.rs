@@ -83,6 +83,13 @@ pub struct RefsParams {
     /// Symbol name to find references for.
     #[schemars(description = "Symbol name to find all usages and impact analysis for")]
     pub symbol: String,
+    /// Optional parent type to disambiguate polysemous idents (e.g.
+    /// `OperationResponse` to filter `new` to that type).
+    #[serde(default)]
+    #[schemars(
+        description = "Optional parent type — disambiguates polysemous idents like `new` or `as_str` by filtering to refs path-qualified to this type"
+    )]
+    pub parent: Option<String>,
 }
 
 // ── Replace ─────────────────────────────────────────────────────
@@ -276,9 +283,6 @@ pub struct QualityParams {
     /// Matches CLI `--all`.
     #[schemars(description = "Return every logged issue (known + unknown)")]
     pub all: Option<bool>,
-    /// Clear the quality-issues log. Matches CLI `--clear`.
-    #[schemars(description = "Truncate the quality-issues log")]
-    pub clear: Option<bool>,
     /// Return counts by language/issue type instead of the per-issue
     /// list. Matches CLI `--summary`.
     #[schemars(description = "Emit summary counts instead of the per-issue list")]

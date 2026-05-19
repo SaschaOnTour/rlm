@@ -47,14 +47,18 @@ fn guard_output_truncates_large_result() {
 }
 
 #[test]
-fn ensure_session_runs_staleness_check_on_mcp_path() {
-    // The MCP canonical session-open (RlmServer::ensure_session)
-    // must invoke the self-healing staleness check, mirroring the
-    // CLI session open. Probed through an index-backed query (FTS
-    // search) so the assertion actually depends on the DB being
-    // reconciled — a filesystem scan like `list_files` would find
-    // externally-added files even if staleness never ran and
-    // silently mask the bug.
+fn mcp_facade_path_runs_staleness_check() {
+    // Each MCP tool call funnels through `facades::*_project`, which
+    // opens a fresh `RlmSession` for the server's project root.
+    // `RlmSession::open` MUST invoke the self-healing staleness
+    // check before returning — otherwise externally-modified files
+    // stay invisible to tools and the MCP client serves stale data.
+    //
+    // Probed through an index-backed query (FTS search) so the
+    // assertion actually depends on the DB being reconciled — a
+    // filesystem scan like `list_files` would find externally-added
+    // files even if staleness never ran and silently mask the bug.
+    use crate::application::facades;
     use crate::application::query::search::FieldsMode;
     use std::fs;
     use tempfile::TempDir;
@@ -73,18 +77,19 @@ fn ensure_session_runs_staleness_check_on_mcp_path() {
     )
     .unwrap();
 
-    // MCP path: ensure_session must reconcile before returning.
-    let server = RlmServer::new(tmp.path().to_path_buf(), Formatter::default());
-    let session = server.ensure_session().expect("ensure_session succeeds");
+    // MCP path: the search facade opens a fresh session, which must
+    // reconcile staleness before serving the query.
+    let response = facades::search_project(
+        tmp.path(),
+        "externally_added_unique_marker",
+        10,
+        FieldsMode::Full,
+    )
+    .expect("facade search succeeds");
 
     // DB-backed probe: FTS over the chunks table. If staleness never
     // ran, the `externally_added_unique_marker` symbol is not indexed
-    // and the search comes back empty. `session.search` returns a
-    // pre-serialised `OperationResponse`; we parse the JSON body to
-    // inspect the results.
-    let response = session
-        .search("externally_added_unique_marker", 10, FieldsMode::Full)
-        .expect("session.search succeeds");
+    // and the search comes back empty.
     let parsed: serde_json::Value =
         serde_json::from_str(&response.body).expect("search body is valid JSON");
     let results = parsed["results"].as_array().expect("`results` is an array");
@@ -92,7 +97,7 @@ fn ensure_session_runs_staleness_check_on_mcp_path() {
 
     assert!(
         names.contains(&"externally_added_unique_marker"),
-        "MCP ensure_session must reconcile the index before returning \
+        "MCP facade path must reconcile the index before serving \
          (FTS search found no hits for externally-added symbol — \
          staleness refresh not invoked). Names: {names:?}"
     );

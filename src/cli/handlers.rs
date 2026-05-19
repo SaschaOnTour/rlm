@@ -1,23 +1,25 @@
 //! CLI handlers for code-exploration and edit commands.
 //!
 //! Every handler in this module is a thin wrapper: parse CLI flags,
-//! call one [`RlmSession`] method, emit through the [`Formatter`].
-//! All business logic — DB access, staleness refresh, savings
-//! bookkeeping, envelope splicing — lives behind `RlmSession` in
-//! the application layer.
+//! call exactly **one** [`facades`] function (the per-command
+//! application entry point), emit the result through the
+//! [`Formatter`]. All business logic — DB access, staleness refresh,
+//! savings bookkeeping, envelope splicing — lives behind the facades
+//! in the application layer.
 
 use crate::application::content::partition;
 use crate::application::edit::inserter::InsertPosition;
 use crate::application::edit::write_dispatch::{
-    DeleteInput, ExtractInput, InsertInput, ReplaceInput,
+    DeleteInput, ExtractInput, InsertInput, ReplaceInput, ReplaceMode, ReplaceOutput,
 };
-use crate::application::query::read::ReadSymbolInput;
+use crate::application::facades;
+use crate::application::query::read::ReadInputs;
 use crate::application::query::search::FieldsMode;
 use crate::application::query::DetailLevel;
 use crate::application::session::RlmSession;
-use crate::cli::commands::{DetailArg, FieldsArg};
-use crate::cli::helpers::{map_err, print_str, CmdResult};
-use crate::output::{self, Formatter};
+use crate::cli::commands::{CodeSource, DetailArg, FieldsArg};
+use crate::cli::helpers::{cwd_project_root, map_err, resolve_code, run_facade, CmdResult};
+use crate::output::{self, print_str, Formatter};
 
 // ── Read-side commands ──────────────────────────────────────────────
 
@@ -47,149 +49,118 @@ pub fn cmd_search(query: &str, limit: usize, fields: FieldsArg, formatter: Forma
         FieldsArg::Full => FieldsMode::Full,
         FieldsArg::Minimal => FieldsMode::Minimal,
     };
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let response = session.search(query, limit, mode).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_facade(formatter, |root| {
+        facades::search_project(root, query, limit, mode).map(|r| r.body)
+    })
 }
 
-// qual:allow(srp_params) reason: "path, symbol, parent, section, metadata, formatter are 6 orthogonal CLI args"
-pub fn cmd_read(
-    path: &str,
-    symbol: Option<&str>,
-    parent: Option<&str>,
-    section: Option<&str>,
-    metadata: bool,
-    formatter: Formatter,
-) -> CmdResult {
-    match (symbol, section) {
-        (Some(sym), _) => cmd_read_symbol(path, sym, parent, metadata, formatter),
-        (_, Some(heading)) => cmd_read_section(path, heading, formatter),
-        _ => Err(map_err(
-            "read requires --symbol or --section. Use Claude Code's Read for full files or line ranges.",
-        )),
-    }
+/// Grouped clap inputs for [`cmd_read`]. Carries the raw flags from
+/// the parser; the dispatch into [`ReadRequest::Symbol`] /
+/// [`ReadRequest::Section`] happens inside the handler.
+pub struct ReadCliArgs<'a> {
+    pub path: &'a str,
+    pub symbol: Option<&'a str>,
+    pub parent: Option<&'a str>,
+    pub section: Option<&'a str>,
+    pub metadata: bool,
 }
 
-fn cmd_read_symbol(
-    path: &str,
-    sym: &str,
-    parent: Option<&str>,
-    metadata: bool,
-    formatter: Formatter,
-) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let response = session
-        .read_symbol(&ReadSymbolInput {
-            path,
-            symbol: sym,
-            parent,
-            metadata,
-        })
-        .map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
-}
-
-fn cmd_read_section(path: &str, heading: &str, formatter: Formatter) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let result = session.read_section(path, heading).map_err(map_err)?;
-    match result.into_body_or_error() {
-        Ok(body) => {
-            print_str(formatter, &body);
-            Ok(())
-        }
-        Err(msg) => Err(map_err(msg)),
-    }
+pub fn cmd_read(args: &ReadCliArgs<'_>, formatter: Formatter) -> CmdResult {
+    let inputs = ReadInputs {
+        path: args.path,
+        symbol: args.symbol,
+        section: args.section,
+        parent: args.parent,
+        metadata: args.metadata,
+    };
+    run_facade(formatter, |root| {
+        facades::read_project(root, &inputs).map(|r| r.body)
+    })
 }
 
 pub fn cmd_overview(detail: DetailArg, path: Option<&str>, formatter: Formatter) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
     let level = match detail {
         DetailArg::Minimal => DetailLevel::Minimal,
         DetailArg::Standard => DetailLevel::Standard,
         DetailArg::Tree => DetailLevel::Tree,
     };
-    let response = session.overview(level, path).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_facade(formatter, |root| {
+        facades::overview_project(root, level, path).map(|r| r.body)
+    })
 }
 
-pub fn cmd_refs(symbol: &str, formatter: Formatter) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let response = session.refs(symbol).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+pub fn cmd_refs(symbol: &str, parent: Option<&str>, formatter: Formatter) -> CmdResult {
+    run_facade(formatter, |root| {
+        facades::refs_project(root, symbol, parent).map(|r| r.body)
+    })
 }
 
 pub fn cmd_partition(path: &str, strategy: &str, formatter: Formatter) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
     let parsed: partition::Strategy = strategy.parse().map_err(map_err)?;
-    let response = session.partition(path, parsed).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_facade(formatter, |root| {
+        facades::partition_project(root, path, parsed).map(|r| r.body)
+    })
 }
 
 pub fn cmd_summarize(path: &str, formatter: Formatter) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let response = session.summarize(path).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_facade(formatter, |root| {
+        facades::summarize_project(root, path).map(|r| r.body)
+    })
 }
 
 pub fn cmd_diff(path: &str, symbol: Option<&str>, formatter: Formatter) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let response = session.diff(path, symbol).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_facade(formatter, |root| {
+        facades::diff_project(root, path, symbol).map(|r| r.body)
+    })
 }
 
 pub fn cmd_context(symbol: &str, graph: bool, formatter: Formatter) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let response = session.context(symbol, graph).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_facade(formatter, |root| {
+        facades::context_project(root, symbol, graph).map(|r| r.body)
+    })
 }
 
 pub fn cmd_deps(path: &str, formatter: Formatter) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let response = session.deps(path).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_facade(formatter, |root| {
+        facades::deps_project(root, path).map(|r| r.body)
+    })
 }
 
 pub fn cmd_scope(path: &str, line: u32, formatter: Formatter) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let response = session.scope(path, line).map_err(map_err)?;
-    print_str(formatter, &response.body);
-    Ok(())
+    run_facade(formatter, |root| {
+        facades::scope_project(root, path, line).map(|r| r.body)
+    })
 }
 
 // ── Write-side commands ─────────────────────────────────────────────
 
-// qual:allow(srp_params) reason: "path, symbol, parent, code, preview, formatter are 6 orthogonal CLI args"
-pub fn cmd_replace(
-    path: &str,
-    symbol: &str,
-    parent: Option<&str>,
-    code: &str,
-    preview: bool,
-    formatter: Formatter,
-) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let input = ReplaceInput {
-        path,
-        symbol,
-        parent,
-        code,
-    };
+/// Grouped clap inputs for [`cmd_replace`]. The `preview` flag maps
+/// to [`ReplaceMode`] inside the handler.
+pub struct ReplaceCliArgs<'a> {
+    pub path: &'a str,
+    pub symbol: &'a str,
+    pub parent: Option<&'a str>,
+    pub code_source: &'a CodeSource,
+    pub preview: bool,
+}
 
-    if preview {
-        let diff = session.replace_preview(&input).map_err(map_err)?;
-        output::print(formatter, &diff);
+pub fn cmd_replace(args: &ReplaceCliArgs<'_>, formatter: Formatter) -> CmdResult {
+    let code = resolve_code(args.code_source)?;
+    let input = ReplaceInput {
+        path: args.path,
+        symbol: args.symbol,
+        parent: args.parent,
+        code: &code,
+    };
+    let mode = if args.preview {
+        ReplaceMode::Preview
     } else {
-        let result_json = session.replace_apply(&input).map_err(map_err)?;
-        print_str(formatter, &result_json);
+        ReplaceMode::Apply
+    };
+    let root = cwd_project_root()?;
+    match facades::replace_project(&root, &input, mode).map_err(map_err)? {
+        ReplaceOutput::Preview(diff) => output::print(formatter, &diff),
+        ReplaceOutput::Applied(json) => print_str(formatter, &json),
     }
     Ok(())
 }
@@ -201,35 +172,36 @@ pub fn cmd_delete(
     keep_docs: bool,
     formatter: Formatter,
 ) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let result_json = session
-        .delete(&DeleteInput {
-            path,
-            symbol,
-            parent,
-            keep_docs,
-        })
-        .map_err(map_err)?;
-    print_str(formatter, &result_json);
-    Ok(())
+    run_facade(formatter, |root| {
+        facades::delete_project(
+            root,
+            &DeleteInput {
+                path,
+                symbol,
+                parent,
+                keep_docs,
+            },
+        )
+    })
 }
 
 pub fn cmd_insert(
     path: &str,
-    code: &str,
+    code_source: &CodeSource,
     position: &InsertPosition,
     formatter: Formatter,
 ) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let result_json = session
-        .insert(&InsertInput {
-            path,
-            position,
-            code,
-        })
-        .map_err(map_err)?;
-    print_str(formatter, &result_json);
-    Ok(())
+    let code = resolve_code(code_source)?;
+    run_facade(formatter, |root| {
+        facades::insert_project(
+            root,
+            &InsertInput {
+                path,
+                position,
+                code: &code,
+            },
+        )
+    })
 }
 
 pub fn cmd_extract(
@@ -239,15 +211,15 @@ pub fn cmd_extract(
     parent: Option<&str>,
     formatter: Formatter,
 ) -> CmdResult {
-    let session = RlmSession::open_cwd().map_err(map_err)?;
-    let result_json = session
-        .extract(&ExtractInput {
-            path,
-            symbols,
-            to,
-            parent,
-        })
-        .map_err(map_err)?;
-    print_str(formatter, &result_json);
-    Ok(())
+    run_facade(formatter, |root| {
+        facades::extract_project(
+            root,
+            &ExtractInput {
+                path,
+                symbols,
+                to,
+                parent,
+            },
+        )
+    })
 }

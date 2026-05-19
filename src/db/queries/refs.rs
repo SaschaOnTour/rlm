@@ -16,6 +16,10 @@ pub struct RefWithContext {
     pub reference: Reference,
     /// Identifier of the chunk that contains the reference.
     pub containing_symbol: String,
+    /// Parent of the containing chunk (`Some(Type)` for methods,
+    /// `None` for free functions). Disambiguates polysemic
+    /// `containing_symbol` names like `new` or `as_str`.
+    pub containing_parent: Option<String>,
     /// Project-relative path of the file holding the reference.
     pub file_path: String,
 }
@@ -60,7 +64,7 @@ impl Database {
     pub fn get_refs_with_context(&self, target_ident: &str) -> Result<Vec<RefWithContext>> {
         let mut stmt = self.conn().prepare(
             "SELECT r.id, r.chunk_id, r.target_ident, r.ref_kind, r.line, r.col,
-                    c.ident, f.path
+                    c.ident, c.parent, f.path
              FROM refs r
              JOIN chunks c ON r.chunk_id = c.id
              JOIN files f ON c.file_id = f.id
@@ -79,7 +83,8 @@ impl Database {
                     col: row.get(5)?,
                 },
                 containing_symbol: row.get(6)?,
-                file_path: row.get(7)?,
+                containing_parent: row.get(7)?,
+                file_path: row.get(8)?,
             })
         })?;
         let mut results = Vec::new();

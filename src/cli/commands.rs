@@ -1,6 +1,32 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::application::edit::inserter::InsertPosition;
+
+/// Source for a code body in `rlm replace` / `rlm insert`.
+///
+/// Bundles the three mutually-exclusive flags `--code`, `--code-stdin`,
+/// `--code-file` so they travel as a single typed parameter through
+/// the CLI dispatch and into the handlers. Clap's `Args` derive
+/// flattens the fields into the parent command, so the user-facing
+/// CLI is unchanged.
+///
+/// The clap group enforces "exactly one of the three" at parse time
+/// — no runtime check needed.
+#[derive(Args, Debug, Clone)]
+#[group(required = true, multiple = false, id = "code_src")]
+pub struct CodeSource {
+    /// Inline code. Prefer `--code-stdin` or `--code-file` for bodies
+    /// containing apostrophes, byte literals, or lifetimes that the
+    /// shell will mangle.
+    #[arg(short, long, group = "code_src")]
+    pub code: Option<String>,
+    /// Read the code from stdin. Typical: `cat patch.rs | rlm replace …`.
+    #[arg(long, group = "code_src")]
+    pub code_stdin: bool,
+    /// Read the code from a file.
+    #[arg(long, value_name = "PATH", group = "code_src")]
+    pub code_file: Option<String>,
+}
 
 /// Output format for CLI commands.
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -135,6 +161,12 @@ pub enum Command {
     Refs {
         /// Symbol name to find references for
         symbol: String,
+        /// Disambiguate polysemous idents by parent type — e.g.,
+        /// `--parent OperationResponse` to filter `new` to that type.
+        /// Without this flag, the response always lists all
+        /// `target_candidates` so the caller sees the polysemy.
+        #[arg(long)]
+        parent: Option<String>,
     },
 
     /// [write] Replace an AST node by identifier
@@ -148,16 +180,8 @@ pub enum Command {
         /// symbols with identical idents in the same file.
         #[arg(long)]
         parent: Option<String>,
-        /// New code (inline). Prefer `--code-stdin` or `--code-file` for
-        /// bodies containing apostrophes / byte literals / lifetimes.
-        #[arg(short, long, group = "replace_code_src")]
-        code: Option<String>,
-        /// Read the new code from stdin. Typical: `cat patch.rs | rlm replace …`.
-        #[arg(long, group = "replace_code_src")]
-        code_stdin: bool,
-        /// Read the new code from a file.
-        #[arg(long, value_name = "PATH", group = "replace_code_src")]
-        code_file: Option<String>,
+        #[command(flatten)]
+        code_source: CodeSource,
         /// Preview only (don't write)
         #[arg(long)]
         preview: bool,
@@ -202,16 +226,8 @@ pub enum Command {
     Insert {
         /// File path
         path: String,
-        /// Code to insert (inline). Prefer `--code-stdin` or
-        /// `--code-file` for non-trivial bodies.
-        #[arg(short, long, group = "insert_code_src")]
-        code: Option<String>,
-        /// Read the code from stdin.
-        #[arg(long, group = "insert_code_src")]
-        code_stdin: bool,
-        /// Read the code from a file.
-        #[arg(long, value_name = "PATH", group = "insert_code_src")]
-        code_file: Option<String>,
+        #[command(flatten)]
+        code_source: CodeSource,
         /// Position: top, bottom, before:N, after:N
         #[arg(short, long, default_value = "bottom")]
         position: InsertPosition,
@@ -280,17 +296,18 @@ pub enum Command {
     /// Start MCP server (stdio transport)
     Mcp,
 
-    /// [read-only, write with --clear] Inspect parse quality issues
+    /// [read-only] Inspect parse quality issues. Use `quality clear` to truncate the log.
     Quality {
+        /// Optional subcommand (currently only `clear`). `None` =
+        /// read-only inspect with the flags below.
+        #[command(subcommand)]
+        cmd: Option<QualityCmd>,
         /// Show only unknown issues (without tests)
         #[arg(long)]
         unknown_only: bool,
         /// Show all issues (including known)
         #[arg(long)]
         all: bool,
-        /// Clear the quality log
-        #[arg(long)]
-        clear: bool,
         /// Show summary statistics
         #[arg(long)]
         summary: bool,
@@ -347,3 +364,17 @@ pub enum Command {
         remove: bool,
     },
 }
+
+/// Subcommands for `rlm quality`. Split out so the destructive
+/// `clear` action is its own opt-in surface (matching the MCP
+/// `quality_clear` tool); the read-only inspection remains
+/// reachable as `rlm quality` with no subcommand.
+#[derive(Debug, Subcommand)]
+pub enum QualityCmd {
+    /// [write] Truncate the parse-quality log.
+    Clear,
+}
+
+#[cfg(test)]
+#[path = "commands_tests.rs"]
+mod tests;

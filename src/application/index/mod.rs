@@ -479,8 +479,23 @@ fn find_preview(db: &Database, rel_path: &str, source: &PreviewSource<'_>) -> Op
 }
 
 /// Ensure the index exists, creating it if necessary (auto-index).
+///
+/// When `config.settings.indexing.auto_create_index` is `false`, the
+/// auto-create branch errors out with
+/// [`RlmError::IndexAutoCreateDisabled`] instead — so MCP read-only
+/// tool calls on a fresh project (or any other unattended invocation)
+/// don't silently write `.rlm/`. CLI and MCP follow the same rule;
+/// the setting is documented in `.rlm/config.toml`.
 pub fn ensure_index(config: &Config) -> Result<Database> {
     if !config.index_exists() {
+        if !config.settings.indexing.auto_create_index {
+            return Err(crate::error::RlmError::IndexAutoCreateDisabled(
+                crate::error::IndexAutoCreateDisabledError {
+                    db_path: config.db_path.clone(),
+                    project_root: config.project_root.clone(),
+                },
+            ));
+        }
         run_index(config, None)?;
     }
     Database::open(&config.db_path)

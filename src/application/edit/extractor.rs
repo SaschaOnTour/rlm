@@ -20,7 +20,10 @@ use std::path::Path;
 
 use super::replacer::{delete_symbol, find_sidecar_start, find_symbol_in_file, line_at};
 use super::validator::{validate_and_write, SyntaxGuard};
+use super::DeleteInput;
 use crate::db::Database;
+
+pub use super::write_dispatch::ExtractInput;
 use crate::error::{Result, RlmError};
 use crate::ingest::scanner::ext_to_lang;
 
@@ -44,28 +47,23 @@ pub struct ExtractOutcome {
     pub bytes_moved: usize,
 }
 
-/// Move `idents` from `source_path` to `dest_path`.
+/// Move `input.symbols` from `input.path` to `input.to`.
 ///
-/// `source_path` and `dest_path` are project-relative. `dest_path`
-/// may or may not exist; on create we write just the extracted
-/// content, on append we join after an existing blank-line separator.
-// qual:api
-// qual:allow(srp_params) reason: "db, source, idents, dest, parent, root are 6 orthogonal concerns"
+/// Paths are project-relative. `input.to` may or may not exist; on
+/// create we write just the extracted content, on append we join
+/// after an existing blank-line separator.
 pub fn extract_symbols(
     db: &Database,
-    source_path: &str,
-    idents: &[String],
-    dest_path: &str,
-    parent: Option<&str>,
+    input: &ExtractInput<'_>,
     project_root: &Path,
 ) -> Result<ExtractOutcome> {
-    if idents.is_empty() {
+    if input.symbols.is_empty() {
         return Err(RlmError::Config(
             "extract: no symbols specified".to_string(),
         ));
     }
-    let source_full = crate::error::validate_relative_path(source_path, project_root)?;
-    let dest_full = crate::error::validate_relative_path(dest_path, project_root)?;
+    let source_full = crate::error::validate_relative_path(input.path, project_root)?;
+    let dest_full = crate::error::validate_relative_path(input.to, project_root)?;
     if source_full == dest_full {
         return Err(RlmError::Config(
             "extract: source and destination must differ".to_string(),
@@ -75,21 +73,21 @@ pub fn extract_symbols(
     let source_bytes = std::fs::read_to_string(&source_full).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             RlmError::FileNotFound {
-                path: source_path.into(),
+                path: input.path.into(),
             }
         } else {
             RlmError::from(e)
         }
     })?;
 
-    let plan = plan_extraction(db, source_path, idents, parent, &source_bytes)?;
+    let plan = plan_extraction(db, input.path, input.symbols, input.parent, &source_bytes)?;
     let Assembled {
         content: dest_content,
         dest_created,
         to_lines,
     } = assemble_dest(&dest_full, &plan)?;
-    write_dest(&dest_full, dest_path, &dest_content)?;
-    delete_from_source(db, source_path, &plan, parent, project_root)?;
+    write_dest(&dest_full, input.to, &dest_content)?;
+    delete_from_source(db, input.path, &plan, input.parent, project_root)?;
 
     let bytes_moved = plan.iter().map(|p| p.bytes.len()).sum();
     let moved = plan
@@ -287,7 +285,16 @@ fn delete_from_source(
         .collect();
     ordered.sort_by_key(|(_, start)| std::cmp::Reverse(*start));
     for (ident, _) in ordered {
-        delete_symbol(db, source_path, ident, parent, false, project_root)?;
+        delete_symbol(
+            db,
+            &DeleteInput {
+                path: source_path,
+                symbol: ident,
+                parent,
+                keep_docs: false,
+            },
+            project_root,
+        )?;
     }
     Ok(())
 }

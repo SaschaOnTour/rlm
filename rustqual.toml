@@ -7,8 +7,17 @@
 
 # Function names (or glob patterns) to exclude from analysis.
 # Examples: "main", "test_*", "visit_*"
+#
+# `main` and `run` together form the composition root in `src/main.rs`:
+# `main` does formatter setup and delegates to `run`, which is a single
+# `match cli.command` with one arm per `Command` variant. Both grow
+# linearly with the command count by design — a `LONG_FN` finding on
+# either would punish adding commands instead of catching real
+# complexity. The dispatch itself stays trivial because every arm just
+# forwards to a handler; per-arm logic lives in those handlers.
 ignore_functions = [
     "main",
+    "run",
     "test_*",
 ]
 
@@ -132,24 +141,26 @@ enabled = true
 enabled = true
 
 [architecture.layers]
-order = ["domain", "infrastructure", "application", "interface"]
+# Controllers/Helpers split: only command-handler files are in `cli`/`mcp`
+# (call_parity-checked). Adapter-internal infra sits in `cli_helpers`/`mcp_helpers`.
+order = [
+    "domain", "infrastructure", "application", "interface",
+    "cli_helpers", "mcp_helpers",
+    "cli", "mcp",
+]
 unmatched_behavior = "composition_root"
 
 [architecture.layers.domain]
+# `src/models/**` carries legacy domain-shape value objects not yet folded into `src/domain/`.
 paths = [
     "src/domain/**",
-    # models/* still carries the legacy Chunk / FileRecord / RefKind
-    # structs the indexer writes; they're domain-shape value objects
-    # even though they haven't been fully folded into src/domain/ yet.
     "src/models/**",
 ]
 
 [architecture.layers.infrastructure]
+# `src/db/**` is the rusqlite façade; `src/ingest/**` owns the parsers.
 paths = [
     "src/infrastructure/**",
-    # db/ is a rusqlite façade; ingest/ owns the per-language tree-sitter
-    # parsers and text parsers. Both are adapter-shaped and sit in the
-    # infrastructure tier.
     "src/db/**",
     "src/ingest/**",
 ]
@@ -159,12 +170,50 @@ paths = [
     "src/application/**",
 ]
 
-[architecture.layers.interface]
+[architecture.layers.cli]
+# CLI command-handler endpoints (call_parity-checked).
 paths = [
-    "src/interface/**",
-    "src/cli/**",
-    "src/mcp/**",
+    "src/cli/handlers.rs",
+    "src/cli/handlers_util.rs",
+]
+
+[architecture.layers.mcp]
+# MCP tool-handler endpoints (call_parity-checked); `server.rs` holds the
+# rmcp tool router plus the `#[tool]`-decorated method bodies.
+paths = [
+    "src/mcp/server.rs",
+    "src/mcp/tool_handlers.rs",
+    "src/mcp/tool_handlers_edit.rs",
+    "src/mcp/tool_handlers_index.rs",
+    "src/mcp/tool_handlers_query.rs",
+    "src/mcp/tool_handlers_read.rs",
+    "src/mcp/tool_handlers_util.rs",
+]
+
+[architecture.layers.cli_helpers]
+# Adapter-internal CLI helpers (formatters, clap structs, `rlm setup` glue).
+# Not endpoints — not in [architecture.call_parity].adapters.
+paths = [
+    "src/cli/helpers.rs",
+    "src/cli/commands.rs",
+    "src/cli/lifecycle_handlers.rs",
+    "src/cli/mod.rs",
+    "src/interface/cli/**",
+]
+
+[architecture.layers.mcp_helpers]
+# Adapter-internal MCP helpers (server lifecycle, response formatters).
+paths = [
+    "src/mcp/server_helpers.rs",
+    "src/mcp/server_lifecycle.rs",
+    "src/mcp/mod.rs",
+]
+
+[architecture.layers.interface]
+# Shared output rendering used by both adapters.
+paths = [
     "src/output.rs",
+    "src/interface/mod.rs",
 ]
 
 # ── Re-Export Points ───────────────────────────────────────────────────
@@ -341,6 +390,26 @@ allowed_in = [
 ]
 reason = "rusqlite is an adapter detail; it must not leak into application or interface code."
 
+# Dynamic `IN (?,?,…)` queries hit `SQLITE_MAX_VARIABLE_NUMBER`
+# (historically 999, ≥3.32: 32766) when the placeholder count
+# outgrows the host-parameter ceiling. `rusqlite::params_from_iter`
+# is the unambiguous marker for that pattern — every call site
+# threads a runtime-sized list into a query. Funnel all such calls
+# through `db::batched::query_batched_in`, which loops in
+# `SQLITE_VAR_LIMIT`-sized batches and concatenates results, so the
+# failure mode never reaches users on large projects.
+[[architecture.pattern]]
+name = "no_unbatched_in_lists"
+forbid_function_call = ["params_from_iter"]
+allowed_in = [
+    # The chunking helper itself uses params_from_iter once per batch.
+    "src/db/batched.rs",
+    # Tests construct edge-case fixtures with raw rusqlite — including
+    # IN-lists to verify the helper's behaviour at boundaries.
+    "src/**/*_tests.rs",
+]
+reason = "Use db::batched::query_batched_in for IN-list queries — raw params_from_iter risks SQLITE_RANGE on large inputs."
+
 # tree-sitter primitives belong to the parser adapter. Application /
 # domain / interface code talks to the parser via `CodeParser` +
 # `ParseResult` abstractions.
@@ -401,6 +470,10 @@ except = [
     # drifts ("rlm: staleness hash failed for X"). These are CLI/MCP UX
     # messages; rlm is a one-shot tool with no tracing subscriber.
     "src/application/index/staleness.rs",
+    # `filter_impacted_by_parent` warns on stderr when an indexed
+    # file isn't readable any more — partial-result UX, same channel
+    # rationale as staleness.
+    "src/application/symbol/impact.rs",
     # Test fixtures may print setup diagnostics.
     "src/**/*_tests.rs",
     "src/**/tests.rs",
@@ -494,6 +567,25 @@ allowed_in = [
     "src/**/tests.rs",
 ]
 reason = "Boxed trait objects are fine at the composition root and parser registry; elsewhere prefer generics or enums."
+
+# ── Adapter Call Parity (1.1.0) ────────────────────────────────────────
+#
+# Every `pub fn` in an adapter layer must transitively call into the
+# target layer within `call_depth` hops. Complements the structural
+# `adapters_no_direct_infrastructure` pattern above: that one says
+# "don't import these layers"; call_parity says "don't just import
+# them, actually delegate to them". Catches handlers that silently
+# reimplement business logic instead of forwarding to RlmSession /
+# application::*.
+#
+# Also a drift check between peer adapters (CLI and MCP) — both sides
+# of the same command must end up in the same application function,
+# so they stay semantically in sync.
+
+[architecture.call_parity]
+adapters = ["cli", "mcp"]
+target = "application"
+call_depth = 3
 
 # ── Trait Contracts ────────────────────────────────────────────────────
 

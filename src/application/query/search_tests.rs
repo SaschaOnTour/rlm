@@ -539,25 +539,71 @@ fn search_no_hits_minimal_still_serialises_empty_results() {
     assert!(json.contains("\"results\":[]"));
 }
 
-#[test]
-fn fields_mode_from_optional_accepts_known_values() {
-    assert_eq!(FieldsMode::from_optional(None).unwrap(), FieldsMode::Full);
-    assert_eq!(
-        FieldsMode::from_optional(Some("full")).unwrap(),
-        FieldsMode::Full
+// ─── Slice 0.8: parent in SearchHit ───────────────────────────────────
+
+fn setup_method_chunk(parent: &str) -> Database {
+    let db = test_db();
+    let file = FileRecord::new(
+        "src/types.rs".into(),
+        "hash".into(),
+        "rust".into(),
+        TEST_FILE_BYTES,
     );
+    let fid = db.upsert_file(&file).unwrap();
+    let c = Chunk {
+        file_id: fid,
+        start_line: TEST_START_LINE,
+        end_line: TEST_END_LINE,
+        start_byte: TEST_START_BYTE,
+        end_byte: TEST_END_BYTE,
+        kind: ChunkKind::Method,
+        ident: "make".into(),
+        parent: Some(parent.into()),
+        content: "fn make() -> Self { /* impl detail */ }".into(),
+        ..Chunk::stub(fid)
+    };
+    db.insert_chunk(&c).unwrap();
+    db
+}
+
+#[test]
+fn search_hit_includes_parent_for_method_chunks() {
+    let db = setup_method_chunk("Foo");
+    let result =
+        search_chunks_with_fields(&db, "make", TEST_SEARCH_LIMIT, FieldsMode::Minimal).unwrap();
+    assert_eq!(result.results.len(), 1);
     assert_eq!(
-        FieldsMode::from_optional(Some("minimal")).unwrap(),
-        FieldsMode::Minimal
+        result.results[0].parent.as_deref(),
+        Some("Foo"),
+        "method chunks must surface their parent so polysemic idents (new, as_str, …) are disambiguated at the search boundary",
     );
 }
 
 #[test]
-fn fields_mode_from_optional_rejects_typos() {
-    let err = FieldsMode::from_optional(Some("minimall")).unwrap_err();
-    let msg = err.to_string();
+fn search_hit_omits_parent_field_for_free_functions() {
+    let db = setup_single_chunk(); // free fn `auth`, parent is None
+    let result =
+        search_chunks_with_fields(&db, "auth", TEST_SEARCH_LIMIT, FieldsMode::Minimal).unwrap();
+    assert_eq!(result.results.len(), 1);
     assert!(
-        msg.contains("minimall") && msg.contains("'full'") && msg.contains("'minimal'"),
-        "error should name the bad value and list the valid options, got {msg}"
+        result.results[0].parent.is_none(),
+        "free functions have no parent — Option must be None",
+    );
+    let json = serde_json::to_string(&result).unwrap();
+    assert!(
+        !json.contains("\"parent\""),
+        "free-fn search hits must not serialise the parent key (skip_serializing_if), got {json}",
+    );
+}
+
+#[test]
+fn search_hit_serialises_parent_when_present() {
+    let db = setup_method_chunk("Bar");
+    let result =
+        search_chunks_with_fields(&db, "make", TEST_SEARCH_LIMIT, FieldsMode::Minimal).unwrap();
+    let json = serde_json::to_string(&result).unwrap();
+    assert!(
+        json.contains("\"parent\":\"Bar\""),
+        "search hits must serialise parent when set, got {json}",
     );
 }

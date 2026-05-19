@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::db::Database;
 use crate::domain::chunk::Chunk;
 use crate::domain::token_budget::{estimate_tokens_str, TokenEstimate};
-use crate::error::{Result, RlmError};
+use crate::error::Result;
 
 /// Approximate number of characters per token for output size estimation.
 const MIN_FTS_TOKEN_LENGTH: u64 = 4;
@@ -40,6 +40,12 @@ pub struct SearchHit {
     pub id: i64,
     pub kind: String,
     pub name: String,
+    /// `Some(Type)` for method chunks under `impl Type`, `None` for
+    /// free functions / module-level items. Disambiguates polysemic
+    /// idents (`new`, `as_str`, …) directly in the search response
+    /// so the agent doesn't have to follow up with another query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
     pub lines: (u32, u32),
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
@@ -61,23 +67,6 @@ pub enum FieldsMode {
     Minimal,
 }
 
-impl FieldsMode {
-    /// Parse from optional `&str`, defaulting to `Full` when the
-    /// adapter didn't pass one. Unknown values error at the adapter
-    /// edge so typos surface instead of silently falling back.
-    pub fn from_optional(s: Option<&str>) -> Result<Self> {
-        match s {
-            None => Ok(Self::default()),
-            Some("full") => Ok(Self::Full),
-            Some("minimal") => Ok(Self::Minimal),
-            Some(other) => Err(RlmError::InvalidPattern {
-                pattern: other.to_string(),
-                reason: "unknown fields mode — use 'full' or 'minimal'".into(),
-            }),
-        }
-    }
-}
-
 /// Perform a full-text search across indexed chunks. Convenience wrapper
 /// around [`search_chunks_with_fields`] using the [`FieldsMode::Full`]
 /// default so behavioural tests stay compact.
@@ -87,7 +76,6 @@ pub(crate) fn search_chunks(db: &Database, query: &str, limit: usize) -> Result<
 }
 
 /// Perform a full-text search with an explicit projection mode.
-// qual:api
 pub fn search_chunks_with_fields(
     db: &Database,
     query: &str,
@@ -110,6 +98,7 @@ pub fn search_chunks_with_fields(
             id: c.id,
             kind: c.kind.as_str().to_string(),
             name: c.ident.clone(),
+            parent: c.parent.clone(),
             lines: (c.start_line, c.end_line),
             content: match fields {
                 FieldsMode::Full => Some(c.content.clone()),
