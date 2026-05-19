@@ -7,59 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed (breaking)
-
-- **`rlm quality` split into read + write surfaces** on both CLI and
-  MCP for honest annotations:
-  - CLI: `rlm quality --clear` is removed. Use `rlm quality clear`
-    (subcommand) to truncate the parse-quality log. `rlm quality`
-    (no subcommand) remains read-only with `--unknown-only` / `--all`
-    / `--summary`.
-  - MCP: `quality` tool keeps `read_only_hint = true` and the
-    `clear` field is gone from `QualityParams`. New `quality_clear`
-    tool — no `read_only_hint` annotation — performs the truncate.
-  - Application layer mirrors the split: `quality_dispatch` /
-    `quality_project` are pure reads; new `clear_quality_log` /
-    `quality_clear_project` own the destructive side. Scripts that
-    relied on `--clear` will fail loudly (clap rejects the flag);
-    migration is a one-token rename to the subcommand.
-
-### Fixed
-
-- **`rlm read --symbol X --parent Foo --metadata` no longer leaks
-  metadata across files or parents**: the `--metadata` envelope now
-  derives `type_info` and `signature.signatures` from the chunks the
-  read actually returns (file + parent scoped), not from a fresh
-  global `(symbol, parent)` lookup. Concretely: when two files both
-  define `Foo::new`, a read from one file no longer surfaces the
-  other file's signature, and `type_info.file` no longer jumps to
-  whichever priority-pick the global query made. `signature.ref_count`
-  is parent-aware (column-aware path-call resolution drops
-  `Bar::new()` and bare `new()` calls when `--parent Foo` is set) but
-  stays **parent-wide, not definition-scoped** — refs in the index
-  carry only `target_ident`, so attributing a `Foo::new()` call to
-  one specific `Foo::new` definition needs flow analysis rlm
-  intentionally doesn't do. The `SignatureResult::ref_count` doc
-  string and the `ref_count_is_parent_wide_not_definition_scoped`
-  contract-pin test make the limit explicit.
-- **MCP `ServerInfo.instructions` re-synced with the tool surface**:
-  the leading sentence now reads "21 tools" (it had stayed at 20
-  after the `quality_clear` split), names `quality_clear` in the
-  utility list, and drops the obsolete `clear?` flag from `quality`'s
-  parameter sketch. A new parity test fails if the count or the
-  `clear?` token ever drift again.
-- **Concurrent reads no longer race to `SQLITE_BUSY`**: the
-  `Database::open` PRAGMA bundle now sets `busy_timeout=5000` (also
-  the current rusqlite default; set explicitly so a future rusqlite
-  default change doesn't silently regress). MCP tools annotated
-  `read_only_hint = true` still write to the rlm-managed `.rlm/`
-  (savings counters + staleness-driven reindex), so multiple agents
-  reading the same project contend for the single SQLite writer; the
-  annotation means "no writes to your *source files*", not "no DB
-  writes at all". A new `tests/concurrent_reads_tests.rs` spawns five
-  parallel `rlm read` processes against one project and asserts none
-  surface `database is locked`.
-
 ## [0.6.0] - 2026-05-18
 
 The combined **call-parity + polysemy + adapter-helper + perf** release.
@@ -142,6 +89,20 @@ work that briefly carried that version number is folded here.
   unreachable since the facades-refactor — every adapter opens an
   `RlmSession` which auto-indexes. Caller migration: pass `&db`
   instead of `Some(&db)`.
+- **`rlm quality` split into read + write surfaces** on both CLI and
+  MCP for honest annotations:
+  - CLI: `rlm quality --clear` is removed. Use `rlm quality clear`
+    (subcommand) to truncate the parse-quality log. `rlm quality`
+    (no subcommand) remains read-only with `--unknown-only` / `--all`
+    / `--summary`.
+  - MCP: `quality` tool keeps `read_only_hint = true` and the
+    `clear` field is gone from `QualityParams`. New `quality_clear`
+    tool — no `read_only_hint` annotation — performs the truncate.
+  - Application layer mirrors the split: `quality_dispatch` /
+    `quality_project` are pure reads; new `clear_quality_log` /
+    `quality_clear_project` own the destructive side. Scripts that
+    relied on `--clear` will fail loudly (clap rejects the flag);
+    migration is a one-token rename to the subcommand.
 
 ### Added
 
@@ -289,6 +250,42 @@ work that briefly carried that version number is folded here.
   `#[tool_router]` macro generates the public dispatcher around
   them), 2 on serde `skip_serializing_if` callbacks, 2 on
   testonly methods.
+
+### Fixed
+
+- **`rlm read --symbol X --parent Foo --metadata` no longer leaks
+  metadata across files or parents**: the `--metadata` envelope now
+  derives `type_info` and `signature.signatures` from the chunks the
+  read actually returns (file + parent scoped), not from a fresh
+  global `(symbol, parent)` lookup. Concretely: when two files both
+  define `Foo::new`, a read from one file no longer surfaces the
+  other file's signature, and `type_info.file` no longer jumps to
+  whichever priority-pick the global query made. `signature.ref_count`
+  is parent-aware (column-aware path-call resolution drops
+  `Bar::new()` and bare `new()` calls when `--parent Foo` is set) but
+  stays **parent-wide, not definition-scoped** — refs in the index
+  carry only `target_ident`, so attributing a `Foo::new()` call to
+  one specific `Foo::new` definition needs flow analysis rlm
+  intentionally doesn't do. The `SignatureResult::ref_count` doc
+  string and the `ref_count_is_parent_wide_not_definition_scoped`
+  contract-pin test make the limit explicit.
+- **MCP `ServerInfo.instructions` re-synced with the tool surface**:
+  the leading sentence now reads "21 tools" (it had stayed at 20
+  after the `quality_clear` split), names `quality_clear` in the
+  utility list, and drops the obsolete `clear?` flag from `quality`'s
+  parameter sketch. A new parity test fails if the count or the
+  `clear?` token ever drift again.
+- **Concurrent reads no longer race to `SQLITE_BUSY`**: the
+  `Database::open` PRAGMA bundle now sets `busy_timeout=5000` (also
+  the current rusqlite default; set explicitly so a future rusqlite
+  default change doesn't silently regress). MCP tools annotated
+  `read_only_hint = true` still write to the rlm-managed `.rlm/`
+  (savings counters + staleness-driven reindex), so multiple agents
+  reading the same project contend for the single SQLite writer; the
+  annotation means "no writes to your *source files*", not "no DB
+  writes at all". A new `tests/concurrent_reads_tests.rs` spawns five
+  parallel `rlm read` processes against one project and asserts none
+  surface `database is locked`.
 
 After this release, `rustqual --fail-on-warnings` reports
 **0 findings, score 100.0%** under rustqual 1.2.5 (the maintainer
